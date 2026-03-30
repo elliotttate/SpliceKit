@@ -1,202 +1,199 @@
 # FCPBridge - Programmatic Final Cut Pro Control
 
-## Architecture
+FCPBridge is an ObjC dylib injected into FCP's process. It exposes all 78,000+ ObjC classes
+via a JSON-RPC server on TCP 127.0.0.1:9876. Everything is fully programmatic -- no AppleScript,
+no UI automation, no menu clicks.
 
-FCPBridge is an ObjC dylib injected into FCP's process. It exposes the full ObjC runtime
-(78,000+ classes) via a JSON-RPC server on TCP `127.0.0.1:9876`. The MCP server wraps this
-into Claude-friendly tools.
+## Quick Start
 
-## Workflow
-
-### 1. Check connection
 ```
-bridge_status()
-```
-
-### 2. Read timeline state
-```
-get_timeline_clips()     -- structured table of all clips with handles
-get_selected_clips()     -- just the selection
-verify_action("before")  -- snapshot for before/after comparison
+1. bridge_status()                    -- verify connection
+2. get_timeline_clips()               -- see timeline contents
+3. timeline_action("blade")           -- edit
+4. verify_action("after blade")       -- confirm
 ```
 
-### 3. Perform edits
-```
-timeline_action("blade")               -- blade at playhead
-timeline_action("addMarker")           -- add marker
-timeline_action("addTransition")       -- add default transition
-timeline_action("addColorBoard")       -- add color board to selected clip
-timeline_action("addBasicTitle")       -- add title
-timeline_action("retimeSlow50")        -- slow motion 50%
-timeline_action("freezeFrame")         -- freeze frame
-playback_action("goToStart")           -- navigate
-playback_action("nextFrame")           -- step forward
+## CRITICAL: Must Know Before Editing
+
+### Opening a Project
+If `get_timeline_clips()` returns an error about "no sequence", load a project:
+```python
+# Navigate: library -> sequences -> find one with content -> load it
+libs = call_method_with_args("FFLibraryDocument", "copyActiveLibraries", "[]", true, true)
+lib = call_method_with_args(libs_handle, "objectAtIndex:", '[{"type":"int","value":0}]', false, true)
+seqs = call_method_with_args(lib_handle, "_deepLoadedSequences", "[]", false, true)
+allSeqs = call_method_with_args(seqs_handle, "allObjects", "[]", false, true)
+# Check each: call_method_with_args(seq_handle, "hasContainedItems", "[]", false)
+# Load: get NSApp -> delegate -> activeEditorContainer -> loadEditorForSequence:
 ```
 
-### 4. Verify
+### Select Before Acting
+Color correction, retiming, titles, and effects require a selected clip:
 ```
-verify_action("after")  -- compare with before snapshot
+playback_action("goToStart")              # position
+playback_action("nextFrame") x N          # navigate
+timeline_action("selectClipAtPlayhead")   # select
+timeline_action("addColorBoard")          # now apply
 ```
+
+### Playhead Positioning
+- 1 frame = ~0.042s at 24fps, ~0.033s at 30fps
+- Use `nextFrame` with repeat count for precise positioning
+- `batch_timeline_actions` is fastest for multi-step sequences
+- Always go to a known position (goToStart) before stepping
+
+### Undo After Mistakes
+```
+timeline_action("undo")   # undoes last edit, returns action name
+timeline_action("redo")   # redoes it
+```
+Undo routes through FCP's FFUndoManager (not the responder chain).
+
+### Timeline Data Model (Spine)
+FCP stores items in: `sequence -> primaryObject (FFAnchoredCollection) -> containedItems`
+- `FFAnchoredMediaComponent` = video/audio clips
+- `FFAnchoredTransition` = transitions (Cross Dissolve, etc.)
+- `get_timeline_clips()` handles this automatically
 
 ## All Timeline Actions
 
-### Blade/Split
-blade, bladeAll
-
-### Markers
-addMarker, addTodoMarker, addChapterMarker, deleteMarker, nextMarker, previousMarker
-
-### Transitions
-addTransition
-
-### Navigation
-nextEdit, previousEdit, selectClipAtPlayhead, selectToPlayhead
-
-### Selection
-selectAll, deselectAll
-
-### Edit Operations
-delete, cut, copy, paste, undo, redo
-
-### Insert
-insertGap
-
-### Trim
-trimToPlayhead
-
-### Color Correction
-addColorBoard, addColorWheels, addColorCurves, addColorAdjustment, addHueSaturation, addEnhanceLightAndColor
-
-### Volume
-adjustVolumeUp, adjustVolumeDown
-
-### Titles
-addBasicTitle, addBasicLowerThird
-
-### Speed/Retiming
-retimeNormal, retimeFast2x, retimeFast4x, retimeFast8x, retimeFast20x,
-retimeSlow50, retimeSlow25, retimeSlow10, retimeReverse, retimeHold,
-freezeFrame, retimeBladeSpeed
-
-### Keyframes
-addKeyframe, deleteKeyframes, nextKeyframe, previousKeyframe
-
-### Other
-solo, disable, createCompoundClip, autoReframe, exportXML, shareSelection, addVideoGenerator
+| Category | Actions |
+|----------|---------|
+| Blade | blade, bladeAll |
+| Markers | addMarker, addTodoMarker, addChapterMarker, deleteMarker, nextMarker, previousMarker |
+| Transitions | addTransition |
+| Navigation | nextEdit, previousEdit, selectClipAtPlayhead, selectToPlayhead |
+| Selection | selectAll, deselectAll |
+| Edit | delete, cut, copy, paste, undo, redo |
+| Insert | insertGap |
+| Trim | trimToPlayhead |
+| Color | addColorBoard, addColorWheels, addColorCurves, addColorAdjustment, addHueSaturation, addEnhanceLightAndColor |
+| Volume | adjustVolumeUp, adjustVolumeDown |
+| Titles | addBasicTitle, addBasicLowerThird |
+| Speed | retimeNormal, retimeFast2x/4x/8x/20x, retimeSlow50/25/10, retimeReverse, retimeHold, freezeFrame, retimeBladeSpeed |
+| Keyframes | addKeyframe, deleteKeyframes, nextKeyframe, previousKeyframe |
+| Other | solo, disable, createCompoundClip, autoReframe, exportXML, shareSelection |
 
 ## Playback Actions
 playPause, goToStart, goToEnd, nextFrame, prevFrame, nextFrame10, prevFrame10
 
-## Object Handle Pattern
-For advanced operations, use handles to chain calls:
+## Common Workflows
+
+### Blade at a specific time
 ```
-# Get libraries as a handle
-libs = call_method_with_args("FFLibraryDocument", "copyActiveLibraries", return_handle=True)
-# Navigate: array -> library -> events
-lib = call_method_with_args("obj_1", "objectAtIndex:", '[{"type":"int","value":0}]', false, true)
-# Read properties
-get_object_property("obj_2", "displayName")
+playback_action("goToStart")
+batch_timeline_actions('[{"type":"playback","action":"nextFrame","repeat":72}]')  # 3s at 24fps
+timeline_action("blade")
 ```
 
-## Calling Methods With Arguments
+### Multiple cuts
 ```
-call_method_with_args(
-    target="obj_5",                       # class name or handle
-    selector="objectAtIndex:",
-    args='[{"type":"int","value":0}]',
-    class_method=False,
-    return_handle=True
-)
+batch_timeline_actions('[
+  {"type":"playback","action":"goToStart"},
+  {"type":"playback","action":"nextFrame","repeat":48},
+  {"type":"timeline","action":"blade"},
+  {"type":"playback","action":"nextFrame","repeat":48},
+  {"type":"timeline","action":"blade"},
+  {"type":"playback","action":"nextFrame","repeat":48},
+  {"type":"timeline","action":"blade"}
+]')
 ```
-Argument types: string, int, double, float, bool, nil, sender, handle, cmtime, selector
 
-## FCPXML Import (No Restart Required)
-Generate FCPXML and import into the running FCP instance:
+### Add color correction
 ```
-# Generate FCPXML with gaps and titles
+playback_action("goToStart")
+timeline_action("selectClipAtPlayhead")
+timeline_action("addColorBoard")
+```
+
+### Change speed
+```
+timeline_action("selectClipAtPlayhead")
+timeline_action("retimeSlow50")    # 50% speed
+# Undo: timeline_action("undo")
+```
+
+### Add markers at intervals
+```
+playback_action("goToStart")
+batch_timeline_actions('[
+  {"type":"playback","action":"nextFrame","repeat":120},
+  {"type":"timeline","action":"addMarker"},
+  {"type":"playback","action":"nextFrame","repeat":120},
+  {"type":"timeline","action":"addChapterMarker"}
+]')
+```
+
+### Create project via FCPXML (no restart)
+```
 xml = generate_fcpxml(
     project_name="My Project",
-    generators='[{"type":"gap","duration":10},{"type":"title","text":"Hello","duration":5}]'
+    frame_rate="24",
+    items='[
+      {"type":"gap","duration":10},
+      {"type":"title","text":"Introduction","duration":5},
+      {"type":"transition","duration":1},
+      {"type":"gap","duration":15},
+      {"type":"marker","time":5,"name":"Chapter 1","kind":"chapter"}
+    ]'
 )
-# Import it (uses internal PEAppController method - no restart)
 import_fcpxml(xml, internal=True)
 ```
 
-## Effects Inspection
+### Inspect clip effects
 ```
-# Get effects on selected clip
-get_clip_effects()
-# Get effects on a specific clip by handle
-get_clip_effects("obj_3")
+timeline_action("selectClipAtPlayhead")
+get_clip_effects()  # shows effect names, IDs, handles
 ```
 
-## Opening a Project Programmatically
-```python
-# Navigate: library -> sequences -> find project -> load it
-libs = call_method_with_args("FFLibraryDocument", "copyActiveLibraries", return_handle=True)
-lib = call_method_with_args(libs_handle, "objectAtIndex:", '[{"type":"int","value":0}]', false, true)
-seqs = call_method_with_args(lib_handle, "_deepLoadedSequences", "[]", false, true)
-allSeqs = call_method_with_args(seqs_handle, "allObjects", "[]", false, true)
-# Get sequence by index
-seq = call_method_with_args(allSeqs_handle, "objectAtIndex:", '[{"type":"int","value":0}]', false, true)
-# Load it into the timeline
-app = call_method_with_args("NSApplication", "sharedApplication", "[]", true, true)
-delegate = call_method_with_args(app_handle, "delegate", "[]", false, true)
-container = call_method_with_args(delegate_handle, "activeEditorContainer", "[]", false, true)
-call_method_with_args(container_handle, "loadEditorForSequence:", '[{"type":"handle","value":"seq_handle"}]', false)
+### Analyze timeline health
+```
+analyze_timeline()  # pacing, flash frames, clip stats
 ```
 
-## Key FCP Classes
-
-| Class | Methods | Use |
-|-------|---------|-----|
-| FFAnchoredTimelineModule | 1435 | Timeline editing, blade, markers, selection, effects |
-| FFAnchoredSequence | 1074 | Timeline data model, clips, structure |
-| FFAnchoredObject | base | All timeline items (clips, gaps, transitions) |
-| FFAnchoredClip | - | Video/audio clips |
-| FFAnchoredMediaComponent | - | Media components in timeline |
-| FFAnchoredTransition | - | Transitions between clips |
-| FFLibrary | 203 | Library container, events, projects |
-| FFLibraryDocument | 231 | Library persistence |
-| FFEditActionMgr | 42 | Edit commands (insert, append, overwrite) |
-| FFPlayer | 228 | Playback engine |
-| FFEffectStack | - | Effect management on clips |
-| FFProOSC | - | Transform/position/scale/rotation |
-| PEAppController | 484 | App controller, windows |
-| PEEditorContainerModule | - | Editor container, timeline/player modules |
-
-## Timeline Data Model
-FCP uses a spine-based model:
+## Object Handles
 ```
-FFAnchoredSequence
-  -> primaryObject (FFAnchoredCollection = the spine)
-    -> containedItems (array of FFAnchoredMediaComponent, FFAnchoredTransition, etc.)
+# Get a handle to an object
+r = call_method_with_args("FFLibraryDocument", "copyActiveLibraries", "[]", true, true)
+# r = {"handle": "obj_1", "class": "__NSArrayM", ...}
+
+# Use handle in subsequent calls
+call_method_with_args("obj_1", "objectAtIndex:", '[{"type":"int","value":0}]', false, true)
+
+# Read properties via KVC
+get_object_property("obj_2", "displayName")
+
+# Always clean up
+manage_handles(action="release_all")
 ```
-The `get_timeline_clips()` tool handles this automatically.
+
+Argument types: string, int, double, float, bool, nil, sender, handle, cmtime, selector
 
 ## Error Recovery
-- "No active timeline module" -> No project open. Load a project via handle chain.
-- "No responder handled X" -> Action not available in current state.
-- "Handle not found" -> Object was released. Get fresh reference.
-- "Cannot connect" -> FCP not running or bridge not loaded.
-- Connection reset -> MCP server auto-reconnects on next call.
+- "No active timeline module" -> No project open. Load one (see above).
+- "No sequence in timeline" -> Same. Need loadEditorForSequence:.
+- "Cannot connect" -> FCP not running. Launch it.
+- "Handle not found" -> Released or GC'd. Get a fresh reference.
+- "No responder handled X" -> Action not available (wrong state or no selection).
+- Broken pipe -> Stale connection. Next call auto-reconnects.
 
-## Undo/Redo
-Undo/redo routes through the document's `FFUndoManager` (not the responder chain).
-Returns the action name for verification:
-```
-timeline_action("undo")  # -> {"action": "undo", "status": "ok", "actionName": "Blade"}
-```
+## Key Classes
+| Class | Use |
+|-------|-----|
+| FFAnchoredTimelineModule | Timeline editing (1435 methods) |
+| FFAnchoredSequence | Timeline data model |
+| FFAnchoredMediaComponent | Clips in timeline |
+| FFAnchoredTransition | Transitions |
+| FFLibrary / FFLibraryDocument | Library management |
+| FFEditActionMgr | Edit commands |
+| FFEffectStack | Effects on clips |
+| PEAppController | App controller |
+| PEEditorContainerModule | Editor/timeline modules |
 
-## Editing Safety
-- timeline_action() methods go through FCP's normal action/undo system
-- set_object_property() bypasses undo -- use only for non-undoable changes
-- Always verify edits with get_timeline_clips() or verify_action()
-
-## Discovering New APIs
+## Discovering APIs
 ```
-get_classes(filter="FFColor")           -- find classes by prefix
-explore_class("FFColorCorrectionEffect") -- full class overview
-search_methods("FFAnchoredTimelineModule", "color") -- find methods by keyword
-get_methods("FFEffectStack")            -- complete method listing
+get_classes(filter="FFColor")                          # find classes
+explore_class("FFAnchoredTimelineModule")              # full overview
+search_methods("FFAnchoredTimelineModule", "blade")    # find methods
+get_methods("FFEffectStack")                           # all methods
 ```
