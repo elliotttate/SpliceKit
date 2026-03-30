@@ -11,7 +11,8 @@
 #import <objc/message.h>
 
 // Version
-#define FCPBRIDGE_VERSION "1.0.0"
+#define FCPBRIDGE_VERSION "2.0.0"
+#define FCPBRIDGE_MAX_HANDLES 2000
 
 // Socket path - resolve at runtime to handle sandbox
 const char *FCPBridge_getSocketPath(void);
@@ -40,6 +41,14 @@ void FCPBridge_executeOnMainThreadAsync(dispatch_block_t block);
 
 IMP FCPBridge_swizzleMethod(Class cls, SEL selector, IMP newImpl);
 BOOL FCPBridge_unswizzleMethod(Class cls, SEL selector);
+
+#pragma mark - Object Handle System
+
+NSString *FCPBridge_storeHandle(id object);
+id FCPBridge_resolveHandle(NSString *handleId);
+void FCPBridge_releaseHandle(NSString *handleId);
+void FCPBridge_releaseAllHandles(void);
+NSDictionary *FCPBridge_listHandles(void);
 
 #pragma mark - Server
 

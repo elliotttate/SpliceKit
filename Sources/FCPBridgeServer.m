@@ -9,8 +9,123 @@
 #import <sys/stat.h>
 #import <netinet/in.h>
 #import <arpa/inet.h>
+#import <AppKit/AppKit.h>
 
 #define FCPBRIDGE_TCP_PORT 9876
+
+// Forward declarations
+static NSDictionary *FCPBridge_sendAppAction(NSString *selectorName);
+static NSDictionary *FCPBridge_sendPlayerAction(NSString *selectorName);
+static id FCPBridge_getActiveTimelineModule(void);
+static id FCPBridge_getEditorContainer(void);
+
+#pragma mark - Object Handle System
+
+static NSMutableDictionary<NSString *, id> *sHandleMap = nil;
+static uint64_t sHandleCounter = 0;
+
+NSString *FCPBridge_storeHandle(id object) {
+    if (!object) return nil;
+    if (!sHandleMap) sHandleMap = [NSMutableDictionary dictionary];
+    if (sHandleMap.count >= FCPBRIDGE_MAX_HANDLES) {
+        FCPBridge_log(@"Handle limit reached (%d), clearing old handles", FCPBRIDGE_MAX_HANDLES);
+        [sHandleMap removeAllObjects];
+    }
+    sHandleCounter++;
+    NSString *handle = [NSString stringWithFormat:@"obj_%llu", sHandleCounter];
+    sHandleMap[handle] = object;
+    return handle;
+}
+
+id FCPBridge_resolveHandle(NSString *handleId) {
+    if (!handleId || !sHandleMap) return nil;
+    return sHandleMap[handleId];
+}
+
+void FCPBridge_releaseHandle(NSString *handleId) {
+    [sHandleMap removeObjectForKey:handleId];
+}
+
+void FCPBridge_releaseAllHandles(void) {
+    [sHandleMap removeAllObjects];
+}
+
+NSDictionary *FCPBridge_listHandles(void) {
+    NSMutableArray *entries = [NSMutableArray array];
+    for (NSString *key in sHandleMap) {
+        id obj = sHandleMap[key];
+        [entries addObject:@{
+            @"handle": key,
+            @"class": NSStringFromClass([obj class]) ?: @"<unknown>",
+            @"description": [[obj description] substringToIndex:
+                MIN((NSUInteger)200, [[obj description] length])]
+        }];
+    }
+    return @{@"handles": entries, @"count": @(sHandleMap.count)};
+}
+
+#pragma mark - Type Helpers
+
+typedef struct { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch; } FCPBridge_CMTime;
+typedef struct { FCPBridge_CMTime start; FCPBridge_CMTime duration; } FCPBridge_CMTimeRange;
+
+static NSDictionary *FCPBridge_serializeCMTime(FCPBridge_CMTime t) {
+    double seconds = (t.timescale > 0) ? (double)t.value / t.timescale : 0;
+    return @{@"value": @(t.value), @"timescale": @(t.timescale), @"seconds": @(seconds)};
+}
+
+static id FCPBridge_serializeReturnValue(NSInvocation *invocation, BOOL returnHandle) {
+    const char *retType = [[invocation methodSignature] methodReturnType];
+    if (retType[0] == 'v') return @{@"result": @"void"};
+
+    if (retType[0] == '@') {
+        id __unsafe_unretained retObj = nil;
+        [invocation getReturnValue:&retObj];
+        if (!retObj) return @{@"result": [NSNull null]};
+        if (returnHandle) {
+            NSString *h = FCPBridge_storeHandle(retObj);
+            return @{@"handle": h, @"class": NSStringFromClass([retObj class]),
+                     @"description": [[retObj description] substringToIndex:
+                         MIN((NSUInteger)500, [[retObj description] length])]};
+        }
+        return @{@"result": [[retObj description] substringToIndex:
+                     MIN((NSUInteger)2000, [[retObj description] length])],
+                 @"class": NSStringFromClass([retObj class])};
+    }
+    if (retType[0] == 'B' || retType[0] == 'c') {
+        BOOL val; [invocation getReturnValue:&val];
+        return @{@"result": @(val)};
+    }
+    if (retType[0] == 'q' || retType[0] == 'l') {
+        long long val; [invocation getReturnValue:&val];
+        return @{@"result": @(val)};
+    }
+    if (retType[0] == 'i') {
+        int val; [invocation getReturnValue:&val];
+        return @{@"result": @(val)};
+    }
+    if (retType[0] == 'Q' || retType[0] == 'L') {
+        unsigned long long val; [invocation getReturnValue:&val];
+        return @{@"result": @(val)};
+    }
+    if (retType[0] == 'd') {
+        double val; [invocation getReturnValue:&val];
+        return @{@"result": @(val)};
+    }
+    if (retType[0] == 'f') {
+        float val; [invocation getReturnValue:&val];
+        return @{@"result": @(val)};
+    }
+    // CMTime struct
+    if (strstr(retType, "CMTime") || (retType[0] == '{' && strstr(retType, "qiIq"))) {
+        FCPBridge_CMTime val;
+        if ([[invocation methodSignature] methodReturnLength] == sizeof(FCPBridge_CMTime)) {
+            [invocation getReturnValue:&val];
+            return @{@"result": FCPBridge_serializeCMTime(val)};
+        }
+    }
+    return @{@"result": @"<unsupported return type>", @"returnType": @(retType)};
+}
 
 #pragma mark - Client Management
 
@@ -311,6 +426,375 @@ static NSDictionary *FCPBridge_handleSystemGetIvars(NSDictionary *params) {
     return @{@"className": className, @"ivars": ivars, @"count": @(count)};
 }
 
+#pragma mark - system.callMethodWithArgs
+
+static id FCPBridge_resolveTarget(NSDictionary *params) {
+    NSString *target = params[@"target"] ?: params[@"className"];
+    BOOL isClassMethod = [params[@"classMethod"] boolValue];
+
+    // Check if target is a handle
+    if ([target hasPrefix:@"obj_"]) {
+        return FCPBridge_resolveHandle(target);
+    }
+
+    Class cls = objc_getClass([target UTF8String]);
+    if (!cls) return nil;
+
+    if (isClassMethod) return (id)cls;
+
+    // Try singleton patterns
+    for (NSString *sel in @[@"sharedInstance", @"shared", @"defaultManager",
+                            @"sharedDocumentController", @"sharedApplication"]) {
+        if ([cls respondsToSelector:NSSelectorFromString(sel)]) {
+            return ((id (*)(id, SEL))objc_msgSend)((id)cls, NSSelectorFromString(sel));
+        }
+    }
+    return nil;
+}
+
+static NSDictionary *FCPBridge_handleCallMethodWithArgs(NSDictionary *params) {
+    NSString *targetName = params[@"target"] ?: params[@"className"];
+    NSString *selectorName = params[@"selector"];
+    NSArray *args = params[@"args"] ?: @[];
+    BOOL returnHandle = [params[@"returnHandle"] boolValue];
+
+    if (!targetName || !selectorName)
+        return @{@"error": @"target and selector required"};
+
+    __block NSDictionary *result = nil;
+
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            id target = FCPBridge_resolveTarget(params);
+            if (!target) {
+                result = @{@"error": [NSString stringWithFormat:@"Cannot resolve target: %@", targetName]};
+                return;
+            }
+
+            SEL selector = NSSelectorFromString(selectorName);
+            NSMethodSignature *sig = [target methodSignatureForSelector:selector];
+            if (!sig) {
+                result = @{@"error": [NSString stringWithFormat:@"%@ does not respond to %@",
+                            targetName, selectorName]};
+                return;
+            }
+
+            NSUInteger expectedArgs = [sig numberOfArguments] - 2;
+            if (args.count != expectedArgs) {
+                result = @{@"error": [NSString stringWithFormat:
+                    @"Expected %lu args for %@, got %lu",
+                    (unsigned long)expectedArgs, selectorName, (unsigned long)args.count]};
+                return;
+            }
+
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:target];
+            [inv setSelector:selector];
+            [inv retainArguments];
+
+            // Set arguments
+            for (NSUInteger i = 0; i < args.count; i++) {
+                NSDictionary *arg = args[i];
+                NSString *type = arg[@"type"] ?: @"nil";
+                NSUInteger argIdx = i + 2;
+                const char *sigType = [sig getArgumentTypeAtIndex:argIdx];
+
+                if ([type isEqualToString:@"string"]) {
+                    NSString *val = [arg[@"value"] description];
+                    [inv setArgument:&val atIndex:argIdx];
+                } else if ([type isEqualToString:@"int"]) {
+                    long long val = [arg[@"value"] longLongValue];
+                    if (sigType[0] == 'i') { int v = (int)val; [inv setArgument:&v atIndex:argIdx]; }
+                    else if (sigType[0] == 'q') { [inv setArgument:&val atIndex:argIdx]; }
+                    else if (sigType[0] == 'Q') { unsigned long long v = (unsigned long long)val; [inv setArgument:&v atIndex:argIdx]; }
+                    else { [inv setArgument:&val atIndex:argIdx]; }
+                } else if ([type isEqualToString:@"double"]) {
+                    double val = [arg[@"value"] doubleValue];
+                    if (sigType[0] == 'f') { float v = (float)val; [inv setArgument:&v atIndex:argIdx]; }
+                    else { [inv setArgument:&val atIndex:argIdx]; }
+                } else if ([type isEqualToString:@"float"]) {
+                    float val = [arg[@"value"] floatValue];
+                    [inv setArgument:&val atIndex:argIdx];
+                } else if ([type isEqualToString:@"bool"]) {
+                    BOOL val = [arg[@"value"] boolValue];
+                    [inv setArgument:&val atIndex:argIdx];
+                } else if ([type isEqualToString:@"nil"] || [type isEqualToString:@"sender"]) {
+                    id val = nil;
+                    [inv setArgument:&val atIndex:argIdx];
+                } else if ([type isEqualToString:@"handle"]) {
+                    id val = FCPBridge_resolveHandle(arg[@"value"]);
+                    if (!val) {
+                        result = @{@"error": [NSString stringWithFormat:
+                            @"Handle not found: %@", arg[@"value"]]};
+                        return;
+                    }
+                    [inv setArgument:&val atIndex:argIdx];
+                } else if ([type isEqualToString:@"cmtime"]) {
+                    NSDictionary *tv = arg[@"value"];
+                    FCPBridge_CMTime t = {
+                        .value = [tv[@"value"] longLongValue],
+                        .timescale = [tv[@"timescale"] intValue],
+                        .flags = 1, .epoch = 0
+                    };
+                    [inv setArgument:&t atIndex:argIdx];
+                } else if ([type isEqualToString:@"selector"]) {
+                    SEL val = NSSelectorFromString(arg[@"value"]);
+                    [inv setArgument:&val atIndex:argIdx];
+                } else {
+                    // Default: try as object (NSNull -> nil, otherwise wrap)
+                    id val = nil;
+                    [inv setArgument:&val atIndex:argIdx];
+                }
+            }
+
+            [inv invoke];
+            result = FCPBridge_serializeReturnValue(inv, returnHandle);
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@ - %@",
+                        e.name, e.reason]};
+        }
+    });
+
+    return result;
+}
+
+#pragma mark - Object Handlers
+
+static NSDictionary *FCPBridge_handleObjectGet(NSDictionary *params) {
+    NSString *handle = params[@"handle"];
+    if (!handle) return @{@"error": @"handle required"};
+    id obj = FCPBridge_resolveHandle(handle);
+    if (!obj) return @{@"error": [NSString stringWithFormat:@"Handle not found: %@", handle]};
+    return @{@"handle": handle, @"class": NSStringFromClass([obj class]),
+             @"description": [[obj description] substringToIndex:
+                 MIN((NSUInteger)500, [[obj description] length])], @"valid": @YES};
+}
+
+static NSDictionary *FCPBridge_handleObjectRelease(NSDictionary *params) {
+    if ([params[@"all"] boolValue]) {
+        NSUInteger count = sHandleMap.count;
+        FCPBridge_releaseAllHandles();
+        return @{@"released": @(count)};
+    }
+    NSString *handle = params[@"handle"];
+    if (!handle) return @{@"error": @"handle or all:true required"};
+    BOOL existed = (FCPBridge_resolveHandle(handle) != nil);
+    FCPBridge_releaseHandle(handle);
+    return @{@"handle": handle, @"released": @(existed)};
+}
+
+static NSDictionary *FCPBridge_handleObjectList(NSDictionary *params) {
+    return FCPBridge_listHandles();
+}
+
+#pragma mark - KVC Property Access
+
+static NSDictionary *FCPBridge_handleGetProperty(NSDictionary *params) {
+    NSString *handle = params[@"handle"];
+    NSString *key = params[@"key"];
+    BOOL returnHandle = [params[@"returnHandle"] boolValue];
+    if (!handle || !key) return @{@"error": @"handle and key required"};
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            id obj = FCPBridge_resolveHandle(handle);
+            if (!obj) { result = @{@"error": @"Handle not found"}; return; }
+
+            id value = [obj valueForKey:key];
+            if (!value) {
+                result = @{@"key": key, @"result": [NSNull null]};
+            } else if (returnHandle) {
+                NSString *h = FCPBridge_storeHandle(value);
+                result = @{@"key": key, @"handle": h,
+                           @"class": NSStringFromClass([value class]),
+                           @"description": [[value description] substringToIndex:
+                               MIN((NSUInteger)500, [[value description] length])]};
+            } else {
+                result = @{@"key": key, @"result": [[value description] substringToIndex:
+                               MIN((NSUInteger)2000, [[value description] length])],
+                           @"class": NSStringFromClass([value class])};
+            }
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"KVC error: %@", e.reason]};
+        }
+    });
+    return result;
+}
+
+static NSDictionary *FCPBridge_handleSetProperty(NSDictionary *params) {
+    NSString *handle = params[@"handle"];
+    NSString *key = params[@"key"];
+    if (!handle || !key) return @{@"error": @"handle and key required"};
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            id obj = FCPBridge_resolveHandle(handle);
+            if (!obj) { result = @{@"error": @"Handle not found"}; return; }
+
+            NSDictionary *valSpec = params[@"value"];
+            NSString *type = valSpec[@"type"] ?: @"string";
+            id value = nil;
+            if ([type isEqualToString:@"string"]) value = valSpec[@"value"];
+            else if ([type isEqualToString:@"int"]) value = @([valSpec[@"value"] longLongValue]);
+            else if ([type isEqualToString:@"double"]) value = @([valSpec[@"value"] doubleValue]);
+            else if ([type isEqualToString:@"bool"]) value = @([valSpec[@"value"] boolValue]);
+            else if ([type isEqualToString:@"nil"]) value = nil;
+
+            [obj setValue:value forKey:key];
+            result = @{@"key": key, @"status": @"ok",
+                       @"warning": @"Direct KVC may bypass undo. Use action pattern for undoable edits."};
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"KVC error: %@", e.reason]};
+        }
+    });
+    return result;
+}
+
+#pragma mark - timeline.getDetailedState
+
+static NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
+    NSInteger limit = [params[@"limit"] integerValue] ?: 200;
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            id timeline = FCPBridge_getActiveTimelineModule();
+            if (!timeline) {
+                result = @{@"error": @"No active timeline module. Is a project open?"};
+                return;
+            }
+
+            NSMutableDictionary *state = [NSMutableDictionary dictionary];
+            id sequence = nil;
+
+            if ([timeline respondsToSelector:@selector(sequence)]) {
+                sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+            }
+
+            if (!sequence) {
+                result = @{@"error": @"No sequence in timeline. Open a project first."};
+                return;
+            }
+
+            // Sequence info
+            if ([sequence respondsToSelector:@selector(displayName)]) {
+                id name = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(displayName));
+                state[@"sequenceName"] = name ?: @"<unnamed>";
+            }
+            state[@"sequenceClass"] = NSStringFromClass([sequence class]);
+
+            // Playhead
+            if ([timeline respondsToSelector:@selector(playheadTime)]) {
+                FCPBridge_CMTime t = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(timeline, @selector(playheadTime));
+                state[@"playheadTime"] = FCPBridge_serializeCMTime(t);
+            }
+
+            // Sequence duration
+            if ([sequence respondsToSelector:@selector(duration)]) {
+                FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(sequence, @selector(duration));
+                state[@"duration"] = FCPBridge_serializeCMTime(d);
+            }
+
+            // Selected items (get set for checking)
+            NSSet *selectedSet = nil;
+            SEL selItemsSel = NSSelectorFromString(@"selectedItems:includeItemBeforePlayheadIfLast:");
+            if ([timeline respondsToSelector:selItemsSel]) {
+                id selItems = ((id (*)(id, SEL, BOOL, BOOL))objc_msgSend)(timeline, selItemsSel, NO, NO);
+                if ([selItems isKindOfClass:[NSArray class]]) {
+                    selectedSet = [NSSet setWithArray:selItems];
+                    state[@"selectedCount"] = @([(NSArray *)selItems count]);
+                }
+            }
+
+            // Contained items
+            if ([sequence respondsToSelector:@selector(containedItems)]) {
+                id items = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(containedItems));
+                if ([items isKindOfClass:[NSArray class]]) {
+                    NSArray *arr = (NSArray *)items;
+                    state[@"itemCount"] = @(arr.count);
+                    NSMutableArray *itemList = [NSMutableArray array];
+                    NSInteger count = MIN((NSInteger)arr.count, limit);
+                    for (NSInteger i = 0; i < count; i++) {
+                        id item = arr[i];
+                        NSMutableDictionary *info = [NSMutableDictionary dictionary];
+                        info[@"index"] = @(i);
+                        info[@"class"] = NSStringFromClass([item class]);
+
+                        if ([item respondsToSelector:@selector(displayName)]) {
+                            id name = ((id (*)(id, SEL))objc_msgSend)(item, @selector(displayName));
+                            info[@"name"] = name ?: @"";
+                        }
+                        if ([item respondsToSelector:@selector(duration)]) {
+                            FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(item, @selector(duration));
+                            info[@"duration"] = FCPBridge_serializeCMTime(d);
+                        }
+                        if ([item respondsToSelector:@selector(anchoredLane)]) {
+                            long long lane = ((long long (*)(id, SEL))objc_msgSend)(item, @selector(anchoredLane));
+                            info[@"lane"] = @(lane);
+                        }
+                        if ([item respondsToSelector:@selector(mediaType)]) {
+                            long long mt = ((long long (*)(id, SEL))objc_msgSend)(item, @selector(mediaType));
+                            info[@"mediaType"] = @(mt);
+                        }
+
+                        info[@"selected"] = @(selectedSet && [selectedSet containsObject:item]);
+
+                        // Store handle for the item
+                        NSString *h = FCPBridge_storeHandle(item);
+                        info[@"handle"] = h;
+
+                        [itemList addObject:info];
+                    }
+                    state[@"items"] = itemList;
+                }
+            }
+
+            result = state;
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result;
+}
+
+#pragma mark - FCPXML Import
+
+static NSDictionary *FCPBridge_handleFCPXMLImport(NSDictionary *params) {
+    NSString *xml = params[@"xml"];
+    if (!xml) return @{@"error": @"xml parameter required"};
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            NSString *tmpPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"fcpbridge_import.fcpxml"];
+            NSData *data = [xml dataUsingEncoding:NSUTF8StringEncoding];
+            [data writeToFile:tmpPath atomically:YES];
+
+            NSURL *fileURL = [NSURL fileURLWithPath:tmpPath];
+            NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
+            __block BOOL opened = NO;
+            dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+            [[NSWorkspace sharedWorkspace] openURLs:@[fileURL]
+                withApplicationAtURL:[NSURL fileURLWithPath:
+                    @"/Applications/Final Cut Pro.app"]
+                configuration:config
+                completionHandler:^(NSRunningApplication *app, NSError *error) {
+                    opened = (error == nil);
+                    dispatch_semaphore_signal(sem);
+                }];
+            dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+            result = @{@"status": opened ? @"ok" : @"failed",
+                       @"path": tmpPath,
+                       @"message": opened ? @"FCPXML import triggered" : @"Failed to open FCPXML file"};
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result;
+}
+
 #pragma mark - Timeline Helpers
 
 static id FCPBridge_getActiveTimelineModule(void) {
@@ -449,8 +933,6 @@ static NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
         @"cut":              @"cut:",
         @"copy":             @"copy:",
         @"paste":            @"paste:",
-        @"undo":             @"undo:",
-        @"redo":             @"redo:",
 
         // Trim
         @"trimToPlayhead":   @"trimToPlayhead:",
@@ -470,23 +952,111 @@ static NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
         }
     }
 
-    return FCPBridge_sendTimelineAction(selector);
+    // First try on the timeline module directly (fastest, most specific)
+    NSDictionary *result = FCPBridge_sendTimelineAction(selector);
+
+    // If timeline module doesn't respond, fall back to responder chain
+    if (result[@"error"]) {
+        NSString *errMsg = result[@"error"];
+        if ([errMsg containsString:@"does not respond"] || [errMsg containsString:@"No active"]) {
+            return FCPBridge_sendAppAction(selector);
+        }
+    }
+
+    return result;
+}
+
+// Get the FFPlayerModule from editor container
+static id FCPBridge_getPlayerModule(void) {
+    id container = FCPBridge_getEditorContainer();
+    if (!container) return nil;
+
+    // Try playerModule or editorModule.playerModule
+    SEL pmSel = NSSelectorFromString(@"playerModule");
+    if ([container respondsToSelector:pmSel]) {
+        return ((id (*)(id, SEL))objc_msgSend)(container, pmSel);
+    }
+    // Try through editorModule
+    SEL emSel = NSSelectorFromString(@"editorModule");
+    if ([container respondsToSelector:emSel]) {
+        id editor = ((id (*)(id, SEL))objc_msgSend)(container, emSel);
+        if (editor && [editor respondsToSelector:pmSel]) {
+            return ((id (*)(id, SEL))objc_msgSend)(editor, pmSel);
+        }
+    }
+    return nil;
+}
+
+// Send action via NSApp.sendAction:to:from: (goes through responder chain)
+static NSDictionary *FCPBridge_sendAppAction(NSString *selectorName) {
+    __block NSDictionary *result = nil;
+
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            id app = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("NSApplication"), @selector(sharedApplication));
+            SEL sel = NSSelectorFromString(selectorName);
+            BOOL sent = ((BOOL (*)(id, SEL, SEL, id, id))objc_msgSend)(
+                app, @selector(sendAction:to:from:), sel, nil, nil);
+            if (sent) {
+                result = @{@"action": selectorName, @"status": @"ok"};
+            } else {
+                result = @{@"error": [NSString stringWithFormat:
+                    @"No responder handled %@", selectorName]};
+            }
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
+// Send action to the player module specifically
+static NSDictionary *FCPBridge_sendPlayerAction(NSString *selectorName) {
+    __block NSDictionary *result = nil;
+
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            id player = FCPBridge_getPlayerModule();
+            if (!player) {
+                result = @{@"error": @"No player module found"};
+                return;
+            }
+
+            SEL sel = NSSelectorFromString(selectorName);
+            if (![player respondsToSelector:sel]) {
+                result = @{@"error": [NSString stringWithFormat:
+                    @"Player module does not respond to %@", selectorName]};
+                return;
+            }
+
+            ((void (*)(id, SEL, id))objc_msgSend)(player, sel, nil);
+            result = @{@"action": selectorName, @"status": @"ok"};
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
 }
 
 static NSDictionary *FCPBridge_handlePlayback(NSDictionary *params) {
     NSString *action = params[@"action"];
     if (!action) return @{@"error": @"action parameter required"};
 
+    // All playback actions go through the responder chain (NSApp.sendAction:to:from:)
+    // This is how FCP's menu items work - they route to FFPlayerModule,
+    // PEEditorContainerModule, etc. automatically.
     NSDictionary *actionMap = @{
-        @"playPause":    @"playPause:",
-        @"play":         @"play:",
-        @"pause":        @"pause:",
-        @"playForward":  @"playForward:",
-        @"playBackward": @"playReverse:",
-        @"goToStart":    @"goToBeginning:",
-        @"goToEnd":      @"goToEnd:",
-        @"nextFrame":    @"nextFrame:",
-        @"prevFrame":    @"previousFrame:",
+        @"playPause":         @"playPause:",
+        @"goToStart":         @"gotoStart:",
+        @"goToEnd":           @"gotoEnd:",
+        @"nextFrame":         @"stepForward:",
+        @"prevFrame":         @"stepBackward:",
+        @"nextFrame10":       @"stepForward10Frames:",
+        @"prevFrame10":       @"stepBackward10Frames:",
+        @"playAroundCurrent": @"playAroundCurrentFrame:",
     };
 
     NSString *selector = actionMap[action];
@@ -497,7 +1067,7 @@ static NSDictionary *FCPBridge_handlePlayback(NSDictionary *params) {
         }
     }
 
-    return FCPBridge_sendEditorAction(selector);
+    return FCPBridge_sendAppAction(selector);
 }
 
 static NSDictionary *FCPBridge_handleTimelineGetState(NSDictionary *params) {
@@ -619,16 +1189,36 @@ static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
         result = FCPBridge_handleSystemGetSuperchain(params);
     } else if ([method isEqualToString:@"system.getIvars"]) {
         result = FCPBridge_handleSystemGetIvars(params);
+    } else if ([method isEqualToString:@"system.callMethodWithArgs"]) {
+        result = FCPBridge_handleCallMethodWithArgs(params);
+    }
+    // object.* namespace
+    else if ([method isEqualToString:@"object.get"]) {
+        result = FCPBridge_handleObjectGet(params);
+    } else if ([method isEqualToString:@"object.release"]) {
+        result = FCPBridge_handleObjectRelease(params);
+    } else if ([method isEqualToString:@"object.list"]) {
+        result = FCPBridge_handleObjectList(params);
+    } else if ([method isEqualToString:@"object.getProperty"]) {
+        result = FCPBridge_handleGetProperty(params);
+    } else if ([method isEqualToString:@"object.setProperty"]) {
+        result = FCPBridge_handleSetProperty(params);
     }
     // timeline.* namespace
     else if ([method isEqualToString:@"timeline.action"]) {
         result = FCPBridge_handleTimelineAction(params);
     } else if ([method isEqualToString:@"timeline.getState"]) {
         result = FCPBridge_handleTimelineGetState(params);
+    } else if ([method isEqualToString:@"timeline.getDetailedState"]) {
+        result = FCPBridge_handleTimelineGetDetailedState(params);
     }
     // playback.* namespace
     else if ([method isEqualToString:@"playback.action"]) {
         result = FCPBridge_handlePlayback(params);
+    }
+    // fcpxml.* namespace
+    else if ([method isEqualToString:@"fcpxml.import"]) {
+        result = FCPBridge_handleFCPXMLImport(params);
     }
     else {
         return @{@"error": @{@"code": @(-32601), @"message":
