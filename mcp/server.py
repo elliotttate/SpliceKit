@@ -16,35 +16,84 @@ FCPBRIDGE_PORT = 9876
 mcp = FastMCP(
     "fcpbridge",
     instructions="""Direct in-process control of Final Cut Pro via injected FCPBridge dylib.
-Connects to a JSON-RPC server running INSIDE the FCP process with access to all 78,000+ ObjC classes.
+Connects to a JSON-RPC server running INSIDE the FCP process with access to 78,000+ ObjC classes.
+All operations are fully programmatic - no AppleScript, no UI automation.
 
-## Workflow Pattern
-1. bridge_status() -- verify FCP is running
-2. get_timeline_clips() -- see what's in the timeline
-3. Perform actions: timeline_action(), playback_action(), call_method_with_args()
-4. verify_action() -- confirm the edit took effect
+## Standard Workflow
+1. bridge_status() -- verify FCP is running and connected
+2. get_timeline_clips() -- see what's in the timeline (items, handles, durations)
+3. Perform actions using timeline_action() and playback_action()
+4. verify_action() -- confirm the edit took effect by comparing state snapshots
 
-## Key Actions (timeline_action)
-blade, bladeAll, addMarker, addTodoMarker, addChapterMarker, deleteMarker,
-addTransition, nextEdit, previousEdit, selectClipAtPlayhead, selectAll,
-deselectAll, delete, cut, copy, paste, undo, redo, insertGap, trimToPlayhead
+## IMPORTANT: Opening a Project
+If get_timeline_clips() shows 0 items, you need to load a project into the timeline:
+  1. call_method_with_args("FFLibraryDocument", "copyActiveLibraries", return_handle=True)
+  2. Navigate: array -> library -> _deepLoadedSequences -> allObjects
+  3. Find a sequence with hasContainedItems == true
+  4. Get editor container via NSApp -> delegate -> activeEditorContainer
+  5. Call loadEditorForSequence: on the container with the sequence handle
 
-## Key Playback (playback_action)
+## Positioning the Playhead
+Use playback_action() to navigate before performing edits:
+  - goToStart, goToEnd -- jump to boundaries
+  - nextFrame, prevFrame -- single frame steps (1/24s at 24fps)
+  - nextFrame10, prevFrame10 -- 10-frame jumps
+  - For precise positioning, use batch: nextFrame with repeat count
+    e.g., batch_timeline_actions('[{"type":"playback","action":"nextFrame","repeat":72}]')
+    (72 frames = 3 seconds at 24fps)
+
+## Timeline Actions (timeline_action)
+Blade: blade, bladeAll
+Markers: addMarker, addTodoMarker, addChapterMarker, deleteMarker, nextMarker, previousMarker
+Transitions: addTransition
+Navigation: nextEdit, previousEdit, selectClipAtPlayhead, selectToPlayhead
+Selection: selectAll, deselectAll
+Edit: delete, cut, copy, paste, undo, redo
+Insert: insertGap
+Trim: trimToPlayhead
+Color: addColorBoard, addColorWheels, addColorCurves, addColorAdjustment,
+       addHueSaturation, addEnhanceLightAndColor
+Volume: adjustVolumeUp, adjustVolumeDown
+Titles: addBasicTitle, addBasicLowerThird
+Speed: retimeNormal, retimeFast2x, retimeFast4x, retimeFast8x, retimeFast20x,
+       retimeSlow50, retimeSlow25, retimeSlow10, retimeReverse, retimeHold,
+       freezeFrame, retimeBladeSpeed
+Keyframes: addKeyframe, deleteKeyframes, nextKeyframe, previousKeyframe
+Other: solo, disable, createCompoundClip, autoReframe, exportXML, shareSelection
+
+## IMPORTANT: Selection Before Actions
+Many actions require a clip to be selected first:
+  1. Navigate to position: playback_action("goToStart") then step frames
+  2. Select: timeline_action("selectClipAtPlayhead")
+  3. Then apply: timeline_action("addColorBoard") or timeline_action("retimeSlow50")
+  Undo with: timeline_action("undo")
+
+## Playback (playback_action)
 playPause, goToStart, goToEnd, nextFrame, prevFrame, nextFrame10, prevFrame10
 
-## Object Handles
-Methods that return objects can store them as handles (e.g. "obj_1").
-Pass handles as arguments to chain operations:
-  libs = call_method_with_args("FFLibraryDocument", "copyActiveLibraries", return_handle=True)
-  get_object_property(libs["handle"], "firstObject")
+## Batch Operations
+Use batch_timeline_actions() for multi-step sequences:
+  '[{"type":"playback","action":"goToStart"},
+    {"type":"playback","action":"nextFrame","repeat":72},
+    {"type":"timeline","action":"blade"},
+    {"type":"playback","action":"nextFrame","repeat":48},
+    {"type":"timeline","action":"blade"}]'
 
-## Key FCP Classes
-FFAnchoredTimelineModule (1435 methods) - timeline editing
-FFAnchoredSequence (1074) - timeline data model
-FFLibrary (203) - library container
-FFEditActionMgr (42) - edit command dispatcher
-FFPlayer (228) - playback engine
-PEAppController (484) - app controller
+## Timeline Data Model
+FCP uses a spine model: sequence -> primaryObject (collection) -> items
+Items are FFAnchoredMediaComponent (clips), FFAnchoredTransition, etc.
+get_timeline_clips() handles this automatically and returns handles for each item.
+
+## FCPXML for Complex Edits
+For creating entire projects with gaps, titles, markers:
+  xml = generate_fcpxml(items='[{"type":"gap","duration":5},{"type":"title","text":"Hello","duration":3}]')
+  import_fcpxml(xml, internal=True)  # imports without restart
+
+## Object Handles for Deep Access
+  call_method_with_args("FFLibraryDocument", "copyActiveLibraries", return_handle=True)
+  # Returns {"handle": "obj_1", "class": "..."} -- pass handle to subsequent calls
+  call_method_with_args("obj_1", "objectAtIndex:", '[{"type":"int","value":0}]', false, true)
+  # Always release when done: manage_handles(action="release_all")
 """
 )
 
