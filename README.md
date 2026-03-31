@@ -2,7 +2,9 @@
 
 Direct in-process control of Final Cut Pro via dylib injection. FCPBridge loads a custom framework into FCP's process space, giving you full access to all 78,000+ ObjC classes and their methods through a JSON-RPC interface and MCP server.
 
-## Example App Made In About 20 Seconds: Transcript Editor — Text-Based Video Editing
+Example App Made In About 20 Seconds by Claude Code Opus 4.6: 
+
+## Transcript Editor — Text-Based Video Editing
 
 [![Transcript Editor Demo](https://img.youtube.com/vi/JxxDSH4Ly0I/maxresdefault.jpg)](https://www.youtube.com/watch?v=JxxDSH4Ly0I)
 
