@@ -40,9 +40,26 @@ FCPBridge injects a dynamic library into a re-signed copy of Final Cut Pro that:
         └─────────────────────────────┘
 ```
 
-## Quick Setup (Patcher)
+## Quick Setup
 
-The easiest way to set up FCPBridge:
+### GUI Patcher (Recommended)
+
+Download **FCPBridgePatcher** from the [latest release](https://github.com/elliotttate/FCPBridge/releases/latest), unzip it, and run the app. It handles everything automatically — just click the button to patch.
+
+<img src="docs/patcher-screenshot.jpg" width="500" alt="FCPBridge Patcher">
+
+The patcher will:
+1. Copy Final Cut Pro to `~/Desktop/FinalCutPro_Modded/`
+2. Build and inject the FCPBridge dylib
+3. Re-sign with custom entitlements (no sandbox)
+4. Patch crash points (CloudContent/ImagePlayground)
+5. Set up the MCP server config
+
+Once patched, click **Launch FCP** in the patcher or open the modded app directly.
+
+### Command Line Patcher
+
+Alternatively, use the shell script:
 
 ```bash
 git clone https://github.com/elliotttate/FCPBridge.git
@@ -50,18 +67,7 @@ cd FCPBridge
 ./patcher/patch_fcp.sh
 ```
 
-This automatically:
-1. Copies FCP to `~/Desktop/FinalCutPro_Modded/`
-2. Builds the FCPBridge dylib from source
-3. Injects it into the FCP binary
-4. Re-signs everything (no sandbox, library validation disabled)
-5. Patches CloudContent/ImagePlayground crash points
-6. Creates `.mcp.json` for Claude Code integration
-
-Then just launch the modded FCP and connect.
-
-### Patcher Options
-
+Options:
 ```bash
 ./patcher/patch_fcp.sh --dest ~/my-fcp    # Custom destination
 ./patcher/patch_fcp.sh --rebuild           # Rebuild dylib only (after code changes)
@@ -210,18 +216,25 @@ Add to your `.mcp.json`:
 ```
 FCPBridge/
 ├── patcher/
-│   └── patch_fcp.sh           # One-command patcher (copies, builds, injects, signs)
+│   ├── FCPBridgePatcher.app/  # Signed & notarized GUI patcher
+│   ├── FCPBridgePatcher/
+│   │   └── main.swift         # Patcher source (SwiftUI)
+│   └── patch_fcp.sh           # Command line patcher
 ├── Sources/
 │   ├── FCPBridge.h            # Public header
-│   ├── FCPBridge.m            # Constructor, class caching, CloudContent fix
+│   ├── FCPBridge.m            # Constructor, class caching, crash fixes, menu/toolbar
 │   ├── FCPBridgeRuntime.m     # ObjC runtime utilities
-│   ├── FCPBridgeServer.m      # JSON-RPC TCP server (28 tool endpoints)
-│   └── FCPBridgeSwizzle.m     # Method swizzling infrastructure
+│   ├── FCPBridgeServer.m      # JSON-RPC TCP server (33 tool endpoints)
+│   ├── FCPBridgeSwizzle.m     # Method swizzling infrastructure
+│   ├── FCPTranscriptPanel.h   # Transcript editor header
+│   └── FCPTranscriptPanel.m   # Speech transcription, text-based editing UI
 ├── Scripts/
 │   ├── fcpbridge_client.py    # Interactive Python REPL client
-│   └── launch.sh             # Launch helper script
+│   └── launch.sh              # Launch helper script
 ├── mcp/
-│   └── server.py             # MCP server (28 tools)
+│   └── server.py              # MCP server (33 tools)
+├── docs/
+│   └── FCP_API_REFERENCE.md   # Full API reference for FCP internals
 ├── CLAUDE.md                  # Skill documentation for Claude
 ├── Makefile                   # Build, deploy, launch targets
 └── entitlements.plist         # Unsandboxed entitlements for re-signing
