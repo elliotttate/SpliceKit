@@ -8,6 +8,38 @@
 		<data>
 		mdeHsV9phiYLGfMJMvtMhyzKNso=
 		</data>
+		<key>Resources/Sources/FCPBridge.h</key>
+		<data>
+		8T4SLRYqVvIDvDq0NmweGNrtovs=
+		</data>
+		<key>Resources/Sources/FCPBridge.m</key>
+		<data>
+		FgA9RcfHS+PaNsodMNkH8vkoa+4=
+		</data>
+		<key>Resources/Sources/FCPBridgeRuntime.m</key>
+		<data>
+		B15JdFRo4pa6XkuGvQoqm1y7rv0=
+		</data>
+		<key>Resources/Sources/FCPBridgeServer.m</key>
+		<data>
+		e7b61Ry9XAM8O0aRcJ406HgGOkQ=
+		</data>
+		<key>Resources/Sources/FCPBridgeSwizzle.m</key>
+		<data>
+		STsMzoP3n6DMyLySJ2exCHrCt78=
+		</data>
+		<key>Resources/Sources/FCPTranscriptPanel.h</key>
+		<data>
+		ZgJwtMPsaqGZYFYaWGP7fqDZwzs=
+		</data>
+		<key>Resources/Sources/FCPTranscriptPanel.m</key>
+		<data>
+		wTTH/0nUe+68Tzx/0fVR8H7kA8A=
+		</data>
+		<key>Resources/mcp/server.py</key>
+		<data>
+		tXi+0AOoDe75SJ9WfY+S23TbQSY=
+		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
@@ -16,6 +48,62 @@
 			<key>hash2</key>
 			<data>
 			Cqp531O4jkR65bAPTMKX35jLGAKi5B1odWdDCKE4l3w=
+			</data>
+		</dict>
+		<key>Resources/Sources/FCPBridge.h</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			IIGRrMkiPYV/TRrzLhJbnnVvhDHmP0R7mIw5OuN7ljE=
+			</data>
+		</dict>
+		<key>Resources/Sources/FCPBridge.m</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			X+VjdosrBlf+fwuEI4G6xpc7Z0j9XBEnrlTfUfY2WNg=
+			</data>
+		</dict>
+		<key>Resources/Sources/FCPBridgeRuntime.m</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			jafOCEPncjq08voLxj0VxUlXXhx5eWourjKEyAvqR6o=
+			</data>
+		</dict>
+		<key>Resources/Sources/FCPBridgeServer.m</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			fv6nZJ0sqk4UzNI2avrD5D5P/CPlxBUSuO6p9rnFvE0=
+			</data>
+		</dict>
+		<key>Resources/Sources/FCPBridgeSwizzle.m</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			wKNqvl88W6o7EvQNhdsziGRuWcxqwu/swAyI19tNyxU=
+			</data>
+		</dict>
+		<key>Resources/Sources/FCPTranscriptPanel.h</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			6Ey2imTnwUxnS5ejpV3LKBiZYDb3lrkAAPET8aTqf6E=
+			</data>
+		</dict>
+		<key>Resources/Sources/FCPTranscriptPanel.m</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			e6zhto0Qi344gBzrm2S4JijqWQADOzd/4G+BE8ndSWs=
+			</data>
+		</dict>
+		<key>Resources/mcp/server.py</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			TIx0p8FrnMZFz7re6el8tJ+bhGkEikUn31aPMmiFbUc=
 			</data>
 		</dict>
 	</dict>
