@@ -935,5 +935,131 @@ def raw_call(method: str, params: str = "{}") -> str:
     return _fmt(r)
 
 
+# ============================================================
+# Transcript-Based Editing
+# ============================================================
+
+@mcp.tool()
+def open_transcript(file_url: str = "") -> str:
+    """Open the transcript panel and start transcribing.
+
+    If no file_url is provided, transcribes all clips on the current timeline.
+    If file_url is provided, transcribes that specific audio/video file.
+
+    The transcript panel allows text-based editing:
+    - Clicking a word jumps the playhead to that time
+    - Deleting words removes those segments from the timeline
+    - Dragging words reorders clips on the timeline
+
+    Transcription is async - use get_transcript() to check progress and results.
+    """
+    params = {}
+    if file_url:
+        params["fileURL"] = file_url
+    r = bridge.call("transcript.open", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def get_transcript() -> str:
+    """Get the current transcript state, including all words with timestamps.
+
+    Returns:
+    - status: idle/transcribing/ready/error
+    - wordCount: number of transcribed words
+    - text: full transcript text
+    - words: array of {index, text, startTime, endTime, duration, confidence}
+    - progress: {completed, total} when transcribing
+
+    Use this after open_transcript() to check when transcription is complete
+    and to get the word list for editing operations.
+    """
+    r = bridge.call("transcript.getState")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    # Format nicely
+    lines = [f"Status: {r.get('status', 'unknown')}"]
+    lines.append(f"Words: {r.get('wordCount', 0)}")
+
+    if r.get('progress'):
+        p = r['progress']
+        lines.append(f"Progress: {p.get('completed', 0)}/{p.get('total', 0)} clips")
+
+    if r.get('text'):
+        text = r['text']
+        if len(text) > 2000:
+            text = text[:2000] + "..."
+        lines.append(f"\nTranscript:\n{text}")
+
+    if r.get('words'):
+        lines.append(f"\nWord list ({len(r['words'])} words):")
+        for w in r['words']:
+            conf = w.get('confidence', 0) * 100
+            lines.append(f"  [{w['index']:3d}] {w['startTime']:7.2f}s - {w['endTime']:7.2f}s "
+                         f"({conf:3.0f}%) \"{w['text']}\"")
+
+    if r.get('error'):
+        lines.append(f"\nError: {r['error']}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def delete_transcript_words(start_index: int, count: int) -> str:
+    """Delete words from the transcript, which removes the corresponding video segments.
+
+    This performs a ripple delete on the timeline:
+    1. Blades at the start time of the first word
+    2. Blades at the end time of the last word
+    3. Selects and deletes the segment between the blades
+
+    Args:
+        start_index: Index of the first word to delete (from get_transcript word list)
+        count: Number of consecutive words to delete
+
+    The timeline gap closes automatically (ripple delete).
+    Use timeline_action("undo") to reverse.
+    """
+    r = bridge.call("transcript.deleteWords", startIndex=start_index, count=count)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def move_transcript_words(start_index: int, count: int, dest_index: int) -> str:
+    """Move words in the transcript to a new position, which reorders clips on the timeline.
+
+    This performs a cut-and-paste on the timeline:
+    1. Blades at source start/end to isolate the segment
+    2. Cuts the segment
+    3. Moves playhead to the destination position
+    4. Pastes the segment
+
+    Args:
+        start_index: Index of the first word to move
+        count: Number of consecutive words to move
+        dest_index: Target position in the word list (the words will be inserted before this index)
+
+    Use timeline_action("undo") to reverse.
+    """
+    r = bridge.call("transcript.moveWords", startIndex=start_index, count=count, destIndex=dest_index)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def close_transcript() -> str:
+    """Close the transcript panel."""
+    r = bridge.call("transcript.close")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return "Transcript panel closed."
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

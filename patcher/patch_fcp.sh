@@ -388,6 +388,10 @@ defaults write com.apple.FinalCut CloudContentFirstLaunchCompleted -bool true 2>
 defaults write com.apple.FinalCut FFCloudContentDisabled -bool true 2>/dev/null || true
 log "CloudContent defaults set"
 
+# Add speech recognition usage description for transcript feature
+/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'FCPBridge uses speech recognition to transcribe timeline audio for text-based editing.'" "$MODDED_APP/Contents/Info.plist" 2>/dev/null || true
+log "Speech recognition permission configured"
+
 # ============================================================
 # Step 7: Create MCP config
 # ============================================================

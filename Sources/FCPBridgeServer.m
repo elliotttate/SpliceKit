@@ -4,14 +4,18 @@
 //
 
 #import "FCPBridge.h"
+#import "FCPTranscriptPanel.h"
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
 #import <netinet/in.h>
 #import <arpa/inet.h>
+#import <fcntl.h>
 #import <AppKit/AppKit.h>
 
 #define FCPBRIDGE_TCP_PORT 9876
+
+static int sServerFd = -1;
 
 // Forward declarations
 static NSDictionary *FCPBridge_sendAppAction(NSString *selectorName);
@@ -1441,6 +1445,69 @@ static NSDictionary *FCPBridge_handleTimelineGetState(NSDictionary *params) {
     return result;
 }
 
+#pragma mark - Transcript Handlers
+
+static NSDictionary *FCPBridge_handleTranscriptOpen(NSDictionary *params) {
+    NSString *fileURL = params[@"fileURL"];
+
+    __block NSDictionary *result = nil;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        FCPTranscriptPanel *panel = [FCPTranscriptPanel sharedPanel];
+        [panel showPanel];
+
+        if (fileURL) {
+            NSURL *url = [NSURL fileURLWithPath:fileURL];
+            double timelineStart = [params[@"timelineStart"] doubleValue];
+            double trimStart = [params[@"trimStart"] doubleValue];
+            double trimDuration = [params[@"trimDuration"] doubleValue] ?: HUGE_VAL;
+            [panel transcribeFromURL:url timelineStart:timelineStart trimStart:trimStart trimDuration:trimDuration];
+        } else {
+            [panel transcribeTimeline];
+        }
+    });
+
+    // Return immediately - transcription is async
+    return @{@"status": @"ok", @"message": @"Transcript panel opened. Transcription started. Use transcript.getState to check progress."};
+}
+
+static NSDictionary *FCPBridge_handleTranscriptClose(NSDictionary *params) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[FCPTranscriptPanel sharedPanel] hidePanel];
+    });
+    return @{@"status": @"ok"};
+}
+
+static NSDictionary *FCPBridge_handleTranscriptGetState(NSDictionary *params) {
+    // Don't dispatch to main thread - getState reads properties that are safe from any thread
+    // Using main thread here would deadlock if transcription is in progress on main thread
+    return [[FCPTranscriptPanel sharedPanel] getState] ?: @{@"status": @"idle"};
+}
+
+static NSDictionary *FCPBridge_handleTranscriptDeleteWords(NSDictionary *params) {
+    NSUInteger startIndex = [params[@"startIndex"] unsignedIntegerValue];
+    NSUInteger count = [params[@"count"] unsignedIntegerValue];
+    if (count == 0) return @{@"error": @"count must be > 0"};
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        result = [[FCPTranscriptPanel sharedPanel] deleteWordsFromIndex:startIndex count:count];
+    });
+    return result ?: @{@"error": @"Operation failed"};
+}
+
+static NSDictionary *FCPBridge_handleTranscriptMoveWords(NSDictionary *params) {
+    NSUInteger startIndex = [params[@"startIndex"] unsignedIntegerValue];
+    NSUInteger count = [params[@"count"] unsignedIntegerValue];
+    NSUInteger destIndex = [params[@"destIndex"] unsignedIntegerValue];
+    if (count == 0) return @{@"error": @"count must be > 0"};
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        result = [[FCPTranscriptPanel sharedPanel] moveWordsFromIndex:startIndex count:count toIndex:destIndex];
+    });
+    return result ?: @{@"error": @"Operation failed"};
+}
+
 #pragma mark - Request Dispatcher
 
 static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
@@ -1508,6 +1575,18 @@ static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
         result = FCPBridge_handleEffectList(params);
     } else if ([method isEqualToString:@"effects.getClipEffects"]) {
         result = FCPBridge_handleGetClipEffects(params);
+    }
+    // transcript.* namespace
+    else if ([method isEqualToString:@"transcript.open"]) {
+        result = FCPBridge_handleTranscriptOpen(params);
+    } else if ([method isEqualToString:@"transcript.close"]) {
+        result = FCPBridge_handleTranscriptClose(params);
+    } else if ([method isEqualToString:@"transcript.getState"]) {
+        result = FCPBridge_handleTranscriptGetState(params);
+    } else if ([method isEqualToString:@"transcript.deleteWords"]) {
+        result = FCPBridge_handleTranscriptDeleteWords(params);
+    } else if ([method isEqualToString:@"transcript.moveWords"]) {
+        result = FCPBridge_handleTranscriptMoveWords(params);
     }
     else {
         return @{@"error": @{@"code": @(-32601), @"message":
@@ -1626,19 +1705,41 @@ void FCPBridge_startControlServer(void) {
         return;
     }
 
+    sServerFd = serverFd;
+
+    sServerFd = serverFd;
+
     FCPBridge_log(@"================================================");
     FCPBridge_log(@"Control server listening on 127.0.0.1:%d", FCPBRIDGE_TCP_PORT);
     FCPBridge_log(@"================================================");
 
-    while (1) {
-        int clientFd = accept(serverFd, NULL, NULL);
-        if (clientFd < 0) {
-            FCPBridge_log(@"Accept error: %s", strerror(errno));
-            continue;
-        }
+    // Use dispatch_source for accepting connections instead of a blocking loop.
+    // This lets the thread exit naturally and won't block app termination.
+    dispatch_source_t acceptSource = dispatch_source_create(
+        DISPATCH_SOURCE_TYPE_READ, serverFd, 0,
+        dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0));
 
+    dispatch_source_set_event_handler(acceptSource, ^{
+        int clientFd = accept(serverFd, NULL, NULL);
+        if (clientFd < 0) return;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             FCPBridge_handleClient(clientFd);
         });
-    }
+    });
+
+    dispatch_source_set_cancel_handler(acceptSource, ^{
+        close(serverFd);
+        sServerFd = -1;
+        FCPBridge_log(@"Server socket closed");
+    });
+
+    dispatch_resume(acceptSource);
+
+    // Cancel the source on app termination
+    [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSApplicationWillTerminateNotification
+        object:nil queue:nil usingBlock:^(NSNotification *note) {
+            FCPBridge_log(@"App terminating — cancelling server");
+            dispatch_source_cancel(acceptSource);
+        }];
 }

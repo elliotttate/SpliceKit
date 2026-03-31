@@ -1,7 +1,7 @@
 CC = clang
 ARCHS = -arch arm64 -arch x86_64
 MIN_VERSION = -mmacosx-version-min=14.0
-FRAMEWORKS = -framework Foundation -framework AppKit
+FRAMEWORKS = -framework Foundation -framework AppKit -framework AVFoundation
 OBJC_FLAGS = -fobjc-arc -fmodules
 LINKER_FLAGS = -undefined dynamic_lookup -dynamiclib
 INSTALL_NAME = -install_name @rpath/FCPBridge.framework/Versions/A/FCPBridge
@@ -9,7 +9,8 @@ INSTALL_NAME = -install_name @rpath/FCPBridge.framework/Versions/A/FCPBridge
 SOURCES = Sources/FCPBridge.m \
           Sources/FCPBridgeRuntime.m \
           Sources/FCPBridgeSwizzle.m \
-          Sources/FCPBridgeServer.m
+          Sources/FCPBridgeServer.m \
+          Sources/FCPTranscriptPanel.m
 
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)/FCPBridge
@@ -46,6 +47,8 @@ deploy: $(OUTPUT)
 	@test -f "$(FW_DIR)/Versions/A/Resources/Info.plist" || \
 		printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.custom.FCPBridge</string><key>CFBundleName</key><string>FCPBridge</string><key>CFBundleVersion</key><string>1.0.0</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleExecutable</key><string>FCPBridge</string></dict></plist>' \
 		> "$(FW_DIR)/Versions/A/Resources/Info.plist"
+	@# Add speech recognition usage description for transcript feature
+	@/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'FCPBridge uses speech recognition to transcribe timeline audio for text-based editing.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
 	@# Sign the framework
 	codesign --force --sign - "$(FW_DIR)"
 	@# Re-sign the app

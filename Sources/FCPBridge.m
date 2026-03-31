@@ -128,6 +128,231 @@ static void FCPBridge_checkCompatibility(void) {
     FCPBridge_log(@"Class check: %d/%d found", found, total);
 }
 
+#pragma mark - FCPBridge Menu
+
+@interface FCPBridgeMenuController : NSObject
++ (instancetype)shared;
+- (void)toggleTranscriptPanel:(id)sender;
+@property (nonatomic, weak) NSButton *toolbarButton;
+@end
+
+@implementation FCPBridgeMenuController
+
++ (instancetype)shared {
+    static FCPBridgeMenuController *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+    return instance;
+}
+
+- (void)toggleTranscriptPanel:(id)sender {
+    Class panelClass = objc_getClass("FCPTranscriptPanel");
+    if (!panelClass) {
+        FCPBridge_log(@"FCPTranscriptPanel class not found");
+        return;
+    }
+    id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
+    BOOL visible = ((BOOL (*)(id, SEL))objc_msgSend)(panel, @selector(isVisible));
+    if (visible) {
+        ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
+    } else {
+        ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
+    }
+    // Update toolbar button pressed state
+    BOOL nowVisible = !visible;
+    [self updateToolbarButtonState:nowVisible];
+}
+
+- (void)updateToolbarButtonState:(BOOL)active {
+    NSButton *btn = self.toolbarButton;
+    if (!btn) return;
+    btn.state = active ? NSControlStateValueOn : NSControlStateValueOff;
+    // Match FCP's active style: blue tint on the icon when active
+    if (active) {
+        btn.contentTintColor = [NSColor controlAccentColor];
+        btn.bezelColor = [NSColor colorWithWhite:0.0 alpha:0.5];
+    } else {
+        btn.contentTintColor = nil;
+        btn.bezelColor = nil;
+    }
+}
+
+@end
+
+static void FCPBridge_installMenu(void) {
+    NSMenu *mainMenu = [NSApp mainMenu];
+    if (!mainMenu) {
+        FCPBridge_log(@"No main menu found - skipping menu install");
+        return;
+    }
+
+    // Create "FCPBridge" top-level menu
+    NSMenu *bridgeMenu = [[NSMenu alloc] initWithTitle:@"FCPBridge"];
+
+    NSMenuItem *transcriptItem = [[NSMenuItem alloc]
+        initWithTitle:@"Transcript Editor"
+               action:@selector(toggleTranscriptPanel:)
+        keyEquivalent:@"t"];
+    transcriptItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
+    transcriptItem.target = [FCPBridgeMenuController shared];
+    [bridgeMenu addItem:transcriptItem];
+
+    // Add the menu to the menu bar (before the last item which is usually "Help")
+    NSMenuItem *bridgeMenuItem = [[NSMenuItem alloc] initWithTitle:@"FCPBridge" action:nil keyEquivalent:@""];
+    bridgeMenuItem.submenu = bridgeMenu;
+
+    NSInteger helpIndex = [mainMenu indexOfItemWithTitle:@"Help"];
+    if (helpIndex >= 0) {
+        [mainMenu insertItem:bridgeMenuItem atIndex:helpIndex];
+    } else {
+        [mainMenu addItem:bridgeMenuItem];
+    }
+
+    FCPBridge_log(@"FCPBridge menu installed (Ctrl+Option+T for Transcript Editor)");
+}
+
+static NSString * const kFCPBridgeTranscriptToolbarID = @"FCPBridgeTranscriptItemID";
+static IMP sOriginalToolbarItemForIdentifier = NULL;
+
+// Swizzled toolbar delegate method — returns our custom item for our identifier,
+// passes everything else to the original implementation.
+static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *toolbar,
+                                                   NSString *identifier, BOOL willInsert) {
+    if ([identifier isEqualToString:kFCPBridgeTranscriptToolbarID]) {
+        NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:kFCPBridgeTranscriptToolbarID];
+        item.label = @"Transcript";
+        item.paletteLabel = @"Transcript Editor";
+        item.toolTip = @"Transcript Editor";
+
+        NSImage *icon = [NSImage imageWithSystemSymbolName:@"text.quote"
+                                  accessibilityDescription:@"Transcript Editor"];
+        if (!icon) icon = [NSImage imageNamed:NSImageNameListViewTemplate];
+        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration
+            configurationWithPointSize:13 weight:NSFontWeightMedium];
+        icon = [icon imageWithSymbolConfiguration:config];
+
+        NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 32, 25)];
+        [button setButtonType:NSButtonTypePushOnPushOff];
+        button.bezelStyle = NSBezelStyleTexturedRounded;
+        button.bordered = YES;
+        button.image = icon;
+        button.alternateImage = icon;
+        button.imagePosition = NSImageOnly;
+        button.target = [FCPBridgeMenuController shared];
+        button.action = @selector(toggleTranscriptPanel:);
+
+        [FCPBridgeMenuController shared].toolbarButton = button;
+        item.view = button;
+        item.minSize = NSMakeSize(32, 25);
+        item.maxSize = NSMakeSize(32, 25);
+
+        return item;
+    }
+    // Call original
+    return ((id (*)(id, SEL, NSToolbar *, NSString *, BOOL))sOriginalToolbarItemForIdentifier)(
+        self, _cmd, toolbar, identifier, willInsert);
+}
+
+@implementation FCPBridgeMenuController (Toolbar)
+
++ (void)installToolbarButton {
+    // Observe window-did-become-main to catch the toolbar as soon as it's ready
+    __block id observer = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowDidBecomeMainNotification
+        object:nil queue:[NSOperationQueue mainQueue]
+        usingBlock:^(NSNotification *note) {
+            NSWindow *window = note.object;
+            if (window.toolbar) {
+                [[NSNotificationCenter defaultCenter] removeObserver:observer];
+                observer = nil;
+                [FCPBridgeMenuController addToolbarButtonToWindow:window];
+            }
+        }];
+
+    // Also poll as fallback in case the notification already fired
+    [self installToolbarButtonAttempt:0];
+}
+
++ (void)installToolbarButtonAttempt:(int)attempt {
+    if (attempt >= 30) {
+        FCPBridge_log(@"No main window for toolbar button after %d attempts", attempt);
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        // Check all windows, not just mainWindow
+        for (NSWindow *w in [NSApp windows]) {
+            if (w.toolbar && w.toolbar.items.count > 0) {
+                [FCPBridgeMenuController addToolbarButtonToWindow:w];
+                return;
+            }
+        }
+        [self installToolbarButtonAttempt:attempt + 1];
+    });
+}
+
++ (void)addToolbarButtonToWindow:(NSWindow *)window {
+    @try {
+        NSToolbar *toolbar = window.toolbar;
+        if (!toolbar) {
+            FCPBridge_log(@"No toolbar on main window");
+            return;
+        }
+
+        // Swizzle the toolbar delegate to handle our custom item identifier
+        id delegate = toolbar.delegate;
+        if (!delegate) {
+            FCPBridge_log(@"No toolbar delegate");
+            return;
+        }
+
+        if (!sOriginalToolbarItemForIdentifier) {
+            SEL sel = @selector(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:);
+            Method m = class_getInstanceMethod([delegate class], sel);
+            if (m) {
+                sOriginalToolbarItemForIdentifier = method_getImplementation(m);
+                method_setImplementation(m, (IMP)FCPBridge_toolbar_itemForItemIdentifier);
+                FCPBridge_log(@"Swizzled toolbar delegate %@ for custom item", NSStringFromClass([delegate class]));
+            }
+        }
+
+        // Check if already inserted — if found but has no view, remove the stale one
+        for (NSUInteger i = 0; i < toolbar.items.count; i++) {
+            NSToolbarItem *ti = toolbar.items[i];
+            if ([ti.itemIdentifier isEqualToString:kFCPBridgeTranscriptToolbarID]) {
+                if (ti.view) {
+                    if ([ti.view isKindOfClass:[NSButton class]]) {
+                        [FCPBridgeMenuController shared].toolbarButton = (NSButton *)ti.view;
+                    }
+                    FCPBridge_log(@"Toolbar button already present with view — skipping");
+                    return;
+                }
+                FCPBridge_log(@"Removing stale toolbar item at index %lu", (unsigned long)i);
+                [toolbar removeItemAtIndex:i];
+                break;
+            }
+        }
+
+        // Re-read items after possible removal, find flexible space to insert before it
+        NSUInteger insertIdx = toolbar.items.count;
+        for (NSUInteger i = 0; i < toolbar.items.count; i++) {
+            NSToolbarItem *ti = toolbar.items[i];
+            if ([ti.itemIdentifier isEqualToString:NSToolbarFlexibleSpaceItemIdentifier]) {
+                insertIdx = i;
+                break;
+            }
+        }
+
+        [toolbar insertItemWithItemIdentifier:kFCPBridgeTranscriptToolbarID atIndex:insertIdx];
+        FCPBridge_log(@"Toolbar button inserted at index %lu (before flexible space)", (unsigned long)insertIdx);
+
+    } @catch (NSException *e) {
+        FCPBridge_log(@"Failed to install toolbar button: %@", e.reason);
+    }
+}
+
+@end
+
 #pragma mark - App Launch Handler
 
 static void FCPBridge_appDidLaunch(void) {
@@ -143,6 +368,12 @@ static void FCPBridge_appDidLaunch(void) {
     Class *allClasses = objc_copyClassList(&classCount);
     free(allClasses);
     FCPBridge_log(@"Total ObjC classes in process: %u", classCount);
+
+    // Install FCPBridge menu in the menu bar
+    FCPBridge_installMenu();
+
+    // Install toolbar button in FCP's main window
+    [FCPBridgeMenuController installToolbarButton];
 
     // Start the control server on a background thread
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{

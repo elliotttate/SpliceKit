@@ -151,6 +151,26 @@ get_clip_effects()  # shows effect names, IDs, handles
 analyze_timeline()  # pacing, flash frames, clip stats
 ```
 
+### Text-based editing via transcript
+```
+open_transcript()                              # transcribe all clips on timeline
+open_transcript(file_url="/path/to/video.mp4") # transcribe a specific file
+get_transcript()                               # get words with timestamps
+delete_transcript_words(start_index=5, count=3) # delete words 5-7 (removes video segment)
+move_transcript_words(start_index=10, count=2, dest_index=3) # reorder clips
+close_transcript()                             # close the panel
+```
+
+The transcript panel opens inside FCP as a floating window:
+- Shows transcribed text with word-level timestamps and confidence scores
+- Click a word to jump the playhead to that time
+- Select words and press Delete to remove those video segments (ripple delete)
+- Drag words to reorder clips on the timeline
+- Current word is highlighted as playback progresses
+
+Deleting words performs: blade at start -> blade at end -> select segment -> delete
+Moving words performs: blade + cut at source -> move playhead -> paste at destination
+
 ## Object Handles
 ```
 # Get a handle to an object
