@@ -2,6 +2,12 @@
 
 Direct in-process control of Final Cut Pro via dylib injection. FCPBridge loads a custom framework into FCP's process space, giving you full access to all 78,000+ ObjC classes and their methods through a JSON-RPC interface and MCP server.
 
+## Transcript Editor — Text-Based Video Editing
+
+[![Transcript Editor Demo](https://img.youtube.com/vi/JxxDSH4Ly0I/maxresdefault.jpg)](https://www.youtube.com/watch?v=JxxDSH4Ly0I)
+
+> Click a word to jump the playhead. Select words and press Delete to remove video segments. Drag words to reorder clips. All changes apply directly to the FCP timeline.
+
 ## What This Does
 
 FCPBridge injects a dynamic library into a re-signed copy of Final Cut Pro that:
@@ -43,6 +49,8 @@ FCPBridge injects a dynamic library into a re-signed copy of Final Cut Pro that:
 ## Quick Setup
 
 ### GUI Patcher (Recommended)
+
+[![Installation Guide](https://img.youtube.com/vi/NxbInKlXQVs/maxresdefault.jpg)](https://www.youtube.com/watch?v=NxbInKlXQVs)
 
 Download **FCPBridgePatcher** from the [latest release](https://github.com/elliotttate/FCPBridge/releases/latest), unzip it, and run the app. It handles everything automatically — just click the button to patch.
 
