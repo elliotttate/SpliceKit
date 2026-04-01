@@ -245,7 +245,7 @@ class PatcherModel: ObservableObject {
         await logAsync("Compiling FCPBridge dylib...")
         let buildDir = NSTemporaryDirectory() + "FCPBridge_build"
         shell("mkdir -p '\(buildDir)'")
-        let sources = ["FCPBridge.m", "FCPBridgeRuntime.m", "FCPBridgeSwizzle.m", "FCPBridgeServer.m", "FCPTranscriptPanel.m"]
+        let sources = ["FCPBridge.m", "FCPBridgeRuntime.m", "FCPBridgeSwizzle.m", "FCPBridgeServer.m", "FCPTranscriptPanel.m", "FCPCommandPalette.m"]
             .map { "'\(repoDir)/Sources/\($0)'" }.joined(separator: " ")
         let buildResult = shell("""
             clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
@@ -260,6 +260,26 @@ class PatcherModel: ObservableObject {
             throw PatchError.msg("Build failed:\n\(buildResult)")
         }
         await logAsync("Built universal dylib (arm64 + x86_64)")
+
+        // Build silence-detector tool
+        let silenceSwift = repoDir + "/tools/silence-detector.swift"
+        let silenceBin = buildDir + "/silence-detector"
+        if FileManager.default.fileExists(atPath: silenceSwift) {
+            let swiftResult = shell("swiftc -O -suppress-warnings -o '\(silenceBin)' '\(silenceSwift)' 2>&1")
+            if FileManager.default.fileExists(atPath: silenceBin) {
+                await logAsync("Built silence-detector tool")
+            } else {
+                await logAsync("Warning: silence-detector build failed (silence removal will be unavailable)")
+            }
+        } else {
+            // Try to use pre-built binary from Resources
+            let prebuilt = repoDir + "/tools/silence-detector"
+            if FileManager.default.fileExists(atPath: prebuilt) {
+                shell("cp '\(prebuilt)' '\(silenceBin)'")
+                await logAsync("Using pre-built silence-detector")
+            }
+        }
+
         await completeStepAsync(.buildDylib)
 
         // Step 4: Install framework
@@ -284,6 +304,16 @@ class PatcherModel: ObservableObject {
             </dict></plist>
             """
         try plist.write(toFile: fwDir + "/Versions/A/Resources/Info.plist", atomically: true, encoding: .utf8)
+
+        // Deploy silence-detector to a location the command palette can find
+        if FileManager.default.fileExists(atPath: silenceBin) {
+            let toolsDir = NSHomeDirectory() + "/Desktop/FCPBridge/build"
+            shell("mkdir -p '\(toolsDir)' && cp '\(silenceBin)' '\(toolsDir)/silence-detector'")
+            // Also try Documents/GitHub path
+            let toolsDir2 = NSHomeDirectory() + "/Documents/GitHub/FCPBridge/build"
+            shell("mkdir -p '\(toolsDir2)' && cp '\(silenceBin)' '\(toolsDir2)/silence-detector' 2>/dev/null")
+        }
+
         await logAsync("Framework installed")
         await completeStepAsync(.installFramework)
 

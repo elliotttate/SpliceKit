@@ -14,7 +14,7 @@
 		</data>
 		<key>Resources/Sources/FCPBridge.m</key>
 		<data>
-		M252Bb0rpm/76ulmf8GyrXBmVwY=
+		p6H4Pg/UDAoofFrAEa+pgdp8Xio=
 		</data>
 		<key>Resources/Sources/FCPBridgeRuntime.m</key>
 		<data>
@@ -22,11 +22,19 @@
 		</data>
 		<key>Resources/Sources/FCPBridgeServer.m</key>
 		<data>
-		e7b61Ry9XAM8O0aRcJ406HgGOkQ=
+		ThUsOtwTnDnIuR50zDCC+d9oyy8=
 		</data>
 		<key>Resources/Sources/FCPBridgeSwizzle.m</key>
 		<data>
 		STsMzoP3n6DMyLySJ2exCHrCt78=
+		</data>
+		<key>Resources/Sources/FCPCommandPalette.h</key>
+		<data>
+		0iwnbOp/6OWG2aFbHxTzkDGHpbA=
+		</data>
+		<key>Resources/Sources/FCPCommandPalette.m</key>
+		<data>
+		W6eU9GX4o1d2/3aCFFwg8XRsUHE=
 		</data>
 		<key>Resources/Sources/FCPTranscriptPanel.h</key>
 		<data>
@@ -38,7 +46,15 @@
 		</data>
 		<key>Resources/mcp/server.py</key>
 		<data>
-		tXi+0AOoDe75SJ9WfY+S23TbQSY=
+		aLAHs0CGRle3KwHErFstjq6T4+w=
+		</data>
+		<key>Resources/tools/silence-detector</key>
+		<data>
+		voIaUPbsMKYfY+JwoRQuS5s1cUs=
+		</data>
+		<key>Resources/tools/silence-detector.swift</key>
+		<data>
+		ctPcW3ePOtFmuUyE6h4JnBVl8aQ=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -61,7 +77,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			kGxgLNm8LnJfDg6U5ln8+Gi4ODNkfuoFSjxQyKtTEug=
+			zTJkvBo86Vqk6OgSpOvOV6Ba9OwDLDwM8/dfESvRtOw=
 			</data>
 		</dict>
 		<key>Resources/Sources/FCPBridgeRuntime.m</key>
@@ -75,7 +91,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			fv6nZJ0sqk4UzNI2avrD5D5P/CPlxBUSuO6p9rnFvE0=
+			uMt2AaeEsD4QgEtywUFDYapZWGcyErG4xbkLlOQVJZc=
 			</data>
 		</dict>
 		<key>Resources/Sources/FCPBridgeSwizzle.m</key>
@@ -83,6 +99,20 @@
 			<key>hash2</key>
 			<data>
 			wKNqvl88W6o7EvQNhdsziGRuWcxqwu/swAyI19tNyxU=
+			</data>
+		</dict>
+		<key>Resources/Sources/FCPCommandPalette.h</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			ZzXGHQpdXLu9domCu+I8VHfbIEfw/P2k+ZOyDeleid0=
+			</data>
+		</dict>
+		<key>Resources/Sources/FCPCommandPalette.m</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			DavcODg8V5IVgWsLIMqcrVeY9+Kyjfocct/awMUyGzA=
 			</data>
 		</dict>
 		<key>Resources/Sources/FCPTranscriptPanel.h</key>
@@ -103,7 +133,21 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			TIx0p8FrnMZFz7re6el8tJ+bhGkEikUn31aPMmiFbUc=
+			aDit6KipuDg2/QoaKed29qGx5PlYO2h65bMbzr3PZiY=
+			</data>
+		</dict>
+		<key>Resources/tools/silence-detector</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			LwI9ipzwl1A8tMfIe35y2p2H+06oRoAdOJxzX+m5R20=
+			</data>
+		</dict>
+		<key>Resources/tools/silence-detector.swift</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			s9bh0b69MyF/Ffz9DEelVoV+4GMnxnN1rjb9JXy8cEI=
 			</data>
 		</dict>
 	</dict>
