@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>FCPBridge Patcher Updates</title>
+    <link>https://github.com/elliotttate/FCPBridge</link>
+    <description>FCPBridge Patcher release updates</description>
+    <language>en</language>
+    <item>
+      <title>FCPBridge v2.5.0 — Parakeet, Speaker Diarization, Titles Fix, Auto-Update</title>
+      <sparkle:version>2.5.0</sparkle:version>
+      <sparkle:shortVersionString>2.5.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 01 Apr 2026 18:00:00 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 2.5.0</h2>
+        <ul>
+          <li><b>Parakeet Transcription Engine</b> — NVIDIA Parakeet TDT as default (fastest, most accurate)</li>
+          <li><b>Speaker Diarization</b> — Automatic speaker detection via FluidAudio</li>
+          <li><b>Speaker Rename</b> — Click speaker labels to rename, with rename-all option</li>
+          <li><b>Browse Titles Fixed</b> — Titles now insert correctly on the timeline</li>
+          <li><b>Auto-Update</b> — Sparkle integration for automatic updates</li>
+          <li><b>Playhead Sync</b> — Fixed sync after move/delete operations</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.5.0/FCPBridgePatcher-v2.5.0.zip"
+        sparkle:edSignature="Q7/P+ZV9nTEH+YiewVhfu+AtyeAJk/n1dxZFYFjZA5ibNjoxSCeR2q5cxLYMju3Aj97tSZ8wXkd+NFq4t7hOBw=="
+        length="2311218"
+        type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>

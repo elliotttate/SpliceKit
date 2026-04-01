@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Sparkle
 
 // MARK: - Patcher Logic
 
@@ -447,6 +448,8 @@ enum PatchError: LocalizedError {
 
 struct ContentView: View {
     @StateObject private var model = PatcherModel()
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -493,7 +496,15 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text("v2.0")
+            Button {
+                updaterController.updater.checkForUpdates()
+            } label: {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .help("Check for Updates")
+            Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")")
                 .font(.caption)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
@@ -689,15 +700,59 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Sparkle Auto-Update
+
+final class CheckForUpdatesViewModel: ObservableObject {
+    @Published var canCheckForUpdates = false
+
+    init(updater: SPUUpdater) {
+        updater.publisher(for: \.canCheckForUpdates)
+            .assign(to: &$canCheckForUpdates)
+    }
+}
+
+struct CheckForUpdatesView: View {
+    @ObservedObject var viewModel: CheckForUpdatesViewModel
+    let updater: SPUUpdater
+
+    var body: some View {
+        Button("Check for Updates…", action: updater.checkForUpdates)
+            .disabled(!viewModel.canCheckForUpdates)
+    }
+}
+
 // MARK: - App Entry Point
 
 @main
 struct FCPBridgePatcherApp: App {
+    private let updaterController: SPUStandardUpdaterController
+    @StateObject private var checkForUpdatesVM: CheckForUpdatesViewModel
+
+    init() {
+        let controller = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
+        self.updaterController = controller
+        self._checkForUpdatesVM = StateObject(wrappedValue:
+            CheckForUpdatesViewModel(updater: controller.updater)
+        )
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesView(
+                    viewModel: checkForUpdatesVM,
+                    updater: updaterController.updater
+                )
+            }
+        }
     }
 }

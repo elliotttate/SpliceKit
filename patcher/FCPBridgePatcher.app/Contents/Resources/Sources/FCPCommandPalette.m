@@ -1040,6 +1040,9 @@ static NSString * const kAIRowID = @"FCPAIRow";
     } else if ([type isEqualToString:@"transition_apply"]) {
         extern NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params);
         result = FCPBridge_handleTransitionsApply(@{@"effectID": action});
+    } else if ([type isEqualToString:@"title_apply"] || [type isEqualToString:@"generator_apply"]) {
+        extern NSDictionary *FCPBridge_handleTitleInsert(NSDictionary *params);
+        result = FCPBridge_handleTitleInsert(@{@"effectID": action});
     } else if ([type isEqualToString:@"effect_apply"]) {
         extern NSDictionary *FCPBridge_handleEffectsApply(NSDictionary *params);
         result = FCPBridge_handleEffectsApply(@{@"effectID": action});
@@ -1664,7 +1667,16 @@ static NSString * const kAIRowID = @"FCPAIRow";
                         FCPCommand *cmd = [[FCPCommand alloc] init];
                         cmd.name = e[@"name"] ?: @"Unknown";
                         cmd.action = e[@"effectID"] ?: @"";
-                        cmd.type = @"effect_apply";
+                        // Titles and generators are connected to the timeline via pasteboard,
+                        // not applied as filters to selected clips
+                        NSString *effType = e[@"type"] ?: @"filter";
+                        if ([effType isEqualToString:@"title"]) {
+                            cmd.type = @"title_apply";
+                        } else if ([effType isEqualToString:@"generator"]) {
+                            cmd.type = @"generator_apply";
+                        } else {
+                            cmd.type = @"effect_apply";
+                        }
                         cmd.category = FCPCommandCategoryEffects;
                         cmd.categoryName = e[@"category"] ?: label;
                         cmd.shortcut = @"";

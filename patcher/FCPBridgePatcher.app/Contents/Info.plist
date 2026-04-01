@@ -13,14 +13,20 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0</string>
+	<string>2.5.0</string>
 	<key>CFBundleVersion</key>
-	<string>2.0.0</string>
+	<string>2.5.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUPublicEDKey</key>
+	<string>6Mnotk0Hz2FeDtGWEkUOtlSl+O9EctXXjH0xtRMaoas=</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/elliotttate/FCPBridge/main/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>

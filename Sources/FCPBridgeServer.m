@@ -2179,6 +2179,112 @@ NSDictionary *FCPBridge_handleEffectsApply(NSDictionary *params) {
     return result ?: @{@"error": @"Failed to apply effect"};
 }
 
+#pragma mark - Title/Generator Insert (via Pasteboard)
+
+NSDictionary *FCPBridge_handleTitleInsert(NSDictionary *params) {
+    NSString *effectID = params[@"effectID"];
+    NSString *name = params[@"name"];
+
+    if (!effectID && !name) {
+        return @{@"error": @"effectID or name parameter required"};
+    }
+
+    __block NSDictionary *result = nil;
+    __block NSString *resolvedID = effectID;
+
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            Class ffEffect = objc_getClass("FFEffect");
+            if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
+
+            // Resolve name -> effectID if needed
+            if (!resolvedID && name) {
+                id allIDs = ((id (*)(id, SEL))objc_msgSend)((id)ffEffect, @selector(userVisibleEffectIDs));
+                SEL nameSel = @selector(displayNameForEffectID:);
+                NSString *lowerName = [name lowercaseString];
+                for (NSString *eid in allIDs) {
+                    id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                    if ([dn isKindOfClass:[NSString class]] &&
+                        [[(NSString *)dn lowercaseString] isEqualToString:lowerName]) {
+                        resolvedID = eid;
+                        break;
+                    }
+                }
+                if (!resolvedID) {
+                    for (NSString *eid in allIDs) {
+                        id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                        if ([dn isKindOfClass:[NSString class]] &&
+                            [[(NSString *)dn lowercaseString] containsString:lowerName]) {
+                            resolvedID = eid;
+                            break;
+                        }
+                    }
+                }
+                if (!resolvedID) {
+                    result = @{@"error": [NSString stringWithFormat:@"No title/generator found matching '%@'", name]};
+                    return;
+                }
+            }
+
+            // Use FCP's own pasteboard mechanism to insert titles/generators.
+            // This is how addBasicTitle: works internally:
+            // 1. Write effectID to FFPasteboard
+            // 2. Call anchorWithPasteboard: on the timeline module
+            Class ffPasteboard = objc_getClass("FFPasteboard");
+            if (!ffPasteboard) {
+                result = @{@"error": @"FFPasteboard class not found"};
+                return;
+            }
+
+            // Create pasteboard and write effect ID
+            id pb = ((id (*)(id, SEL))objc_msgSend)((id)ffPasteboard, @selector(alloc));
+            pb = ((id (*)(id, SEL, id))objc_msgSend)(pb,
+                NSSelectorFromString(@"initWithName:"),
+                @"com.apple.nle.custompasteboard");
+
+            id nsPb = ((id (*)(id, SEL))objc_msgSend)(pb, NSSelectorFromString(@"pasteboard"));
+            ((void (*)(id, SEL))objc_msgSend)(nsPb, @selector(clearContents));
+
+            NSArray *effectIDs = @[resolvedID];
+            ((void (*)(id, SEL, id, id))objc_msgSend)(pb,
+                NSSelectorFromString(@"writeEffectIDs:project:"),
+                effectIDs, nil);
+
+            // Get timeline module and insert via anchor
+            id timelineModule = FCPBridge_getActiveTimelineModule();
+            if (!timelineModule) {
+                result = @{@"error": @"No active timeline module"};
+                return;
+            }
+
+            // Check if a title is already selected (replace mode) or insert new (anchor mode)
+            SEL anchorSel = NSSelectorFromString(@"anchorWithPasteboard:backtimed:trackType:");
+            if ([timelineModule respondsToSelector:anchorSel]) {
+                ((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(
+                    timelineModule, anchorSel,
+                    @"com.apple.nle.custompasteboard", NO, @"all");
+            } else {
+                result = @{@"error": @"Timeline module does not support anchorWithPasteboard:"};
+                return;
+            }
+
+            id appliedName = ((id (*)(id, SEL, id))objc_msgSend)(
+                (id)ffEffect, @selector(displayNameForEffectID:), resolvedID);
+
+            result = @{
+                @"status": @"ok",
+                @"title": [appliedName isKindOfClass:[NSString class]] ? appliedName : @"Unknown",
+                @"effectID": resolvedID,
+            };
+
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result ?: @{@"error": @"Failed to insert title"};
+}
+
 #pragma mark - Transition Handlers
 
 NSDictionary *FCPBridge_handleTransitionsList(NSDictionary *params) {
@@ -2530,6 +2636,8 @@ static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
         result = FCPBridge_handleEffectsListAvailable(params);
     } else if ([method isEqualToString:@"effects.apply"]) {
         result = FCPBridge_handleEffectsApply(params);
+    } else if ([method isEqualToString:@"titles.insert"]) {
+        result = FCPBridge_handleTitleInsert(params);
     }
     // transitions.* namespace
     else if ([method isEqualToString:@"transitions.list"]) {
