@@ -4,6 +4,7 @@
 //
 
 #import "FCPBridge.h"
+#import "FCPCommandPalette.h"
 #import <AppKit/AppKit.h>
 
 #pragma mark - Logging
@@ -133,7 +134,9 @@ static void FCPBridge_checkCompatibility(void) {
 @interface FCPBridgeMenuController : NSObject
 + (instancetype)shared;
 - (void)toggleTranscriptPanel:(id)sender;
+- (void)toggleCommandPalette:(id)sender;
 @property (nonatomic, weak) NSButton *toolbarButton;
+@property (nonatomic, weak) NSButton *paletteToolbarButton;
 @end
 
 @implementation FCPBridgeMenuController
@@ -161,6 +164,10 @@ static void FCPBridge_checkCompatibility(void) {
     // Update toolbar button pressed state
     BOOL nowVisible = !visible;
     [self updateToolbarButtonState:nowVisible];
+}
+
+- (void)toggleCommandPalette:(id)sender {
+    [[FCPCommandPalette sharedPalette] togglePalette];
 }
 
 - (void)updateToolbarButtonState:(BOOL)active {
@@ -197,6 +204,14 @@ static void FCPBridge_installMenu(void) {
     transcriptItem.target = [FCPBridgeMenuController shared];
     [bridgeMenu addItem:transcriptItem];
 
+    NSMenuItem *paletteItem = [[NSMenuItem alloc]
+        initWithTitle:@"Command Palette"
+               action:@selector(toggleCommandPalette:)
+        keyEquivalent:@"p"];
+    paletteItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    paletteItem.target = [FCPBridgeMenuController shared];
+    [bridgeMenu addItem:paletteItem];
+
     // Add the menu to the menu bar (before the last item which is usually "Help")
     NSMenuItem *bridgeMenuItem = [[NSMenuItem alloc] initWithTitle:@"FCPBridge" action:nil keyEquivalent:@""];
     bridgeMenuItem.submenu = bridgeMenu;
@@ -208,10 +223,11 @@ static void FCPBridge_installMenu(void) {
         [mainMenu addItem:bridgeMenuItem];
     }
 
-    FCPBridge_log(@"FCPBridge menu installed (Ctrl+Option+T for Transcript Editor)");
+    FCPBridge_log(@"FCPBridge menu installed (Ctrl+Option+T for Transcript Editor, Cmd+Shift+P for Command Palette)");
 }
 
 static NSString * const kFCPBridgeTranscriptToolbarID = @"FCPBridgeTranscriptItemID";
+static NSString * const kFCPBridgePaletteToolbarID = @"FCPBridgePaletteItemID";
 static IMP sOriginalToolbarItemForIdentifier = NULL;
 
 // Swizzled toolbar delegate method — returns our custom item for our identifier,
@@ -242,6 +258,33 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
         button.action = @selector(toggleTranscriptPanel:);
 
         [FCPBridgeMenuController shared].toolbarButton = button;
+        item.view = button;
+
+        return item;
+    }
+    if ([identifier isEqualToString:kFCPBridgePaletteToolbarID]) {
+        NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:kFCPBridgePaletteToolbarID];
+        item.label = @"Commands";
+        item.paletteLabel = @"Command Palette";
+        item.toolTip = @"Command Palette (Cmd+Shift+P)";
+
+        NSImage *icon = [NSImage imageWithSystemSymbolName:@"command"
+                                  accessibilityDescription:@"Command Palette"];
+        if (!icon) icon = [NSImage imageNamed:NSImageNameSmartBadgeTemplate];
+        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration
+            configurationWithPointSize:13 weight:NSFontWeightMedium];
+        icon = [icon imageWithSymbolConfiguration:config];
+
+        NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 32, 25)];
+        [button setButtonType:NSButtonTypeMomentaryPushIn];
+        button.bezelStyle = NSBezelStyleTexturedRounded;
+        button.bordered = YES;
+        button.image = icon;
+        button.imagePosition = NSImageOnly;
+        button.target = [FCPBridgeMenuController shared];
+        button.action = @selector(toggleCommandPalette:);
+
+        [FCPBridgeMenuController shared].paletteToolbarButton = button;
         item.view = button;
 
         return item;
@@ -314,24 +357,34 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
             }
         }
 
-        // Check if already inserted — if found but has no view, remove the stale one
-        for (NSUInteger i = 0; i < toolbar.items.count; i++) {
-            NSToolbarItem *ti = toolbar.items[i];
+        // Check existing items — remove stale ones, skip if already present
+        BOOL hasTranscript = NO, hasPalette = NO;
+        for (NSInteger i = (NSInteger)toolbar.items.count - 1; i >= 0; i--) {
+            NSToolbarItem *ti = toolbar.items[(NSUInteger)i];
             if ([ti.itemIdentifier isEqualToString:kFCPBridgeTranscriptToolbarID]) {
                 if (ti.view) {
-                    if ([ti.view isKindOfClass:[NSButton class]]) {
+                    if ([ti.view isKindOfClass:[NSButton class]])
                         [FCPBridgeMenuController shared].toolbarButton = (NSButton *)ti.view;
-                    }
-                    FCPBridge_log(@"Toolbar button already present with view — skipping");
-                    return;
+                    hasTranscript = YES;
+                } else {
+                    [toolbar removeItemAtIndex:(NSUInteger)i];
                 }
-                FCPBridge_log(@"Removing stale toolbar item at index %lu", (unsigned long)i);
-                [toolbar removeItemAtIndex:i];
-                break;
+            } else if ([ti.itemIdentifier isEqualToString:kFCPBridgePaletteToolbarID]) {
+                if (ti.view) {
+                    if ([ti.view isKindOfClass:[NSButton class]])
+                        [FCPBridgeMenuController shared].paletteToolbarButton = (NSButton *)ti.view;
+                    hasPalette = YES;
+                } else {
+                    [toolbar removeItemAtIndex:(NSUInteger)i];
+                }
             }
         }
+        if (hasTranscript && hasPalette) {
+            FCPBridge_log(@"Both toolbar buttons already present — skipping");
+            return;
+        }
 
-        // Re-read items after possible removal, find flexible space to insert before it
+        // Find flexible space to insert before it
         NSUInteger insertIdx = toolbar.items.count;
         for (NSUInteger i = 0; i < toolbar.items.count; i++) {
             NSToolbarItem *ti = toolbar.items[i];
@@ -340,9 +393,15 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
                 break;
             }
         }
-
-        [toolbar insertItemWithItemIdentifier:kFCPBridgeTranscriptToolbarID atIndex:insertIdx];
-        FCPBridge_log(@"Toolbar button inserted at index %lu (before flexible space)", (unsigned long)insertIdx);
+        if (!hasPalette) {
+            [toolbar insertItemWithItemIdentifier:kFCPBridgePaletteToolbarID atIndex:insertIdx];
+            FCPBridge_log(@"Command Palette toolbar button inserted at index %lu", (unsigned long)insertIdx);
+            insertIdx++;
+        }
+        if (!hasTranscript) {
+            [toolbar insertItemWithItemIdentifier:kFCPBridgeTranscriptToolbarID atIndex:insertIdx];
+            FCPBridge_log(@"Transcript toolbar button inserted at index %lu", (unsigned long)insertIdx);
+        }
 
     } @catch (NSException *e) {
         FCPBridge_log(@"Failed to install toolbar button: %@", e.reason);

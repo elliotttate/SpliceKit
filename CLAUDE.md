@@ -171,6 +171,37 @@ The transcript panel opens inside FCP as a floating window:
 Deleting words performs: blade at start -> blade at end -> select segment -> delete
 Moving words performs: blade + cut at source -> move playhead -> paste at destination
 
+## Transitions
+```
+list_transitions()                             # list all 376+ available transitions
+list_transitions(filter="dissolve")            # filter by name or category
+apply_transition(name="Flow")                  # apply by display name
+apply_transition(name="Cross Dissolve")        # apply specific transition
+apply_transition(effectID="HEFlowTransition")  # apply by effect ID
+```
+
+Transitions are applied at the current edit point. Navigate to an edit point first:
+```
+timeline_action("nextEdit")           # go to next edit point
+apply_transition(name="Flow")         # apply Flow transition there
+```
+
+## Command Palette
+```
+show_command_palette()                         # open the palette (or Cmd+Shift+P)
+search_commands("blade")                       # find commands by name/keyword
+execute_command("blade", type="timeline")      # run a command directly
+ai_command("slow this clip to half speed")     # natural language via Apple Intelligence
+hide_command_palette()                         # close it
+```
+
+The command palette opens as a floating window inside FCP:
+- Fuzzy search across all available actions (editing, playback, color, speed, markers, etc.)
+- Arrow keys to navigate, Return to execute, Escape to close
+- Type natural language sentences and press Tab to ask Apple Intelligence
+- Falls back to keyword matching when Apple Intelligence is unavailable
+- Also accessible via toolbar button or FCPBridge menu
+
 ## Object Handles
 ```
 # Get a handle to an object

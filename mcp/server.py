@@ -213,6 +213,48 @@ def playback_action(action: str) -> str:
     return _fmt(r)
 
 
+@mcp.tool()
+def detect_scene_changes(threshold: float = 0.35, action: str = "detect", sample_interval: float = 0.1) -> str:
+    """Detect scene changes (cuts) in the timeline media using histogram analysis.
+
+    Args:
+        threshold: Sensitivity (0.0-1.0). Lower = more sensitive. Default 0.35.
+        action: "detect" (just list), "markers" (add markers at cuts), "blade" (blade at cuts)
+        sample_interval: Seconds between sampled frames. Default 0.1.
+
+    Returns list of scene change timestamps with confidence scores.
+    Uses GPU-style histogram comparison (same approach as FCP internally).
+    """
+    r = bridge.call("scene.detect", threshold=threshold, action=action, sampleInterval=sample_interval)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    changes = r.get("sceneChanges", [])
+    lines = [f"Scene changes: {r.get('count', 0)} (threshold={r.get('threshold', 0)}, file={r.get('mediaFile', '?')})"]
+    if r.get("action") != "detect":
+        lines.append(f"Action: {r.get('action')} applied at each scene change")
+    lines.append("")
+    for sc in changes:
+        lines.append(f"  {sc['time']:.2f}s  (score: {sc.get('score', 0):.3f})")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def seek_to_time(seconds: float) -> str:
+    """Move the playhead to an exact time instantly (no playback).
+
+    Args:
+        seconds: Time in seconds (e.g. 3.5 = 3 seconds 500ms)
+
+    This is much faster than stepping frames. Use this for all
+    time-based positioning before blade, marker, or other operations.
+    """
+    r = bridge.call("playback.seekToTime", seconds=seconds)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
 # ============================================================
 # Timeline State (structured)
 # ============================================================
@@ -1059,6 +1101,257 @@ def close_transcript() -> str:
     if _err(r):
         return f"Error: {r.get('error', r)}"
     return "Transcript panel closed."
+
+
+# ============================================================
+# Effects (video filters, generators, titles, audio)
+# ============================================================
+
+@mcp.tool()
+def list_effects(type: str = "filter", filter: str = "") -> str:
+    """List available effects in FCP by type.
+
+    Args:
+        type: "filter" (video effects), "generator", "title", "audio", or "all"
+        filter: Optional search string to filter by name or category.
+
+    Returns effect name, effectID, category, and type for each.
+    Use the effectID or name with apply_effect() to add one.
+    """
+    params = {"type": type}
+    if filter:
+        params["filter"] = filter
+    r = bridge.call("effects.listAvailable", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    effects = r.get("effects", [])
+    lines = [f"Available {type} effects: {r.get('count', len(effects))}"]
+    lines.append("")
+
+    if effects:
+        lines.append(f"{'Name':<30} {'Category':<25} {'Type':<12} {'Effect ID'}")
+        lines.append("-" * 100)
+        for e in effects:
+            lines.append(
+                f"{e['name']:<30} {e.get('category', ''):<25} "
+                f"{e.get('type', ''):<12} {e['effectID'][:40]}"
+            )
+    else:
+        lines.append("No effects found.")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def apply_effect(name: str = "", effectID: str = "") -> str:
+    """Apply a video effect, generator, or title to the selected clip(s).
+
+    Select a clip first with timeline_action("selectClipAtPlayhead").
+    Use list_effects() to see available effects.
+
+    Args:
+        name: Display name of the effect (e.g. "Gaussian Blur", "Vignette")
+        effectID: The effect ID string
+
+    Supports undo via timeline_action("undo").
+    """
+    if not name and not effectID:
+        return "Error: provide either name or effectID"
+
+    params = {}
+    if effectID:
+        params["effectID"] = effectID
+    if name:
+        params["name"] = name
+
+    r = bridge.call("effects.apply", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    return f"Applied effect: {r.get('effect', '?')} ({r.get('effectID', '')})"
+
+
+# ============================================================
+# Transitions
+# ============================================================
+
+@mcp.tool()
+def list_transitions(filter: str = "") -> str:
+    """List all available video transitions installed in FCP.
+
+    Returns transition name, effectID, and category for each.
+    Use the effectID or name with apply_transition() to add one.
+
+    Args:
+        filter: Optional search string to filter by name or category.
+    """
+    params = {}
+    if filter:
+        params["filter"] = filter
+    r = bridge.call("transitions.list", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    transitions = r.get("transitions", [])
+    default = r.get("defaultTransition", {})
+
+    lines = [f"Available transitions: {r.get('count', len(transitions))}"]
+    lines.append(f"Default: {default.get('name', '?')} ({default.get('effectID', '?')})")
+    lines.append("")
+
+    if transitions:
+        lines.append(f"{'Name':<30} {'Category':<30} {'Effect ID'}")
+        lines.append("-" * 90)
+        for t in transitions:
+            lines.append(
+                f"{t['name']:<30} {t.get('category', ''):<30} {t['effectID'][:50]}"
+            )
+    else:
+        lines.append("No transitions found.")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def apply_transition(name: str = "", effectID: str = "") -> str:
+    """Apply a specific transition at the current edit point.
+
+    You can specify the transition by display name or effectID.
+    Use list_transitions() to see available transitions.
+
+    Args:
+        name: Display name of the transition (e.g. "Cross Dissolve", "Flow")
+        effectID: The effect ID (e.g. "FxPlug:4731E73A-...")
+
+    The transition is applied at the selected edit point (between clips).
+    Select an edit point first with timeline_action("nextEdit") or
+    timeline_action("previousEdit").
+    """
+    if not name and not effectID:
+        return "Error: provide either name or effectID"
+
+    params = {}
+    if effectID:
+        params["effectID"] = effectID
+    if name:
+        params["name"] = name
+
+    r = bridge.call("transitions.apply", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    return f"Applied transition: {r.get('transition', '?')} ({r.get('effectID', '')})"
+
+
+# ============================================================
+# Command Palette
+# ============================================================
+
+@mcp.tool()
+def show_command_palette() -> str:
+    """Open the command palette inside FCP.
+    The palette provides quick access to all FCP actions via fuzzy search,
+    and supports natural language commands via Apple Intelligence.
+    Shortcut: Cmd+Shift+P
+    """
+    r = bridge.call("command.show")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return "Command palette opened."
+
+
+@mcp.tool()
+def hide_command_palette() -> str:
+    """Close the command palette."""
+    r = bridge.call("command.hide")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return "Command palette closed."
+
+
+@mcp.tool()
+def search_commands(query: str, limit: int = 20) -> str:
+    """Search available FCP commands by name, keyword, or category.
+
+    Returns matching commands sorted by relevance. Each result includes:
+    name, action, type (timeline/playback/transcript), category, detail, shortcut.
+
+    Use execute_command() to run one of the results.
+    """
+    r = bridge.call("command.search", query=query, limit=limit)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    commands = r.get("commands", [])
+    if not commands:
+        return f"No commands match '{query}'"
+
+    lines = [f"Found {r.get('total', len(commands))} matches:"]
+    for cmd in commands:
+        shortcut = f"  [{cmd['shortcut']}]" if cmd.get("shortcut") else ""
+        lines.append(f"  {cmd['name']:<30} {cmd['category']:<12} {cmd['type']}/{cmd['action']}{shortcut}")
+        if cmd.get("detail"):
+            lines.append(f"    {cmd['detail']}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def execute_command(action: str, type: str = "timeline") -> str:
+    """Execute a command from the palette by action name.
+
+    Args:
+        action: The action ID (e.g. "blade", "addColorBoard", "retimeSlow50")
+        type: "timeline", "playback", or "transcript"
+
+    This is equivalent to selecting a command in the palette and pressing Enter.
+    """
+    r = bridge.call("command.execute", action=action, type=type)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def ai_command(query: str) -> str:
+    """Use Apple Intelligence (on-device LLM) to interpret a natural language
+    editing instruction and execute the appropriate FCP actions.
+
+    Examples:
+      "cut at 3 seconds"
+      "slow this clip to half speed"
+      "add color correction"
+      "go to the beginning and play"
+      "add a chapter marker"
+
+    The LLM translates your description into a sequence of FCP actions and
+    executes them automatically. Falls back to keyword matching if Apple
+    Intelligence is not available on this Mac.
+    """
+    r = bridge.call("command.ai", query=query)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    actions = r.get("actions", [])
+    if not actions:
+        return "No actions determined from query."
+
+    # Execute each action
+    results = []
+    for act in actions:
+        act_type = act.get("type", "timeline")
+        action_name = act.get("action", "")
+        repeat = act.get("repeat", 1)
+
+        for _ in range(repeat):
+            er = bridge.call(f"{act_type}.action", action=action_name)
+            if _err(er):
+                results.append(f"Error on {act_type}.{action_name}: {er.get('error', er)}")
+                break
+        results.append(f"{act_type}.{action_name}" + (f" x{repeat}" if repeat > 1 else "") + " -> ok")
+
+    return f"AI executed {len(actions)} action(s):\n" + "\n".join(results)
 
 
 if __name__ == "__main__":

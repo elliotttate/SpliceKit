@@ -10,7 +10,8 @@ SOURCES = Sources/FCPBridge.m \
           Sources/FCPBridgeRuntime.m \
           Sources/FCPBridgeSwizzle.m \
           Sources/FCPBridgeServer.m \
-          Sources/FCPTranscriptPanel.m
+          Sources/FCPTranscriptPanel.m \
+          Sources/FCPCommandPalette.m
 
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)/FCPBridge
@@ -20,9 +21,18 @@ MODDED_APP = $(HOME)/Desktop/FinalCutPro_Modded/Final Cut Pro.app
 FW_DIR = $(MODDED_APP)/Contents/Frameworks/FCPBridge.framework
 ENTITLEMENTS = entitlements.plist
 
-.PHONY: all clean deploy launch
+SILENCE_DETECTOR = $(BUILD_DIR)/silence-detector
+
+.PHONY: all clean deploy launch tools
 
 all: $(OUTPUT)
+
+tools: $(SILENCE_DETECTOR)
+
+$(SILENCE_DETECTOR): tools/silence-detector.swift
+	@mkdir -p $(BUILD_DIR)
+	swiftc -O -suppress-warnings -o $(SILENCE_DETECTOR) tools/silence-detector.swift
+	@echo "Built: $(SILENCE_DETECTOR)"
 
 $(OUTPUT): $(SOURCES) Sources/FCPBridge.h
 	@mkdir -p $(BUILD_DIR)
@@ -35,7 +45,7 @@ $(OUTPUT): $(SOURCES) Sources/FCPBridge.h
 clean:
 	rm -rf $(BUILD_DIR)
 
-deploy: $(OUTPUT)
+deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 	@echo "=== Deploying FCPBridge to modded FCP ==="
 	@mkdir -p "$(FW_DIR)/Versions/A/Resources"
 	cp $(OUTPUT) "$(FW_DIR)/Versions/A/FCPBridge"
