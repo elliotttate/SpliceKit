@@ -465,13 +465,17 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [self setupPanelIfNeeded];
         [self.panel makeKeyAndOrderFront:nil];
+        // Restart playhead sync if we have a transcript
+        if (self.status == FCPTranscriptStatusReady && self.mutableWords.count > 0) {
+            [self startPlayheadTimer];
+        }
     });
 }
 
 - (void)hidePanel {
     dispatch_async(dispatch_get_main_queue(), ^{
         [self.panel orderOut:nil];
-        [self stopPlayheadTimer];
+        // Keep the timer running so highlights stay synced when panel is reopened
     });
 }
 
@@ -480,7 +484,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
-    [self stopPlayheadTimer];
+    // Don't stop timer — user may reopen the panel and expect sync to still work
 }
 
 #pragma mark - Refresh Button
@@ -1581,20 +1585,41 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 - (void)playheadTimerFired:(NSTimer *)timer {
     if (self.status != FCPTranscriptStatusReady) return;
     if (self.mutableWords.count == 0) return;
+    if (!self.panel.isVisible) return;
 
-    // Get current playhead time
+    // Get current playhead time — try multiple sources for accuracy during playback
     __block double playheadTime = -1;
-    FCPBridge_executeOnMainThread(^{
-        @try {
-            id timeline = [self getActiveTimelineModule];
-            if (!timeline) return;
-            if ([timeline respondsToSelector:@selector(playheadTime)]) {
+    @try {
+        id timeline = [self getActiveTimelineModule];
+        if (!timeline) return;
+
+        // During playback, currentSequenceTime updates in real time
+        SEL currentTimeSel = NSSelectorFromString(@"currentSequenceTime");
+        if ([timeline respondsToSelector:currentTimeSel]) {
+            FCPTranscript_CMTime t = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
+                timeline, currentTimeSel);
+            double secs = CMTimeToSeconds(t);
+            if (secs >= 0) playheadTime = secs;
+        }
+
+        // Fall back to playheadTime if currentSequenceTime didn't work
+        if (playheadTime < 0 && [timeline respondsToSelector:@selector(playheadTime)]) {
+            FCPTranscript_CMTime t = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
+                timeline, @selector(playheadTime));
+            playheadTime = CMTimeToSeconds(t);
+        }
+
+        // Also try the editor container's playheadSequenceTime
+        if (playheadTime < 0) {
+            id container = [self getEditorContainer];
+            SEL pstSel = NSSelectorFromString(@"playheadSequenceTime");
+            if (container && [container respondsToSelector:pstSel]) {
                 FCPTranscript_CMTime t = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
-                    timeline, @selector(playheadTime));
+                    container, pstSel);
                 playheadTime = CMTimeToSeconds(t);
             }
-        } @catch (NSException *e) {}
-    });
+        }
+    } @catch (NSException *e) {}
 
     if (playheadTime >= 0) {
         [self updatePlayheadHighlight:playheadTime];
@@ -1662,7 +1687,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
 #pragma mark - FCP Integration Helpers
 
-- (id)getActiveTimelineModule {
+- (id)getEditorContainer {
     id app = ((id (*)(id, SEL))objc_msgSend)(
         objc_getClass("NSApplication"), @selector(sharedApplication));
     id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
@@ -1670,7 +1695,11 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
     SEL aecSel = @selector(activeEditorContainer);
     if (![delegate respondsToSelector:aecSel]) return nil;
-    id container = ((id (*)(id, SEL))objc_msgSend)(delegate, aecSel);
+    return ((id (*)(id, SEL))objc_msgSend)(delegate, aecSel);
+}
+
+- (id)getActiveTimelineModule {
+    id container = [self getEditorContainer];
     if (!container) return nil;
 
     SEL tmSel = NSSelectorFromString(@"timelineModule");

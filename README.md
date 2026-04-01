@@ -2,13 +2,50 @@
 
 Direct in-process control of Final Cut Pro via dylib injection. FCPBridge loads a custom framework into FCP's process space, giving you full access to all 78,000+ ObjC classes and their methods through a JSON-RPC interface and MCP server.
 
-Example App Made In About 20 Seconds by Claude Code Opus 4.6: 
+## Sample Apps
 
-## Transcript Editor — Text-Based Video Editing
+### Transcript Editor — Text-Based Video Editing
 
 [![Transcript Editor Demo](https://img.youtube.com/vi/JxxDSH4Ly0I/maxresdefault.jpg)](https://www.youtube.com/watch?v=JxxDSH4Ly0I)
 
 > Click a word to jump the playhead. Select words and press Delete to remove video segments. Drag words to reorder clips. All changes apply directly to the FCP timeline.
+
+### Command Palette — Apple Intelligence for Final Cut Pro
+
+Hit **Cmd+Shift+P** inside the modded FCP to open a VS Code-style command palette with fuzzy search across 100+ editing actions. Type what you want to do in plain English and Apple Intelligence (on-device LLM via FoundationModels) translates your intent into editing actions.
+
+**Built-in commands include:**
+
+- **Editing**: Blade, delete, cut/copy/paste, trim, nudge, compound clips, detach audio, lift/overwrite, create storylines
+- **Playback**: Play/pause, frame stepping, go to start/end, loop, play selection, JKL-style controls
+- **Color**: Color Board, Color Wheels, Color Curves, Hue/Saturation, auto-enhance, match color, balance color
+- **Speed**: Normal, 2x/4x/8x/20x fast, 50%/25%/10% slow, reverse, freeze frame, hold frame
+- **Markers**: Standard, to-do, and chapter markers with navigation
+- **Effects & Transitions**: Browse, search, and apply any effect, transition, generator, or title by name
+- **Audio**: Volume up/down, fade in/out, audio enhancements, **Remove Silences** (auto-detects and removes silent segments)
+- **Scene Detection**: Analyze video for shot boundaries and automatically add markers or blade at every scene change
+- **Transform**: Crop, distort, reframe, stabilize
+- **Multicam**: Switch and cut angles 1-4, create multicam clips
+- **Captions**: Add/import captions and subtitles
+- **Ratings & Roles**: Favorite, reject, role assignment
+- **View**: Zoom to fit, snapping, skimming, timeline index, inspector
+- **Export**: Render, share selection, export FCPXML
+
+**Natural language examples you can ask Apple Intelligence:**
+
+- *"add markers every 5 seconds"*
+- *"slow this clip to half speed"*
+- *"add a cross dissolve"*
+- *"color correct this clip"*
+- *"blade at every scene change"*
+- *"remove all the silences"*
+- *"zoom to fit the timeline"*
+
+The AI understands your intent, maps it to the right sequence of FCP actions, and executes them — all without leaving the keyboard.
+
+**Remove Silences** uses Apple-native AVFoundation + Accelerate (vDSP) to analyze audio and detect silent segments. No ffmpeg or external dependencies. An options panel lets you configure the detection threshold, minimum silence duration, and padding. The audio analysis runs in the background with a processing indicator, then silences are bladed and ripple-deleted from the timeline.
+
+**Scene Detection** uses histogram-based frame comparison via the Accelerate framework's vImage to detect cuts and shot changes. Configurable sensitivity and sample interval. Markers are inserted programmatically at exact timecodes — no playhead movement required — making it fast even on long sequences.
 
 ## What This Does
 
@@ -237,7 +274,11 @@ FCPBridge/
 │   ├── FCPBridgeServer.m      # JSON-RPC TCP server (33 tool endpoints)
 │   ├── FCPBridgeSwizzle.m     # Method swizzling infrastructure
 │   ├── FCPTranscriptPanel.h   # Transcript editor header
-│   └── FCPTranscriptPanel.m   # Speech transcription, text-based editing UI
+│   ├── FCPTranscriptPanel.m   # Speech transcription, text-based editing UI
+│   ├── FCPCommandPalette.h    # Command palette header
+│   └── FCPCommandPalette.m    # Cmd+Shift+P palette with Apple Intelligence + 100 commands
+├── tools/
+│   └── silence-detector.swift # Audio silence detection CLI (AVFoundation + vDSP)
 ├── Scripts/
 │   ├── fcpbridge_client.py    # Interactive Python REPL client
 │   └── launch.sh              # Launch helper script
@@ -249,6 +290,20 @@ FCPBridge/
 ├── Makefile                   # Build, deploy, launch targets
 └── entitlements.plist         # Unsandboxed entitlements for re-signing
 ```
+
+## Is This Legal / Safe to Use?
+
+A few things worth clarifying up front -- this isn't for everyone, but it's very easy to set up if you do want to try it.
+
+**On reverse engineering and the EULA:** Reverse engineering for interoperability is explicitly protected under the DMCA ([17 U.S.C. § 1201(f)](https://www.law.cornell.edu/uscode/text/17/1201)) and similar laws in the EU. This is the same legal basis that allows tools like Homebrew, Hammerspoon, and countless other macOS utilities that hook into Apple apps. Apple's EULA doesn't override federal law. That said, FCPBridge doesn't really involve reverse engineering in the traditional sense -- once the library is loaded, Final Cut Pro exposes all of its own classes and methods through the Objective-C runtime. There's no decompilation required.
+
+**On "injecting code":** What FCPBridge does is no different from what accessibility tools, screen readers, and automation utilities do every day on macOS. `DYLD_INSERT_LIBRARIES` is a documented Apple mechanism -- it's not an exploit. Apps like BetterTouchTool, Alfred, and Bartender all inject into running processes using the same techniques.
+
+**On Apple disabling your Apple ID:** There is no precedent for Apple disabling an Apple ID for running a modified local app. Apple can't even distinguish between "ran a modded app" and "loaded a dylib for debugging in Xcode," which developers do constantly. Apple's focus is on protecting the App Store and code signing for distribution -- not policing what developers do on their own machines.
+
+**The real risk** is the same as any unsigned software: make sure you trust the source. The code is fully open, the techniques are well-established, and nothing here is novel or dangerous from a security perspective.
+
+On a personal note -- I've been frustrated by how little progress Final Cut Pro has made over the years, and my hope is that this project can help it finally get some of the features it desperately needs. There's a huge precedent in modding software and games. I've modded quite a few games where the developers officially adopted features based on community work. It can be a really productive relationship where proof of concepts demonstrate what would be genuinely useful to add officially.
 
 ## License
 

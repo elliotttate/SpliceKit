@@ -5,6 +5,7 @@
 
 #import "FCPBridge.h"
 #import "FCPTranscriptPanel.h"
+#import "FCPCommandPalette.h"
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
@@ -12,6 +13,8 @@
 #import <arpa/inet.h>
 #import <fcntl.h>
 #import <AppKit/AppKit.h>
+#import <AVFoundation/AVFoundation.h>
+#import <Accelerate/Accelerate.h>
 
 #define FCPBRIDGE_TCP_PORT 9876
 
@@ -658,7 +661,7 @@ static NSDictionary *FCPBridge_handleSetProperty(NSDictionary *params) {
 
 #pragma mark - timeline.getDetailedState
 
-static NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
+NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
     NSInteger limit = [params[@"limit"] integerValue] ?: 200;
 
     __block NSDictionary *result = nil;
@@ -761,9 +764,26 @@ static NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *para
                         NSString *h = FCPBridge_storeHandle(item);
                         info[@"handle"] = h;
 
+                        // Trimmed offset (in-point in source media)
+                        SEL trimOffSel = NSSelectorFromString(@"trimmedOffset");
+                        if ([item respondsToSelector:trimOffSel]) {
+                            FCPBridge_CMTime t = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(item, trimOffSel);
+                            info[@"trimmedOffset"] = FCPBridge_serializeCMTime(t);
+                        }
+
                         [itemList addObject:info];
                     }
                     state[@"items"] = itemList;
+                }
+            }
+
+            // Frame rate from sequence
+            SEL frdSel = NSSelectorFromString(@"frameDuration");
+            if ([sequence respondsToSelector:frdSel]) {
+                FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(sequence, frdSel);
+                state[@"frameDuration"] = FCPBridge_serializeCMTime(fd);
+                if (fd.value > 0) {
+                    state[@"frameRate"] = @((double)fd.timescale / fd.value);
                 }
             }
 
@@ -1073,7 +1093,7 @@ static NSDictionary *FCPBridge_sendEditorAction(NSString *selectorName) {
 
 #pragma mark - Timeline Command Handlers
 
-static NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
+NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
     NSString *action = params[@"action"];
     if (!action) return @{@"error": @"action parameter required"};
 
@@ -1170,6 +1190,34 @@ static NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
 
         // Auto-reframe
         @"autoReframe":      @"autoReframe:",
+
+        // Clip operations
+        @"detachAudio":      @"detachAudio:",
+        @"breakApartClipItems": @"breakApartClipItems:",
+        @"removeEffects":    @"removeEffects:",
+        @"liftFromPrimaryStoryline": @"liftFromPrimaryStoryline:",
+        @"overwriteToPrimaryStoryline": @"overwriteToPrimaryStoryline:",
+        @"createStoryline":  @"createStoryline:",
+
+        // Timeline view
+        @"zoomToFit":        @"zoomToFit:",
+        @"zoomIn":           @"zoomIn:",
+        @"zoomOut":          @"zoomOut:",
+        @"toggleSnapping":   @"toggleSnapping:",
+        @"toggleSkimming":   @"toggleSkimming:",
+        @"toggleInspector":  @"toggleInspector:",
+        @"toggleTimeline":   @"toggleTimeline:",
+        @"toggleTimelineIndex": @"toggleTimelineIndex:",
+
+        // Render
+        @"renderSelection":  @"renderSelection:",
+        @"renderAll":        @"renderAll:",
+
+        // Markers
+        @"deleteMarkersInSelection": @"deleteMarkersInSelection:",
+
+        // Analysis
+        @"analyzeAndFix":    @"analyzeAndFix:",
     };
 
     // Undo/redo go through the document's FFUndoManager
@@ -1328,7 +1376,7 @@ static NSDictionary *FCPBridge_sendPlayerAction(NSString *selectorName) {
     return result;
 }
 
-static NSDictionary *FCPBridge_handlePlayback(NSDictionary *params) {
+NSDictionary *FCPBridge_handlePlayback(NSDictionary *params) {
     NSString *action = params[@"action"];
     if (!action) return @{@"error": @"action parameter required"};
 
@@ -1355,6 +1403,64 @@ static NSDictionary *FCPBridge_handlePlayback(NSDictionary *params) {
     }
 
     return FCPBridge_sendAppAction(selector);
+}
+
+NSDictionary *FCPBridge_handlePlaybackSeek(NSDictionary *params) {
+    NSNumber *seconds = params[@"seconds"];
+    if (!seconds) return @{@"error": @"seconds parameter required"};
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            id timeline = FCPBridge_getActiveTimelineModule();
+            if (!timeline) {
+                result = @{@"error": @"No active timeline module"};
+                return;
+            }
+
+            // Get the sequence timescale for accurate time construction
+            int32_t timescale = 24000; // default
+            SEL seqSel = @selector(sequence);
+            if ([timeline respondsToSelector:seqSel]) {
+                id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, seqSel);
+                if (sequence) {
+                    // Try to get frameDuration to derive timescale
+                    // On ARM64, objc_msgSend handles struct returns directly
+                    SEL fdSel = NSSelectorFromString(@"frameDuration");
+                    if ([sequence respondsToSelector:fdSel]) {
+                        FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(
+                            sequence, fdSel);
+                        if (fd.timescale > 0) timescale = fd.timescale;
+                    }
+                }
+            }
+
+            // Build CMTime from seconds
+            double secs = [seconds doubleValue];
+            FCPBridge_CMTime targetTime;
+            targetTime.value = (int64_t)(secs * timescale);
+            targetTime.timescale = timescale;
+            targetTime.flags = 1; // kCMTimeFlags_Valid
+            targetTime.epoch = 0;
+
+            // Call setPlayheadTime: on the timeline module
+            SEL setSel = @selector(setPlayheadTime:);
+            if ([timeline respondsToSelector:setSel]) {
+                ((void (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                    timeline, setSel, targetTime);
+                result = @{
+                    @"status": @"ok",
+                    @"seconds": @(secs),
+                    @"time": FCPBridge_serializeCMTime(targetTime),
+                };
+            } else {
+                result = @{@"error": @"Timeline module does not respond to setPlayheadTime:"};
+            }
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to seek"};
 }
 
 static NSDictionary *FCPBridge_handleTimelineGetState(NSDictionary *params) {
@@ -1508,6 +1614,772 @@ static NSDictionary *FCPBridge_handleTranscriptMoveWords(NSDictionary *params) {
     return result ?: @{@"error": @"Operation failed"};
 }
 
+#pragma mark - Scene Change Detection
+
+NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
+    // Get parameters
+    double threshold = [params[@"threshold"] doubleValue] ?: 0.35;
+    double sampleInterval = [params[@"sampleInterval"] doubleValue] ?: 0.1; // check every 0.1s
+    NSString *action = params[@"action"] ?: @"detect"; // "detect", "markers", "blade"
+
+    // Get media URL from timeline's first clip, or use provided URL
+    __block NSURL *mediaURL = nil;
+    NSString *urlStr = params[@"fileURL"];
+    if (urlStr) {
+        mediaURL = [NSURL fileURLWithPath:urlStr];
+    } else {
+        // Get from timeline
+        FCPBridge_executeOnMainThread(^{
+            @try {
+                id timeline = FCPBridge_getActiveTimelineModule();
+                if (!timeline) return;
+                id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+                if (!sequence) return;
+
+                // Get primary object -> containedItems -> first clip -> media URL
+                SEL poSel = NSSelectorFromString(@"primaryObject");
+                if (![sequence respondsToSelector:poSel]) return;
+                id primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, poSel);
+                if (!primaryObj) return;
+
+                SEL ciSel = @selector(containedItems);
+                if (![primaryObj respondsToSelector:ciSel]) return;
+                id items = ((id (*)(id, SEL))objc_msgSend)(primaryObj, ciSel);
+                if (!items) return;
+
+                // Find the longest clip (skip tiny remnants)
+                id bestItem = nil;
+                double bestDur = 0;
+                for (id item in (NSArray *)items) {
+                    if ([item respondsToSelector:@selector(duration)]) {
+                        FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(item, @selector(duration));
+                        double dur = (d.timescale > 0) ? (double)d.value / d.timescale : 0;
+                        if (dur > bestDur) { bestDur = dur; bestItem = item; }
+                    }
+                }
+                if (bestItem) {
+                    @try {
+                        id mediaObj = bestItem;
+                        if ([bestItem respondsToSelector:ciSel]) {
+                            id innerItems = ((id (*)(id, SEL))objc_msgSend)(bestItem, ciSel);
+                            if ([innerItems isKindOfClass:[NSArray class]] && [(NSArray *)innerItems count] > 0) {
+                                mediaObj = [(NSArray *)innerItems objectAtIndex:0];
+                            }
+                        }
+                        id media = [mediaObj valueForKey:@"media"];
+                        if (media) {
+                            id rep = [media valueForKey:@"originalMediaRep"];
+                            if (rep) {
+                                id url = [rep valueForKey:@"fileURL"];
+                                if (url && [url isKindOfClass:[NSURL class]]) {
+                                    mediaURL = url;
+                                }
+                            }
+                        }
+                    } @catch (NSException *e) {}
+                }
+            } @catch (NSException *e) {
+                FCPBridge_log(@"Exception getting media URL: %@", e.reason);
+            }
+        });
+    }
+
+    if (!mediaURL) {
+        return @{@"error": @"No media file found. Open a project with media on the timeline."};
+    }
+
+    FCPBridge_log(@"Scene detection starting on: %@ (threshold=%.2f, interval=%.2fs)",
+                  mediaURL.path, threshold, sampleInterval);
+
+    // Run scene detection synchronously on this thread (called from background)
+    AVAsset *asset = [AVAsset assetWithURL:mediaURL];
+    NSError *error = nil;
+    AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&error];
+    if (error || !reader) {
+        return @{@"error": [NSString stringWithFormat:@"Cannot read media: %@", error.localizedDescription]};
+    }
+
+    NSArray<AVAssetTrack *> *videoTracks = [asset tracksWithMediaType:AVMediaTypeVideo];
+    if (videoTracks.count == 0) {
+        return @{@"error": @"No video track in media file"};
+    }
+
+    AVAssetTrack *videoTrack = videoTracks[0];
+    NSDictionary *outputSettings = @{
+        (NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+    };
+    AVAssetReaderTrackOutput *output = [AVAssetReaderTrackOutput
+        assetReaderTrackOutputWithTrack:videoTrack outputSettings:outputSettings];
+    output.alwaysCopiesSampleData = NO;
+    [reader addOutput:output];
+
+    if (![reader startReading]) {
+        return @{@"error": [NSString stringWithFormat:@"Cannot start reading: %@", reader.error.localizedDescription]};
+    }
+
+    // Histogram comparison for scene detection
+    double duration = CMTimeGetSeconds(asset.duration);
+    double frameRate = videoTrack.nominalFrameRate;
+    int framesPerSample = (int)(frameRate * sampleInterval);
+    if (framesPerSample < 1) framesPerSample = 1;
+
+    vImagePixelCount prevHistR[256] = {0}, prevHistG[256] = {0}, prevHistB[256] = {0};
+    BOOL hasPrevHist = NO;
+    NSMutableArray *sceneChanges = [NSMutableArray array];
+    int frameIndex = 0;
+    int sampledFrames = 0;
+
+    while (reader.status == AVAssetReaderStatusReading) {
+        @autoreleasepool {
+            CMSampleBufferRef sampleBuffer = [output copyNextSampleBuffer];
+            if (!sampleBuffer) break;
+
+            frameIndex++;
+            // Only analyze every Nth frame
+            if (frameIndex % framesPerSample != 0) {
+                CFRelease(sampleBuffer);
+                continue;
+            }
+            sampledFrames++;
+
+            CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+            double timeSec = CMTimeGetSeconds(pts);
+
+            CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+            if (!imageBuffer) {
+                CFRelease(sampleBuffer);
+                continue;
+            }
+
+            CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
+
+            size_t width = CVPixelBufferGetWidth(imageBuffer);
+            size_t height = CVPixelBufferGetHeight(imageBuffer);
+            size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
+            void *baseAddr = CVPixelBufferGetBaseAddress(imageBuffer);
+
+            vImage_Buffer buf = { baseAddr, (vImagePixelCount)height, (vImagePixelCount)width, bytesPerRow };
+
+            // Compute ARGB histogram (BGRA in memory, but histogram bins are still useful)
+            vImagePixelCount *histPtrs[4];
+            vImagePixelCount histA[256] = {0}, histR[256] = {0}, histG[256] = {0}, histB[256] = {0};
+            histPtrs[0] = histB; // B channel (BGRA byte order)
+            histPtrs[1] = histG;
+            histPtrs[2] = histR;
+            histPtrs[3] = histA;
+            vImageHistogramCalculation_ARGB8888(&buf, histPtrs, kvImageNoFlags);
+
+            if (hasPrevHist) {
+                // Compare histograms: normalized absolute difference
+                double totalPixels = (double)(width * height);
+                double diffR = 0, diffG = 0, diffB = 0;
+                for (int i = 0; i < 256; i++) {
+                    diffR += fabs((double)histR[i] - (double)prevHistR[i]);
+                    diffG += fabs((double)histG[i] - (double)prevHistG[i]);
+                    diffB += fabs((double)histB[i] - (double)prevHistB[i]);
+                }
+                double normalizedDiff = (diffR + diffG + diffB) / (3.0 * totalPixels);
+
+                if (normalizedDiff > threshold) {
+                    [sceneChanges addObject:@{
+                        @"time": @(timeSec),
+                        @"score": @(normalizedDiff),
+                    }];
+                    FCPBridge_log(@"Scene change at %.2fs (score=%.3f)", timeSec, normalizedDiff);
+                }
+            }
+
+            // Store current histogram as previous
+            memcpy(prevHistR, histR, sizeof(prevHistR));
+            memcpy(prevHistG, histG, sizeof(prevHistG));
+            memcpy(prevHistB, histB, sizeof(prevHistB));
+            hasPrevHist = YES;
+
+            CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
+            CFRelease(sampleBuffer);
+        }
+    }
+
+    [reader cancelReading];
+
+    FCPBridge_log(@"Scene detection complete: %lu changes found in %.1fs (%d frames sampled)",
+                  (unsigned long)sceneChanges.count, duration, sampledFrames);
+
+    // If action is "markers" or "blade", apply them programmatically (no playhead movement)
+    if (([action isEqualToString:@"markers"] || [action isEqualToString:@"blade"]) && sceneChanges.count > 0) {
+        __block NSInteger applied = 0;
+        FCPBridge_executeOnMainThread(^{
+            @try {
+                id timeline = FCPBridge_getActiveTimelineModule();
+                if (!timeline) return;
+                id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+                if (!sequence) return;
+
+                // Get frame duration for marker length
+                FCPBridge_CMTime frameDur = {1, 30, 1, 0};
+                SEL fdSel = NSSelectorFromString(@"frameDuration");
+                if ([sequence respondsToSelector:fdSel]) {
+                    frameDur = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(sequence, fdSel);
+                }
+
+                // Get the primary object and find the target clip (longest one)
+                id primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, NSSelectorFromString(@"primaryObject"));
+                if (!primaryObj) return;
+                id containedItems = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
+                if (![containedItems isKindOfClass:[NSArray class]]) return;
+
+                id targetClip = nil;
+                double bestDur = 0;
+                for (id item in (NSArray *)containedItems) {
+                    if ([item respondsToSelector:@selector(duration)]) {
+                        FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(item, @selector(duration));
+                        double dur = (d.timescale > 0) ? (double)d.value / d.timescale : 0;
+                        if (dur > bestDur) { bestDur = dur; targetClip = item; }
+                    }
+                }
+                if (!targetClip) return;
+
+                if ([action isEqualToString:@"markers"]) {
+                    // Add markers programmatically via actionAddMarkerToAnchoredObject:isToDo:isChapter:withRange:error:
+                    SEL addSel = NSSelectorFromString(@"actionAddMarkerToAnchoredObject:isToDo:isChapter:withRange:error:");
+                    if (![sequence respondsToSelector:addSel]) {
+                        FCPBridge_log(@"Scene detection: sequence does not respond to actionAddMarkerToAnchoredObject:");
+                        return;
+                    }
+
+                    typedef BOOL (*AddMarkerFn)(id, SEL, id, BOOL, BOOL, FCPBridge_CMTimeRange, NSError **);
+                    AddMarkerFn addMarker = (AddMarkerFn)objc_msgSend;
+
+                    for (NSDictionary *sc in sceneChanges) {
+                        double t = [sc[@"time"] doubleValue];
+                        int32_t ts = 600;
+                        FCPBridge_CMTime markerTime = {(int64_t)round(t * ts), ts, 1, 0};
+                        FCPBridge_CMTimeRange range = {markerTime, frameDur};
+                        NSError *err = nil;
+                        BOOL ok = addMarker(sequence, addSel, targetClip, NO, NO, range, &err);
+                        if (ok) applied++;
+                        else FCPBridge_log(@"Scene marker failed at %.2fs: %@", t, err);
+                    }
+                } else {
+                    // Blade: seek + blade (still needs playhead for blade action)
+                    for (NSDictionary *sc in sceneChanges) {
+                        double t = [sc[@"time"] doubleValue];
+                        FCPBridge_handlePlaybackSeek(@{@"seconds": @(t)});
+                        [NSThread sleepForTimeInterval:0.03];
+                        FCPBridge_handleTimelineAction(@{@"action": @"blade"});
+                        applied++;
+                    }
+                }
+            } @catch (NSException *e) {
+                FCPBridge_log(@"Scene action error: %@", e.reason);
+            }
+        });
+        // Update count with actually applied
+        if (applied > 0) {
+            NSMutableDictionary *mutableResult = [NSMutableDictionary dictionaryWithDictionary:@{
+                @"sceneChanges": sceneChanges,
+                @"count": @(sceneChanges.count),
+                @"applied": @(applied),
+                @"duration": @(duration),
+                @"threshold": @(threshold),
+                @"action": action,
+                @"mediaFile": mediaURL.lastPathComponent ?: @"",
+            }];
+            return mutableResult;
+        }
+    }
+
+    return @{
+        @"sceneChanges": sceneChanges,
+        @"count": @(sceneChanges.count),
+        @"duration": @(duration),
+        @"threshold": @(threshold),
+        @"action": action,
+        @"mediaFile": mediaURL.lastPathComponent ?: @"",
+    };
+}
+
+#pragma mark - Effects Browse & Apply Handlers
+
+// Generalized handler that lists effects filtered by type(s)
+NSDictionary *FCPBridge_handleEffectsListAvailable(NSDictionary *params) {
+    NSString *filter = params[@"filter"];
+    NSString *typeFilter = params[@"type"]; // "filter", "transition", "generator", "title", "audio", or nil for all
+
+    // Map friendly type names to internal type strings
+    NSDictionary *typeMap = @{
+        @"filter":     @"effect.video.filter",
+        @"transition": @"effect.video.transition",
+        @"generator":  @"effect.video.generator",
+        @"title":      @"effect.video.title",
+        @"audio":      @"effect.audio.effect",
+    };
+
+    NSString *internalType = typeFilter ? typeMap[[typeFilter lowercaseString]] : nil;
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            Class ffEffect = objc_getClass("FFEffect");
+            if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
+
+            id allIDs = ((id (*)(id, SEL))objc_msgSend)((id)ffEffect, @selector(userVisibleEffectIDs));
+            if (!allIDs) { result = @{@"error": @"No effect IDs returned"}; return; }
+
+            SEL typeSel = @selector(effectTypeForEffectID:);
+            SEL nameSel = @selector(displayNameForEffectID:);
+            SEL catSel = @selector(categoryForEffectID:);
+
+            NSMutableArray *effects = [NSMutableArray array];
+
+            for (NSString *effectID in allIDs) {
+                @autoreleasepool {
+                    id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, effectID);
+                    if (![type isKindOfClass:[NSString class]]) continue;
+                    NSString *typeStr = (NSString *)type;
+
+                    // Filter by type if requested
+                    if (internalType && ![typeStr isEqualToString:internalType]) continue;
+
+                    // Skip transitions if no type filter (they have their own handler)
+                    if (!typeFilter && [typeStr isEqualToString:@"effect.video.transition"]) continue;
+
+                    id name = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, effectID);
+                    id category = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, catSel, effectID);
+
+                    NSString *displayName = [name isKindOfClass:[NSString class]] ? (NSString *)name : @"Unknown";
+                    NSString *catName = [category isKindOfClass:[NSString class]] ? (NSString *)category : @"";
+
+                    // Derive friendly type name
+                    NSString *friendlyType = @"filter";
+                    if ([typeStr isEqualToString:@"effect.video.generator"]) friendlyType = @"generator";
+                    else if ([typeStr isEqualToString:@"effect.video.title"]) friendlyType = @"title";
+                    else if ([typeStr isEqualToString:@"effect.audio.effect"]) friendlyType = @"audio";
+                    else if ([typeStr isEqualToString:@"effect.video.transition"]) friendlyType = @"transition";
+
+                    // Apply name filter
+                    if (filter.length > 0) {
+                        NSString *lowerFilter = [filter lowercaseString];
+                        BOOL matches = [[displayName lowercaseString] containsString:lowerFilter] ||
+                                       [[catName lowercaseString] containsString:lowerFilter];
+                        if (!matches) continue;
+                    }
+
+                    [effects addObject:@{
+                        @"name": displayName,
+                        @"effectID": effectID,
+                        @"category": catName,
+                        @"type": friendlyType,
+                    }];
+                }
+            }
+
+            [effects sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+                return [a[@"name"] compare:b[@"name"]];
+            }];
+
+            result = @{@"effects": effects, @"count": @(effects.count)};
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to list effects"};
+}
+
+NSDictionary *FCPBridge_handleEffectsApply(NSDictionary *params) {
+    NSString *effectID = params[@"effectID"];
+    NSString *name = params[@"name"];
+
+    if (!effectID && !name) {
+        return @{@"error": @"effectID or name parameter required"};
+    }
+
+    __block NSDictionary *result = nil;
+    __block NSString *resolvedID = effectID;
+
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            Class ffEffect = objc_getClass("FFEffect");
+            if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
+
+            // Resolve name -> effectID if needed
+            if (!resolvedID && name) {
+                id allIDs = ((id (*)(id, SEL))objc_msgSend)((id)ffEffect, @selector(userVisibleEffectIDs));
+                SEL typeSel = @selector(effectTypeForEffectID:);
+                SEL nameSel = @selector(displayNameForEffectID:);
+                NSString *lowerName = [name lowercaseString];
+
+                // Exact match first
+                for (NSString *eid in allIDs) {
+                    // Skip transitions — use transitions.apply for those
+                    id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
+                    if ([type isKindOfClass:[NSString class]] &&
+                        [(NSString *)type isEqualToString:@"effect.video.transition"]) continue;
+
+                    id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                    if ([dn isKindOfClass:[NSString class]] &&
+                        [[(NSString *)dn lowercaseString] isEqualToString:lowerName]) {
+                        resolvedID = eid;
+                        break;
+                    }
+                }
+                // Partial match fallback
+                if (!resolvedID) {
+                    for (NSString *eid in allIDs) {
+                        id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
+                        if ([type isKindOfClass:[NSString class]] &&
+                            [(NSString *)type isEqualToString:@"effect.video.transition"]) continue;
+
+                        id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                        if ([dn isKindOfClass:[NSString class]] &&
+                            [[(NSString *)dn lowercaseString] containsString:lowerName]) {
+                            resolvedID = eid;
+                            break;
+                        }
+                    }
+                }
+                if (!resolvedID) {
+                    result = @{@"error": [NSString stringWithFormat:@"No effect found matching '%@'", name]};
+                    return;
+                }
+            }
+
+            // Use FFAddEffectCommand to apply the effect to selected items
+            Class cmdClass = objc_getClass("FFAddEffectCommand");
+            Class selMgr = objc_getClass("PESelectionManager");
+            if (!cmdClass || !selMgr) {
+                result = @{@"error": @"FFAddEffectCommand or PESelectionManager not found"};
+                return;
+            }
+
+            // Get effect class for selected items lookup
+            id effectClass = ((id (*)(id, SEL, id))objc_msgSend)(
+                (id)ffEffect, @selector(classForEffectID:), resolvedID);
+
+            // Get selected items from the media browser container module
+            // or fall back to timeline selection
+            id app = [NSApplication sharedApplication];
+            id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
+
+            // Try to get the browser module to find selected items
+            SEL browserSel = NSSelectorFromString(@"mediaBrowserContainerModule");
+            id browserModule = nil;
+            if ([delegate respondsToSelector:browserSel]) {
+                browserModule = ((id (*)(id, SEL))objc_msgSend)(delegate, browserSel);
+            }
+
+            // Get selected items appropriate for this effect
+            NSArray *items = nil;
+            if (browserModule) {
+                SEL itemsSel = NSSelectorFromString(@"_newSelectedItemsForAddEffectOperationForEffectClass:");
+                if ([browserModule respondsToSelector:itemsSel]) {
+                    items = ((id (*)(id, SEL, id))objc_msgSend)(browserModule, itemsSel, effectClass);
+                }
+            }
+
+            // If no items from browser, try getting selected clips from timeline
+            if (!items || [(NSArray *)items count] == 0) {
+                id timelineModule = FCPBridge_getActiveTimelineModule();
+                if (timelineModule) {
+                    SEL selItemsSel = NSSelectorFromString(@"selectedItems");
+                    if ([timelineModule respondsToSelector:selItemsSel]) {
+                        items = ((id (*)(id, SEL))objc_msgSend)(timelineModule, selItemsSel);
+                    }
+                }
+            }
+
+            if (!items || [(NSArray *)items count] == 0) {
+                result = @{@"error": @"No clips selected. Select a clip first with timeline_action('selectClipAtPlayhead')"};
+                return;
+            }
+
+            // Create and execute FFAddEffectCommand
+            id cmd = ((id (*)(id, SEL))objc_msgSend)((id)cmdClass, @selector(alloc));
+            SEL initSel = NSSelectorFromString(@"initWithEffectID:items:");
+            cmd = ((id (*)(id, SEL, id, id))objc_msgSend)(cmd, initSel, resolvedID, items);
+
+            // Set timeline context
+            id mgr = ((id (*)(id, SEL))objc_msgSend)((id)selMgr, @selector(defaultSelectionManager));
+            if (mgr) {
+                id ctx = ((id (*)(id, SEL))objc_msgSend)(mgr, @selector(timelineContext));
+                if (ctx) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(cmd, @selector(setContext:), ctx);
+                }
+            }
+
+            BOOL success = ((BOOL (*)(id, SEL))objc_msgSend)(cmd, @selector(execute));
+
+            id appliedName = ((id (*)(id, SEL, id))objc_msgSend)(
+                (id)ffEffect, @selector(displayNameForEffectID:), resolvedID);
+
+            if (success) {
+                result = @{
+                    @"status": @"ok",
+                    @"effect": [appliedName isKindOfClass:[NSString class]] ? appliedName : @"Unknown",
+                    @"effectID": resolvedID,
+                };
+            } else {
+                result = @{@"error": [NSString stringWithFormat:@"Failed to apply effect '%@'",
+                           [appliedName isKindOfClass:[NSString class]] ? appliedName : resolvedID]};
+            }
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result ?: @{@"error": @"Failed to apply effect"};
+}
+
+#pragma mark - Transition Handlers
+
+NSDictionary *FCPBridge_handleTransitionsList(NSDictionary *params) {
+    NSString *filter = params[@"filter"];
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            Class ffEffect = objc_getClass("FFEffect");
+            if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
+
+            // Get all user-visible effect IDs
+            id allIDs = ((id (*)(id, SEL))objc_msgSend)((id)ffEffect, @selector(userVisibleEffectIDs));
+            if (!allIDs) { result = @{@"error": @"No effect IDs returned"}; return; }
+
+            SEL typeSel = @selector(effectTypeForEffectID:);
+            SEL nameSel = @selector(displayNameForEffectID:);
+            SEL catSel = @selector(categoryForEffectID:);
+
+            NSMutableArray *transitions = [NSMutableArray array];
+            NSString *transitionType = @"effect.video.transition";
+
+            for (NSString *effectID in allIDs) {
+                @autoreleasepool {
+                    id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, effectID);
+                    if (![type isKindOfClass:[NSString class]]) continue;
+                    if (![(NSString *)type isEqualToString:transitionType]) continue;
+
+                    id name = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, effectID);
+                    id category = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, catSel, effectID);
+
+                    NSString *displayName = [name isKindOfClass:[NSString class]] ? (NSString *)name : @"Unknown";
+                    NSString *catName = [category isKindOfClass:[NSString class]] ? (NSString *)category : @"";
+
+                    // Apply name filter if provided
+                    if (filter.length > 0) {
+                        NSString *lowerFilter = [filter lowercaseString];
+                        BOOL matches = [[displayName lowercaseString] containsString:lowerFilter] ||
+                                       [[catName lowercaseString] containsString:lowerFilter];
+                        if (!matches) continue;
+                    }
+
+                    [transitions addObject:@{
+                        @"name": displayName,
+                        @"effectID": effectID,
+                        @"category": catName,
+                    }];
+                }
+            }
+
+            // Sort by name
+            [transitions sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+                return [a[@"name"] compare:b[@"name"]];
+            }];
+
+            // Get the current default
+            id defaultID = ((id (*)(id, SEL))objc_msgSend)((id)ffEffect,
+                @selector(defaultVideoTransitionEffectID));
+            NSString *defaultName = @"";
+            if (defaultID) {
+                id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, defaultID);
+                if ([dn isKindOfClass:[NSString class]]) defaultName = dn;
+            }
+
+            result = @{
+                @"transitions": transitions,
+                @"count": @(transitions.count),
+                @"defaultTransition": @{
+                    @"name": defaultName,
+                    @"effectID": defaultID ?: @"",
+                },
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to list transitions"};
+}
+
+NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
+    NSString *effectID = params[@"effectID"];
+    NSString *name = params[@"name"];
+
+    if (!effectID && !name) {
+        return @{@"error": @"effectID or name parameter required"};
+    }
+
+    __block NSDictionary *result = nil;
+    __block NSString *resolvedID = effectID;
+
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            Class ffEffect = objc_getClass("FFEffect");
+            if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
+
+            // Resolve name -> effectID if needed
+            if (!resolvedID && name) {
+                id allIDs = ((id (*)(id, SEL))objc_msgSend)((id)ffEffect, @selector(userVisibleEffectIDs));
+                SEL typeSel = @selector(effectTypeForEffectID:);
+                SEL nameSel = @selector(displayNameForEffectID:);
+                NSString *transitionType = @"effect.video.transition";
+                NSString *lowerName = [name lowercaseString];
+
+                // Exact match first
+                for (NSString *eid in allIDs) {
+                    id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
+                    if (![type isKindOfClass:[NSString class]] ||
+                        ![(NSString *)type isEqualToString:transitionType]) continue;
+                    id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                    if ([dn isKindOfClass:[NSString class]] &&
+                        [[(NSString *)dn lowercaseString] isEqualToString:lowerName]) {
+                        resolvedID = eid;
+                        break;
+                    }
+                }
+                // Partial match fallback
+                if (!resolvedID) {
+                    for (NSString *eid in allIDs) {
+                        id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
+                        if (![type isKindOfClass:[NSString class]] ||
+                            ![(NSString *)type isEqualToString:transitionType]) continue;
+                        id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                        if ([dn isKindOfClass:[NSString class]] &&
+                            [[(NSString *)dn lowercaseString] containsString:lowerName]) {
+                            resolvedID = eid;
+                            break;
+                        }
+                    }
+                }
+                if (!resolvedID) {
+                    result = @{@"error": [NSString stringWithFormat:@"No transition found matching '%@'", name]};
+                    return;
+                }
+            }
+
+            // Save the current default transition
+            id originalDefault = ((id (*)(id, SEL))objc_msgSend)((id)ffEffect,
+                @selector(defaultVideoTransitionEffectID));
+
+            // Set the new default via NSUserDefaults
+            [[NSUserDefaults standardUserDefaults] setObject:resolvedID
+                                                      forKey:@"FFDefaultVideoTransition"];
+
+            // Call addTransition: on the timeline module
+            id timelineModule = FCPBridge_getActiveTimelineModule();
+            if (!timelineModule) {
+                // Restore default
+                if (originalDefault) {
+                    [[NSUserDefaults standardUserDefaults] setObject:originalDefault
+                                                              forKey:@"FFDefaultVideoTransition"];
+                }
+                result = @{@"error": @"No active timeline module"};
+                return;
+            }
+
+            SEL addSel = @selector(addTransition:);
+            if ([timelineModule respondsToSelector:addSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(timelineModule, addSel, nil);
+            } else {
+                // Fall back to responder chain
+                [[NSApplication sharedApplication] sendAction:addSel to:nil from:nil];
+            }
+
+            // Restore the original default transition
+            if (originalDefault) {
+                [[NSUserDefaults standardUserDefaults] setObject:originalDefault
+                                                          forKey:@"FFDefaultVideoTransition"];
+            }
+
+            // Get the display name of what we applied
+            id appliedName = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect,
+                @selector(displayNameForEffectID:), resolvedID);
+
+            result = @{
+                @"status": @"ok",
+                @"transition": [appliedName isKindOfClass:[NSString class]] ? appliedName : @"Unknown",
+                @"effectID": resolvedID,
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result ?: @{@"error": @"Failed to apply transition"};
+}
+
+#pragma mark - Command Palette Handlers
+
+static NSDictionary *FCPBridge_handleCommandShow(NSDictionary *params) {
+    FCPBridge_executeOnMainThread(^{
+        [[FCPCommandPalette sharedPalette] showPalette];
+    });
+    return @{@"status": @"ok"};
+}
+
+static NSDictionary *FCPBridge_handleCommandHide(NSDictionary *params) {
+    FCPBridge_executeOnMainThread(^{
+        [[FCPCommandPalette sharedPalette] hidePalette];
+    });
+    return @{@"status": @"ok"};
+}
+
+static NSDictionary *FCPBridge_handleCommandSearch(NSDictionary *params) {
+    NSString *query = params[@"query"] ?: @"";
+    NSArray<FCPCommand *> *results = [[FCPCommandPalette sharedPalette] searchCommands:query];
+    NSMutableArray *items = [NSMutableArray array];
+    NSUInteger limit = [params[@"limit"] unsignedIntegerValue] ?: 20;
+    for (NSUInteger i = 0; i < MIN(results.count, limit); i++) {
+        FCPCommand *cmd = results[i];
+        [items addObject:@{
+            @"name": cmd.name ?: @"",
+            @"action": cmd.action ?: @"",
+            @"type": cmd.type ?: @"",
+            @"category": cmd.categoryName ?: @"",
+            @"detail": cmd.detail ?: @"",
+            @"shortcut": cmd.shortcut ?: @"",
+            @"score": @(cmd.score),
+        }];
+    }
+    return @{@"commands": items, @"total": @(results.count)};
+}
+
+static NSDictionary *FCPBridge_handleCommandExecute(NSDictionary *params) {
+    NSString *action = params[@"action"];
+    NSString *type = params[@"type"] ?: @"timeline";
+    if (!action) return @{@"error": @"action parameter required"};
+    return [[FCPCommandPalette sharedPalette] executeCommand:action type:type];
+}
+
+static NSDictionary *FCPBridge_handleCommandAI(NSDictionary *params) {
+    NSString *query = params[@"query"];
+    if (!query) return @{@"error": @"query parameter required"};
+
+    __block NSDictionary *result = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+
+    [[FCPCommandPalette sharedPalette] executeNaturalLanguage:query
+        completion:^(NSArray<NSDictionary *> *actions, NSString *error) {
+            if (error) {
+                result = @{@"error": error};
+            } else {
+                result = @{@"actions": actions ?: @[], @"count": @(actions.count)};
+            }
+            dispatch_semaphore_signal(sem);
+        }];
+
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC));
+    return result ?: @{@"error": @"AI request timed out"};
+}
+
 #pragma mark - Request Dispatcher
 
 static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
@@ -1565,6 +2437,8 @@ static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
     // playback.* namespace
     else if ([method isEqualToString:@"playback.action"]) {
         result = FCPBridge_handlePlayback(params);
+    } else if ([method isEqualToString:@"playback.seekToTime"]) {
+        result = FCPBridge_handlePlaybackSeek(params);
     }
     // fcpxml.* namespace
     else if ([method isEqualToString:@"fcpxml.import"]) {
@@ -1587,6 +2461,34 @@ static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
         result = FCPBridge_handleTranscriptDeleteWords(params);
     } else if ([method isEqualToString:@"transcript.moveWords"]) {
         result = FCPBridge_handleTranscriptMoveWords(params);
+    }
+    // scene detection
+    else if ([method isEqualToString:@"scene.detect"]) {
+        result = FCPBridge_handleDetectSceneChanges(params);
+    }
+    // effects browse/apply
+    else if ([method isEqualToString:@"effects.listAvailable"]) {
+        result = FCPBridge_handleEffectsListAvailable(params);
+    } else if ([method isEqualToString:@"effects.apply"]) {
+        result = FCPBridge_handleEffectsApply(params);
+    }
+    // transitions.* namespace
+    else if ([method isEqualToString:@"transitions.list"]) {
+        result = FCPBridge_handleTransitionsList(params);
+    } else if ([method isEqualToString:@"transitions.apply"]) {
+        result = FCPBridge_handleTransitionsApply(params);
+    }
+    // command.* namespace (command palette)
+    else if ([method isEqualToString:@"command.show"]) {
+        result = FCPBridge_handleCommandShow(params);
+    } else if ([method isEqualToString:@"command.hide"]) {
+        result = FCPBridge_handleCommandHide(params);
+    } else if ([method isEqualToString:@"command.search"]) {
+        result = FCPBridge_handleCommandSearch(params);
+    } else if ([method isEqualToString:@"command.execute"]) {
+        result = FCPBridge_handleCommandExecute(params);
+    } else if ([method isEqualToString:@"command.ai"]) {
+        result = FCPBridge_handleCommandAI(params);
     }
     else {
         return @{@"error": @{@"code": @(-32601), @"message":
