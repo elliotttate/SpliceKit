@@ -286,10 +286,19 @@ class PatcherModel: ObservableObject {
         }
 
         // Build parakeet-transcriber tool (Swift Package with FluidAudio dependency)
-        let parakeetPkgDir = repoDir + "/tools/parakeet-transcriber"
+        let parakeetSrcDir = repoDir + "/tools/parakeet-transcriber"
         let parakeetBin = buildDir + "/parakeet-transcriber"
-        if FileManager.default.fileExists(atPath: parakeetPkgDir + "/Package.swift") {
+        if FileManager.default.fileExists(atPath: parakeetSrcDir + "/Package.swift") {
             await logAsync("Building Parakeet transcriber (may take a moment on first run)...")
+            // Copy source to a writable location if it's inside a read-only app bundle
+            let parakeetPkgDir: String
+            if !FileManager.default.isWritableFile(atPath: parakeetSrcDir) {
+                let tmpPkgDir = NSTemporaryDirectory() + "parakeet-transcriber"
+                shell("rm -rf '\(tmpPkgDir)' && cp -R '\(parakeetSrcDir)' '\(tmpPkgDir)'")
+                parakeetPkgDir = tmpPkgDir
+            } else {
+                parakeetPkgDir = parakeetSrcDir
+            }
             let parakeetResult = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
             let parakeetBuilt = parakeetPkgDir + "/.build/release/parakeet-transcriber"
             if FileManager.default.fileExists(atPath: parakeetBuilt) {
@@ -319,7 +328,7 @@ class PatcherModel: ObservableObject {
             <plist version="1.0"><dict>
             <key>CFBundleIdentifier</key><string>com.fcpbridge.FCPBridge</string>
             <key>CFBundleName</key><string>FCPBridge</string>
-            <key>CFBundleVersion</key><string>2.6.0</string>
+            <key>CFBundleVersion</key><string>2.6.1</string>
             <key>CFBundlePackageType</key><string>FMWK</string>
             <key>CFBundleExecutable</key><string>FCPBridge</string>
             </dict></plist>
