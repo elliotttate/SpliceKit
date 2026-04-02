@@ -520,6 +520,159 @@ static NSString * const kAIRowID = @"FCPAIRow";
     add(@"Open Transcript Editor", @"openTranscript", @"transcript", FCPCommandCategoryTranscript, @"Transcript", @"Ctrl+Opt+T", @"Open transcript-based editing panel", @[@"speech", @"captions"]);
     add(@"Close Transcript Editor", @"closeTranscript", @"transcript", FCPCommandCategoryTranscript, @"Transcript", nil, @"Close the transcript panel", @[]);
 
+    // ===================================================================
+    // NEW: Comprehensive MCP actions added to command palette
+    // ===================================================================
+
+    // --- Edit Modes ---
+    add(@"Paste as Connected Clip", @"pasteAsConnected", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Ctrl+V", @"Paste clipboard as connected clip", @[@"paste anchored"]);
+    add(@"Copy Timecode", @"copyTimecode", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Copy current timecode to clipboard", @[@"timecode"]);
+    add(@"Connect Edit (Audio Only)", @"connectEditAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Connect only audio to primary storyline", @[@"audio only"]);
+    add(@"Connect Edit (Video Only)", @"connectEditVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Connect only video to primary storyline", @[@"video only"]);
+    add(@"Insert Edit (Audio Only)", @"insertEditAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Insert only audio", @[@"audio only insert"]);
+    add(@"Insert Edit (Video Only)", @"insertEditVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Insert only video", @[@"video only insert"]);
+    add(@"Append Edit (Audio Only)", @"appendEditAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Append only audio", @[@"audio only append"]);
+    add(@"Append Edit (Video Only)", @"appendEditVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Append only video", @[@"video only append"]);
+    add(@"Overwrite Edit (Audio Only)", @"overwriteEditAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Overwrite only audio", @[@"audio only overwrite"]);
+    add(@"Overwrite Edit (Video Only)", @"overwriteEditVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Overwrite only video", @[@"video only overwrite"]);
+    add(@"AV Edit Mode: Audio", @"avEditModeAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Switch to audio-only editing mode", @[@"audio mode"]);
+    add(@"AV Edit Mode: Video", @"avEditModeVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Switch to video-only editing mode", @[@"video mode"]);
+    add(@"AV Edit Mode: Both", @"avEditModeBoth", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Switch to audio+video editing mode", @[@"av mode", @"both"]);
+    add(@"Replace from Start", @"replaceFromStart", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Replace clip from start", @[@"replace edit"]);
+    add(@"Replace from End", @"replaceFromEnd", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Replace clip from end", @[@"replace edit backtimed"]);
+    add(@"Replace Whole Clip", @"replaceWhole", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Replace entire clip", @[@"swap"]);
+
+    // --- Trim Extras ---
+    add(@"Trim Start", @"trimStart", @"timeline", FCPCommandCategoryEditing, @"Trim", @"Opt+[", @"Trim clip start to playhead", @[@"head trim"]);
+    add(@"Trim End", @"trimEnd", @"timeline", FCPCommandCategoryEditing, @"Trim", @"Opt+]", @"Trim clip end to playhead", @[@"tail trim"]);
+    add(@"Join Through Edit", @"joinClips", @"timeline", FCPCommandCategoryEditing, @"Trim", nil, @"Join clips at edit point (remove through edit)", @[@"heal", @"join edit"]);
+    add(@"Set Clip Range", @"setClipRange", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"X", @"Set range to clip boundaries", @[@"select clip range"]);
+    add(@"Collapse to Connected Storyline", @"collapseToConnectedStoryline", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Collapse selection to connected storyline", @[@"collapse connected"]);
+
+    // --- Speed Extras ---
+    add(@"Custom Speed", @"retimeCustomSpeed", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Set custom speed percentage", @[@"retime custom"]);
+    add(@"Instant Replay 50%", @"retimeInstantReplayHalf", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Instant replay at half speed", @[@"replay"]);
+    add(@"Instant Replay 25%", @"retimeInstantReplayQuarter", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Instant replay at quarter speed", @[@"slow replay"]);
+    add(@"Reset Speed", @"retimeReset", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Remove all retiming from clip", @[@"clear retime"]);
+    add(@"Speed Ramp to Zero", @"retimeSpeedRampToZero", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Ramp speed down to freeze", @[@"speed ramp", @"slow down"]);
+    add(@"Speed Ramp from Zero", @"retimeSpeedRampFromZero", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Ramp speed up from freeze", @[@"speed ramp", @"speed up"]);
+    add(@"Optical Flow", @"retimeOpticalFlow", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Set retime quality to Optical Flow", @[@"high quality retime"]);
+    add(@"Frame Blending", @"retimeFrameBlending", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Set retime quality to Frame Blending", @[@"smooth transition"]);
+    add(@"Floor Frame (Nearest)", @"retimeFloorFrame", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Set retime quality to nearest frame", @[@"floor frame"]);
+
+    // --- Audio Extras ---
+    add(@"Add Channel EQ", @"addChannelEQ", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Add Channel EQ effect", @[@"equalizer"]);
+    add(@"Enhance Audio", @"enhanceAudio", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Apply audio enhancement", @[@"audio fix"]);
+    add(@"Align Audio to Video", @"alignAudioToVideo", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Synchronize audio to video", @[@"sync audio"]);
+    add(@"Mute Volume", @"volumeMute", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Set volume to -infinity (mute)", @[@"silence", @"mute"]);
+    add(@"Apply Audio Fades", @"applyAudioFades", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Apply fade in/out to audio", @[@"crossfade"]);
+    add(@"Add Default Audio Effect", @"addDefaultAudioEffect", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Add default audio effect", @[@"audio plugin"]);
+    add(@"Add Default Video Effect", @"addDefaultVideoEffect", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Add default video effect to selected clip", @[@"video plugin"]);
+
+    // --- Color Extras ---
+    add(@"Next Color Effect", @"nextColorEffect", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Go to next color correction", @[@"next grade"]);
+    add(@"Previous Color Effect", @"previousColorEffect", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Go to previous color correction", @[@"prev grade"]);
+    add(@"Reset Color Board", @"resetColorBoard", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Reset color board pucks to center", @[@"clear color"]);
+    add(@"Toggle All Color Off", @"toggleAllColorOff", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Disable/enable all color corrections", @[@"bypass color"]);
+    add(@"Add Magnetic Mask", @"addMagneticMask", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Add AI magnetic mask to clip", @[@"object mask", @"isolation"]);
+    add(@"Smart Conform", @"smartConform", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Auto-reframe clip for project resolution", @[@"auto crop", @"reframe"]);
+
+    // --- Show/Hide Editors ---
+    add(@"Show Video Animation", @"showVideoAnimation", @"timeline", FCPCommandCategoryEditing, @"View", @"Ctrl+V", @"Show/hide video animation editor", @[@"keyframe editor"]);
+    add(@"Show Audio Animation", @"showAudioAnimation", @"timeline", FCPCommandCategoryEditing, @"View", @"Ctrl+A", @"Show/hide audio animation editor", @[@"audio keyframes"]);
+    add(@"Solo Animation", @"soloAnimation", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Collapse animation to single lane", @[@"collapse animation"]);
+    add(@"Show Tracking Editor", @"showTrackingEditor", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show object tracking editor", @[@"tracker"]);
+    add(@"Show Cinematic Editor", @"showCinematicEditor", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show cinematic mode editor", @[@"depth", @"focus"]);
+    add(@"Show Magnetic Mask Editor", @"showMagneticMaskEditor", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show magnetic mask editor", @[@"mask editor"]);
+    add(@"Enable Beat Detection", @"enableBeatDetection", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Detect beats in audio", @[@"rhythm", @"music"]);
+    add(@"Toggle Precision Editor", @"togglePrecisionEditor", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show/hide precision trim editor", @[@"detailed trim"]);
+    add(@"Show Audio Lanes", @"showAudioLanes", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show audio lanes in timeline", @[@"audio tracks"]);
+    add(@"Expand Subroles", @"expandSubroles", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Expand subrole lanes in timeline", @[@"role lanes"]);
+    add(@"Show Duplicate Ranges", @"showDuplicateRanges", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Highlight duplicate clip ranges", @[@"duplicates"]);
+    add(@"Show Keyword Editor", @"showKeywordEditor", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+K", @"Open keyword editor panel", @[@"tags"]);
+
+    // --- View Extras ---
+    add(@"Vertical Zoom to Fit", @"verticalZoomToFit", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Fit timeline vertically", @[@"vertical fit"]);
+    add(@"Zoom to Samples", @"zoomToSamples", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Zoom to audio sample level", @[@"waveform zoom"]);
+    add(@"Toggle Clip Skimming", @"toggleClipSkimming", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Enable/disable clip skimming", @[@"item skim"]);
+    add(@"Toggle Audio Skimming", @"toggleAudioSkimming", @"timeline", FCPCommandCategoryEditing, @"View", @"Opt+S", @"Enable/disable audio preview during skimming", @[@"audio skim", @"scrub audio"]);
+    add(@"Toggle Inspector Height", @"toggleInspectorHeight", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Toggle inspector panel height", @[@"tall inspector"]);
+    add(@"Beat Detection Grid", @"beatDetectionGrid", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Toggle beat detection grid overlay", @[@"beat grid"]);
+    add(@"Timeline Scrolling", @"timelineScrolling", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Toggle timeline auto-scrolling mode", @[@"scroll mode"]);
+    add(@"Enter Full Screen", @"enterFullScreen", @"timeline", FCPCommandCategoryEditing, @"View", @"Ctrl+Cmd+F", @"Enter full screen mode", @[@"maximize"]);
+    add(@"Timeline History Back", @"timelineHistoryBack", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+[", @"Go back in timeline navigation history", @[@"back"]);
+    add(@"Timeline History Forward", @"timelineHistoryForward", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+]", @"Go forward in timeline navigation history", @[@"forward"]);
+
+    // --- Navigation Go-To ---
+    add(@"Go to Inspector", @"goToInspector", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Focus the inspector panel", @[@"focus inspector"]);
+    add(@"Go to Timeline", @"goToTimeline", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Focus the timeline", @[@"focus timeline"]);
+    add(@"Go to Viewer", @"goToViewer", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Focus the viewer", @[@"focus viewer"]);
+    add(@"Go to Color Board", @"goToColorBoard", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Jump to color board panel", @[@"open color"]);
+
+    // --- Keywords ---
+    add(@"Apply Keyword Group 1", @"addKeywordGroup1", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+1", @"Apply keyword shortcut 1", @[@"tag 1"]);
+    add(@"Apply Keyword Group 2", @"addKeywordGroup2", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+2", @"Apply keyword shortcut 2", @[@"tag 2"]);
+    add(@"Apply Keyword Group 3", @"addKeywordGroup3", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+3", @"Apply keyword shortcut 3", @[@"tag 3"]);
+    add(@"Apply Keyword Group 4", @"addKeywordGroup4", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+4", @"Apply keyword shortcut 4", @[@"tag 4"]);
+    add(@"Apply Keyword Group 5", @"addKeywordGroup5", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+5", @"Apply keyword shortcut 5", @[@"tag 5"]);
+    add(@"Apply Keyword Group 6", @"addKeywordGroup6", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+6", @"Apply keyword shortcut 6", @[@"tag 6"]);
+    add(@"Apply Keyword Group 7", @"addKeywordGroup7", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+7", @"Apply keyword shortcut 7", @[@"tag 7"]);
+    add(@"Remove All Keywords", @"removeAllKeywords", @"timeline", FCPCommandCategoryEditing, @"Keywords", nil, @"Remove all keywords from selection", @[@"clear tags"]);
+    add(@"Remove Analysis Keywords", @"removeAnalysisKeywords", @"timeline", FCPCommandCategoryEditing, @"Keywords", nil, @"Remove auto-analysis keywords", @[@"clear analysis"]);
+
+    // --- Clip Extras ---
+    add(@"Enable/Disable Clip", @"enableDisable", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Toggle clip enabled/disabled", @[@"toggle clip"]);
+    add(@"Make Clips Unique", @"makeClipsUnique", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Make referenced clips independent copies", @[@"independent"]);
+    add(@"Rename Clip", @"renameClip", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Rename the selected clip", @[@"name"]);
+    add(@"Add to Soloed Clips", @"addToSoloedClips", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Add clip to solo group", @[@"solo group"]);
+    add(@"Transcode Media", @"transcodeMedia", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Transcode clip to optimized or proxy media", @[@"optimize", @"proxy"]);
+    add(@"Paste All Attributes", @"pasteAllAttributes", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Paste all attributes from clipboard", @[@"paste everything"]);
+    add(@"Remove Attributes", @"removeAttributes", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Remove specific attributes from clip", @[@"strip attributes"]);
+    add(@"Toggle Selected Effects Off", @"toggleSelectedEffectsOff", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Disable/enable selected effects", @[@"bypass effects"]);
+    add(@"Toggle Duplicate Detection", @"toggleDuplicateDetection", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show/hide duplicate clip indicators", @[@"dupes"]);
+
+    // --- Audition Extras ---
+    add(@"Finalize Audition", @"finalizeAudition", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Finalize audition with current pick", @[@"commit audition"]);
+    add(@"Next Audition Pick", @"nextAuditionPick", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Preview next audition variant", @[@"next alternative"]);
+    add(@"Previous Audition Pick", @"previousAuditionPick", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Preview previous audition variant", @[@"prev alternative"]);
+
+    // --- Captions Extras ---
+    add(@"Split Caption", @"splitCaption", @"timeline", FCPCommandCategoryTitles, @"Captions", nil, @"Split caption at playhead", @[@"break caption"]);
+    add(@"Resolve Caption Overlaps", @"resolveOverlaps", @"timeline", FCPCommandCategoryTitles, @"Captions", nil, @"Fix overlapping captions", @[@"fix captions"]);
+
+    // --- Project Extras ---
+    add(@"Duplicate Project", @"duplicateProject", @"timeline", FCPCommandCategoryExport, @"Project", @"Cmd+D", @"Duplicate the current project", @[@"copy project"]);
+    add(@"Snapshot Project", @"snapshotProject", @"timeline", FCPCommandCategoryExport, @"Project", @"Opt+Cmd+D", @"Save a timestamped snapshot of the project", @[@"backup", @"save version"]);
+    add(@"Project Properties", @"projectProperties", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Show project settings (resolution, frame rate)", @[@"project settings"]);
+    add(@"Library Properties", @"libraryProperties", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Show library storage and settings", @[@"library info"]);
+    add(@"Close Library", @"closeLibrary", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Close the current library", @[@"close lib"]);
+    add(@"Merge Events", @"mergeEvents", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Merge selected events", @[@"combine events"]);
+    add(@"Delete Generated Files", @"deleteGeneratedFiles", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Delete render, proxy, and analysis files", @[@"free space", @"clean up"]);
+
+    // --- Find ---
+    add(@"Find", @"find", @"timeline", FCPCommandCategoryEditing, @"Find", @"Cmd+F", @"Open find panel", @[@"search"]);
+    add(@"Find and Replace Title Text", @"findAndReplaceTitle", @"timeline", FCPCommandCategoryEditing, @"Find", nil, @"Find and replace text in titles", @[@"replace text"]);
+
+    // --- Reveal ---
+    add(@"Reveal Source in Browser", @"revealInBrowser", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Show source clip in browser", @[@"find source"]);
+    add(@"Reveal Project in Browser", @"revealProjectInBrowser", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Show project in browser", @[@"find project"]);
+    add(@"Reveal in Finder", @"revealInFinder", @"timeline", FCPCommandCategoryExport, @"Project", @"Opt+Cmd+R", @"Show file in macOS Finder", @[@"show in finder"]);
+    add(@"Move to Trash", @"moveToTrash", @"timeline", FCPCommandCategoryEditing, @"Clips", @"Cmd+Delete", @"Move selected to trash", @[@"delete permanently"]);
+
+    // --- Playback Extras ---
+    add(@"Play from Start", @"playFromStart", @"playback", FCPCommandCategoryPlayback, @"Playback", nil, @"Play from the beginning of timeline", @[@"play beginning"]);
+    add(@"Fast Forward", @"fastForward", @"playback", FCPCommandCategoryPlayback, @"Playback", @"L", @"Fast forward playback", @[@"speed up"]);
+    add(@"Rewind", @"rewind", @"playback", FCPCommandCategoryPlayback, @"Playback", @"J", @"Rewind playback", @[@"reverse play"]);
+    add(@"Stop Playing", @"stopPlaying", @"playback", FCPCommandCategoryPlayback, @"Playback", @"K", @"Stop playback", @[@"pause"]);
+
+    // --- Window & Workspace ---
+    add(@"Record Voiceover", @"recordVoiceover", @"timeline", FCPCommandCategoryEditing, @"Window", nil, @"Open voiceover recording panel", @[@"voice", @"microphone", @"narration"]);
+    add(@"Background Tasks", @"backgroundTasks", @"timeline", FCPCommandCategoryEditing, @"Window", @"Cmd+9", @"Show background tasks window", @[@"rendering", @"progress"]);
+    add(@"Edit Roles", @"editRoles", @"timeline", FCPCommandCategoryEditing, @"Roles", nil, @"Open role editor dialog", @[@"manage roles"]);
+    add(@"Hide Clip", @"hideClip", @"timeline", FCPCommandCategoryEditing, @"Rating", nil, @"Hide selected clip in browser", @[@"reject hide"]);
+    add(@"Show Preferences", @"showPreferences", @"timeline", FCPCommandCategoryOptions, @"Options", @"Cmd+,", @"Open FCP preferences", @[@"settings"]);
+    add(@"Add Adjustment Clip", @"addAdjustmentClip", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Add adjustment layer above timeline", @[@"adjustment layer"]);
+
     // --- Options ---
     add(@"FCPBridge Options", @"bridgeOptions", @"bridge_options", FCPCommandCategoryOptions, @"Options", nil, @"Open FCPBridge options panel", @[@"settings", @"preferences", @"config"]);
     add(@"Toggle Viewer Pinch-to-Zoom", @"toggleViewerPinchZoom", @"bridge_toggle", FCPCommandCategoryOptions, @"Options", nil, @"Enable/disable trackpad pinch-to-zoom on the viewer", @[@"trackpad", @"zoom", @"magnify", @"gesture"]);

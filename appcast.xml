@@ -6,6 +6,22 @@
     <description>FCPBridge Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>FCPBridge v2.8.1</title>
+      <sparkle:version>2.8.1</sparkle:version>
+      <sparkle:shortVersionString>2.8.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Thu, 02 Apr 2026 16:12:56 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 2.8.1</h2>
+        <p>Add 120+ commands to in-app command palette covering all MCP actions</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.8.1/FCPBridgePatcher-v2.8.1.zip"
+        sparkle:edSignature="aJsFGUpDGfXv2EDLSQKxtAJl4Y08J7WC29QhMarC5PgNF63yIMUlICoj6+qJ60RBS5DYF680ayHzROTZwr3WCA=="
+        length="3102332"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>FCPBridge v2.8.0</title>
       <sparkle:version>2.8.0</sparkle:version>
       <sparkle:shortVersionString>2.8.0</sparkle:shortVersionString>
