@@ -50,6 +50,7 @@ xcrun swiftc -parse-as-library -O \
     -target arm64-apple-macos14.0 \
     -F "${PATCHER_APP}/Contents/Frameworks" \
     -framework Sparkle \
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
     -o "${PATCHER_APP}/Contents/MacOS/FCPBridgePatcher" \
     patcher/FCPBridgePatcher/main.swift
 
