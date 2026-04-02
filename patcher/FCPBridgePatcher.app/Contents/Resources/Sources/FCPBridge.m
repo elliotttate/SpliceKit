@@ -465,6 +465,10 @@ static void FCPBridge_appDidLaunch(void) {
     // to the "not enough extra media" dialog)
     FCPBridge_installTransitionFreezeExtendSwizzle();
 
+    // Install effect-drag-as-adjustment-clip swizzle (allows dragging effects
+    // to empty timeline space to create adjustment clips)
+    FCPBridge_installEffectDragAsAdjustmentClip();
+
     // Install viewer pinch-to-zoom if previously enabled
     if (FCPBridge_isViewerPinchZoomEnabled()) {
         FCPBridge_installViewerPinchZoom();

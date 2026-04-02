@@ -15,10 +15,21 @@ set -euo pipefail
 # ============================================================
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SOURCE_APP="/Applications/Final Cut Pro.app"
+# Auto-detect FCP edition: prefer standard, fall back to Creator Studio
+CREATOR_STUDIO_APP="/Applications/Final Cut Pro Creator Studio.app"
+STANDARD_APP="/Applications/Final Cut Pro.app"
+if [[ -z "${SOURCE_APP:-}" ]]; then
+    if [[ -d "$STANDARD_APP" ]]; then
+        SOURCE_APP="$STANDARD_APP"
+    elif [[ -d "$CREATOR_STUDIO_APP" ]]; then
+        SOURCE_APP="$CREATOR_STUDIO_APP"
+    else
+        SOURCE_APP="$STANDARD_APP"  # will fail with a clear error later
+    fi
+fi
 DEFAULT_DEST="$HOME/Desktop/FinalCutPro_Modded"
 DEST_DIR="${DEST_DIR:-$DEFAULT_DEST}"
-APP_NAME="Final Cut Pro.app"
+APP_NAME="$(basename "$SOURCE_APP")"
 BRIDGE_PORT=9876
 VERSION="2.0.0"
 

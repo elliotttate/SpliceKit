@@ -16,8 +16,10 @@ SOURCES = Sources/FCPBridge.m \
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)/FCPBridge
 
-# Modded app paths
-MODDED_APP = $(HOME)/Desktop/FinalCutPro_Modded/Final Cut Pro.app
+# Modded app paths — auto-detect standard or Creator Studio edition
+MODDED_APP_STANDARD = $(HOME)/Desktop/FinalCutPro_Modded/Final Cut Pro.app
+MODDED_APP_CREATOR = $(HOME)/Desktop/FinalCutPro_Modded/Final Cut Pro Creator Studio.app
+MODDED_APP = $(shell if [ -d "$(MODDED_APP_STANDARD)" ]; then echo "$(MODDED_APP_STANDARD)"; elif [ -d "$(MODDED_APP_CREATOR)" ]; then echo "$(MODDED_APP_CREATOR)"; else echo "$(MODDED_APP_STANDARD)"; fi)
 FW_DIR = $(MODDED_APP)/Contents/Frameworks/FCPBridge.framework
 ENTITLEMENTS = entitlements.plist
 

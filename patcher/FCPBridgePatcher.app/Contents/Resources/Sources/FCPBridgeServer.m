@@ -864,8 +864,7 @@ static NSDictionary *FCPBridge_handleFCPXMLImport(NSDictionary *params) {
                 __block BOOL opened = NO;
                 dispatch_semaphore_t sem = dispatch_semaphore_create(0);
                 [[NSWorkspace sharedWorkspace] openURLs:@[fileURL]
-                    withApplicationAtURL:[NSURL fileURLWithPath:
-                        @"/Applications/Final Cut Pro.app"]
+                    withApplicationAtURL:[[NSBundle mainBundle] bundleURL]
                     configuration:config
                     completionHandler:^(NSRunningApplication *app, NSError *error) {
                         opened = (error == nil);
@@ -4463,6 +4462,129 @@ void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
             (IMP)FCPBridge_swizzled_displayTransitionAlert);
         FCPBridge_log(@"[FreezeExtend] Swizzled -[FFAnchoredSequence displayTransitionAvailableMediaAlertDialog:]");
     }
+}
+
+#pragma mark - Effect Drag as Adjustment Clip
+
+// When a video filter is dragged from the Effects Browser to empty timeline space
+// (above/below clips), create an adjustment clip with that effect instead of rejecting.
+// connectAdjustmentClip: already handles getting the selected effect from the
+// Effects Browser, applying it, and naming the clip after the effect.
+
+static BOOL sEffectDropOnEmptySpace = NO;
+static IMP sOrigValidateEffectsDrop = NULL;
+static IMP sOrigTLKPerformDragOp = NULL;
+
+// Swizzled -[FFAnchoredTimelineModule _validateEffectsDrop:onItem:atIndex:]
+// Original rejects drops when item is the root (empty space). We accept those
+// for video filters so the user gets a green "+" cursor.
+static unsigned long long FCPBridge_swizzled_validateEffectsDrop(
+    id self, SEL _cmd, id pasteboard, id item, long long index)
+{
+    unsigned long long result = ((unsigned long long (*)(id, SEL, id, id, long long))
+        sOrigValidateEffectsDrop)(self, _cmd, pasteboard, item, index);
+
+    if (result != 0) {
+        // Original accepted (drop on a valid clip) — normal behavior
+        sEffectDropOnEmptySpace = NO;
+        return result;
+    }
+
+    // Original rejected. Check if this is a video filter over empty space.
+    SEL hasTypeSel = NSSelectorFromString(@"hasEffectsWithType:");
+    if (![pasteboard respondsToSelector:hasTypeSel]) {
+        sEffectDropOnEmptySpace = NO;
+        return 0;
+    }
+    BOOL hasVideoFilter = ((BOOL (*)(id, SEL, id))objc_msgSend)(
+        pasteboard, hasTypeSel, @"effect.video.filter");
+    if (!hasVideoFilter) {
+        sEffectDropOnEmptySpace = NO;
+        return 0;
+    }
+
+    // Check if item is the root item (empty timeline space)
+    SEL rootSel = NSSelectorFromString(@"rootItem");
+    if (![self respondsToSelector:rootSel]) {
+        sEffectDropOnEmptySpace = NO;
+        return 0;
+    }
+    id rootItem = ((id (*)(id, SEL))objc_msgSend)(self, rootSel);
+    if (item != rootItem) {
+        sEffectDropOnEmptySpace = NO;
+        return 0;
+    }
+
+    // Accept the drop — we'll create an adjustment clip in performDragOperation:
+    sEffectDropOnEmptySpace = YES;
+    return 1; // NSDragOperationCopy
+}
+
+// Swizzled -[TLKTimelineView performDragOperation:]
+// Intercepts the drop before FCP's normal handling. When our flag is set,
+// calls connectAdjustmentClip: (creates adjustment clip with the selected effect).
+static char FCPBridge_swizzled_TLKPerformDragOp(id self, SEL _cmd, id draggingInfo) {
+    if (sEffectDropOnEmptySpace) {
+        sEffectDropOnEmptySpace = NO;
+
+        id timelineModule = FCPBridge_getActiveTimelineModule();
+        if (timelineModule) {
+            SEL adjSel = NSSelectorFromString(@"connectAdjustmentClip:");
+            if ([timelineModule respondsToSelector:adjSel]) {
+                FCPBridge_log(@"[EffectDrag] Creating adjustment clip from dropped effect");
+                ((void (*)(id, SEL, id))objc_msgSend)(timelineModule, adjSel, nil);
+                return 1; // YES — drop handled
+            }
+        }
+        // Fallback: let FCP handle it normally
+    }
+
+    return ((char (*)(id, SEL, id))sOrigTLKPerformDragOp)(self, _cmd, draggingInfo);
+}
+
+static void FCPBridge_installEffectDragSwizzles(int attempt) {
+    if (attempt >= 120) {
+        FCPBridge_log(@"[EffectDrag] Classes not available after %d attempts — giving up", attempt);
+        return;
+    }
+
+    Class tlmClass = objc_getClass("FFAnchoredTimelineModule");
+    Class tlkClass = objc_getClass("TLKTimelineView");
+
+    if (!tlmClass || !tlkClass) {
+        // Frameworks not loaded yet — retry in 2 seconds (up to 4 minutes)
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            FCPBridge_installEffectDragSwizzles(attempt + 1);
+        });
+        return;
+    }
+
+    // Swizzle _validateEffectsDrop:onItem:atIndex: on FFAnchoredTimelineModule
+    SEL valSel = NSSelectorFromString(@"_validateEffectsDrop:onItem:atIndex:");
+    Method valMethod = class_getInstanceMethod(tlmClass, valSel);
+    if (valMethod) {
+        sOrigValidateEffectsDrop = method_setImplementation(valMethod,
+            (IMP)FCPBridge_swizzled_validateEffectsDrop);
+        FCPBridge_log(@"[EffectDrag] Swizzled -[FFAnchoredTimelineModule _validateEffectsDrop:onItem:atIndex:]");
+    } else {
+        FCPBridge_log(@"[EffectDrag] WARNING: _validateEffectsDrop:onItem:atIndex: not found");
+    }
+
+    // Swizzle performDragOperation: on TLKTimelineView
+    SEL perfSel = @selector(performDragOperation:);
+    Method perfMethod = class_getInstanceMethod(tlkClass, perfSel);
+    if (perfMethod) {
+        sOrigTLKPerformDragOp = method_setImplementation(perfMethod,
+            (IMP)FCPBridge_swizzled_TLKPerformDragOp);
+        FCPBridge_log(@"[EffectDrag] Swizzled -[TLKTimelineView performDragOperation:]");
+    } else {
+        FCPBridge_log(@"[EffectDrag] WARNING: performDragOperation: not found on TLKTimelineView");
+    }
+}
+
+void FCPBridge_installEffectDragAsAdjustmentClip(void) {
+    FCPBridge_installEffectDragSwizzles(0);
 }
 
 #pragma mark - Transition Handlers

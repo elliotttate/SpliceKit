@@ -10,15 +10,15 @@
 		</data>
 		<key>Resources/FCPBridge</key>
 		<data>
-		Rs0cmY9oTtXiDKcbbVDMz4arb8Y=
+		AsBn+1DTTK+qF2gCu095cYADI/w=
 		</data>
 		<key>Resources/Sources/FCPBridge.h</key>
 		<data>
-		OQKN1LrALiv09ov1we5BXiid0y8=
+		wMEr9uOxuFh30SJG45ff8S32LAA=
 		</data>
 		<key>Resources/Sources/FCPBridge.m</key>
 		<data>
-		RL9PyHKXpJM/YnJj7ZZS82PNQ+w=
+		rGOMRDJKmzd/e61bDZuKdNRpkfI=
 		</data>
 		<key>Resources/Sources/FCPBridgeRuntime.m</key>
 		<data>
@@ -26,7 +26,7 @@
 		</data>
 		<key>Resources/Sources/FCPBridgeServer.m</key>
 		<data>
-		zbOBa4xhZdLWcog4qn1R6f5hltQ=
+		Ke4u8eJ9cxeM2/ADe+vp14kX9X0=
 		</data>
 		<key>Resources/Sources/FCPBridgeSwizzle.m</key>
 		<data>
@@ -66,7 +66,7 @@
 		</data>
 		<key>Resources/tools/silence-detector</key>
 		<data>
-		cIpvXivrn5c5B2oUKH4Ddn403hs=
+		0qvW1V4sCdX99ust6EBCXTLNsWI=
 		</data>
 		<key>Resources/tools/silence-detector.swift</key>
 		<data>
@@ -95,21 +95,21 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			KafVSHU4nBuAbm1GG2H2aal61hLxXeZsI07p+1Kr6tI=
+			xLSNNO3kmPyN4N+7u5QtYsrvD7bpqtJsy0MuwPLR+LQ=
 			</data>
 		</dict>
 		<key>Resources/Sources/FCPBridge.h</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			T4zBGwBQBS7uU16ZVe7sohcO3hPz0XKFovTM7A67q0c=
+			AoXAMRZRVhv6UeCUkK+hW6Ul7O6yQClDmbfugJu/N9w=
 			</data>
 		</dict>
 		<key>Resources/Sources/FCPBridge.m</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			KC57k3lxbG2SJmjKFrkTrktHFxE/lfxMMZaw4gs+zgk=
+			g+JcFbs6CmDqJARzAJCDTYzSJcZJ3S51t7/02r7P+1A=
 			</data>
 		</dict>
 		<key>Resources/Sources/FCPBridgeRuntime.m</key>
@@ -123,7 +123,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			UIWvvlrKAJSFybeaFCJ9ruASMk/fjJUDf+h/7F+/m0Y=
+			l7bZVdpfV9TD87EYMcA/MCSuPkdy7ZJwrJm6HNF2Zaw=
 			</data>
 		</dict>
 		<key>Resources/Sources/FCPBridgeSwizzle.m</key>
@@ -193,7 +193,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			bw0fxUNpUVRio9inLaNFyGyTDSJAGWjgbRU9jDIGp4Q=
+			4p/gNaxZOpcGG6dIbYET7rx4BnDD1z6ki+Jms2bDW1I=
 			</data>
 		</dict>
 		<key>Resources/tools/silence-detector.swift</key>

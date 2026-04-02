@@ -35,14 +35,45 @@ class PatcherModel: ObservableObject {
     @Published var fcpVersion: String = ""
     @Published var bridgeConnected = false
 
-    let sourceApp = "/Applications/Final Cut Pro.app"
+    static let standardApp = "/Applications/Final Cut Pro.app"
+    static let creatorStudioApp = "/Applications/Final Cut Pro Creator Studio.app"
+
+    @Published var sourceApp: String
     let destDir: String
-    let moddedApp: String
+    var moddedApp: String { destDir + "/" + (sourceApp as NSString).lastPathComponent }
     let repoDir: String
 
+    /// Which FCP editions are installed
+    var availableEditions: [(label: String, path: String)] {
+        var editions: [(String, String)] = []
+        if FileManager.default.fileExists(atPath: Self.standardApp) {
+            editions.append(("Final Cut Pro", Self.standardApp))
+        }
+        if FileManager.default.fileExists(atPath: Self.creatorStudioApp) {
+            editions.append(("Final Cut Pro Creator Studio", Self.creatorStudioApp))
+        }
+        return editions
+    }
+
+    var hasBothEditions: Bool { availableEditions.count > 1 }
+
+    func switchEdition(to path: String) {
+        sourceApp = path
+        fcpVersion = ""
+        checkStatus()
+    }
+
     init() {
+        // Auto-detect FCP edition: prefer standard, fall back to Creator Studio
+        let fm = FileManager.default
+        if fm.fileExists(atPath: Self.standardApp) {
+            sourceApp = Self.standardApp
+        } else if fm.fileExists(atPath: Self.creatorStudioApp) {
+            sourceApp = Self.creatorStudioApp
+        } else {
+            sourceApp = Self.standardApp
+        }
         destDir = NSHomeDirectory() + "/Desktop/FinalCutPro_Modded"
-        moddedApp = destDir + "/Final Cut Pro.app"
         // Find FCPBridge sources. Priority:
         // 1. Embedded in app bundle (Resources/Sources/) — self-contained release
         // 2. Relative to app bundle (developer running from repo checkout)
@@ -606,8 +637,27 @@ struct ContentView: View {
                 }
             }
 
+            if model.hasBothEditions {
+                HStack(spacing: 6) {
+                    Text("Edition:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: Binding(
+                        get: { model.sourceApp },
+                        set: { model.switchEdition(to: $0) }
+                    )) {
+                        ForEach(model.availableEditions, id: \.path) { edition in
+                            Text(edition.label).tag(edition.path)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                }
+            }
+
             if !model.fcpVersion.isEmpty {
-                Label("Final Cut Pro v\(model.fcpVersion)", systemImage: "info.circle")
+                Label("\((model.sourceApp as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")) v\(model.fcpVersion)", systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

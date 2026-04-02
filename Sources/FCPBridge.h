@@ -59,6 +59,10 @@ void FCPBridge_broadcastEvent(NSDictionary *event);
 
 void FCPBridge_installTransitionFreezeExtendSwizzle(void);
 
+#pragma mark - Effect Drag as Adjustment Clip
+
+void FCPBridge_installEffectDragAsAdjustmentClip(void);
+
 #pragma mark - Viewer Pinch-to-Zoom
 
 void FCPBridge_installViewerPinchZoom(void);
