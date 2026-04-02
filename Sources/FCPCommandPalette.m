@@ -366,6 +366,7 @@ static NSString * const kAIRowID = @"FCPAIRow";
     // --- Export ---
     add(@"Export FCPXML", @"exportXML", @"timeline", FCPCommandCategoryExport, @"Export", nil, @"Export timeline as FCPXML", @[@"xml"]);
     add(@"Share Selection", @"shareSelection", @"timeline", FCPCommandCategoryExport, @"Export", nil, @"Share/export selected range", @[@"render"]);
+    add(@"Batch Export", @"batchExport", @"batch_export", FCPCommandCategoryExport, @"Export", nil, @"Export each clip individually using default share destination", @[@"batch", @"export all", @"individual"]);
     add(@"Auto Reframe", @"autoReframe", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Auto-reframe for different aspect ratios", @[@"crop", @"aspect"]);
     add(@"Stabilize Subject", @"stabilize_subject", @"subject_stabilize", FCPCommandCategoryEffects, @"Effects", nil, @"Lock camera onto a subject — keeps it fixed while background moves", @[@"lock on", @"track", @"stabilize", @"pin", @"follow", @"steady"]);
 
@@ -1070,6 +1071,9 @@ static NSString * const kAIRowID = @"FCPAIRow";
     } else if ([type isEqualToString:@"scene_options"]) {
         [self showSceneDetectionOptionsPanel];
         result = @{@"action": action, @"status": @"started"};
+    } else if ([type isEqualToString:@"batch_export"]) {
+        extern NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params);
+        result = FCPBridge_handleBatchExport(@{@"scope": @"all"});
     }
 
     if (!result) {

@@ -717,8 +717,9 @@ NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
 
             // Contained items - FCP uses spine model: sequence -> primaryObject (collection) -> items
             id itemsSource = nil;
+            id primaryObj = nil;
             if ([sequence respondsToSelector:@selector(primaryObject)]) {
-                id primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject));
+                primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject));
                 if (primaryObj && [primaryObj respondsToSelector:@selector(containedItems)]) {
                     itemsSource = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
                 }
@@ -735,6 +736,11 @@ NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
                     state[@"itemCount"] = @(arr.count);
                     NSMutableArray *itemList = [NSMutableArray array];
                     NSInteger count = MIN((NSInteger)arr.count, limit);
+
+                    // Check if container supports effectiveRangeOfObject: for absolute positions
+                    SEL erSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+                    BOOL canGetRange = primaryObj && [primaryObj respondsToSelector:erSel];
+
                     for (NSInteger i = 0; i < count; i++) {
                         id item = arr[i];
                         NSMutableDictionary *info = [NSMutableDictionary dictionary];
@@ -769,6 +775,26 @@ NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
                         if ([item respondsToSelector:trimOffSel]) {
                             FCPBridge_CMTime t = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(item, trimOffSel);
                             info[@"trimmedOffset"] = FCPBridge_serializeCMTime(t);
+                        }
+
+                        // Absolute position in timeline via effectiveRangeOfObject:
+                        if (canGetRange) {
+                            @try {
+                                FCPBridge_CMTimeRange range = ((FCPBridge_CMTimeRange (*)(id, SEL, id))objc_msgSend)(
+                                    primaryObj, erSel, item);
+                                info[@"startTime"] = FCPBridge_serializeCMTime(range.start);
+                                // Compute end time = start + duration
+                                FCPBridge_CMTime endTime = range.start;
+                                if (range.duration.timescale == range.start.timescale) {
+                                    endTime.value = range.start.value + range.duration.value;
+                                } else if (range.duration.timescale > 0) {
+                                    endTime.value = range.start.value +
+                                        (range.duration.value * range.start.timescale / range.duration.timescale);
+                                }
+                                info[@"endTime"] = FCPBridge_serializeCMTime(endTime);
+                            } @catch (NSException *e) {
+                                // Silently skip if effectiveRangeOfObject: fails for this item
+                            }
                         }
 
                         [itemList addObject:info];
@@ -1175,6 +1201,11 @@ NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
         @"exportXML":        @"exportXML:",
         @"shareSelection":   @"shareSelection:",
 
+        // Range selection (in/out points)
+        @"setRangeStart":    @"setRangeStart:",
+        @"setRangeEnd":      @"setRangeEnd:",
+        @"clearRange":       @"clearRange:",
+
         // Keyframes
         @"addKeyframe":      @"addKeyframe:",
         @"deleteKeyframes":  @"deleteKeyframes:",
@@ -1461,6 +1492,723 @@ NSDictionary *FCPBridge_handlePlaybackSeek(NSDictionary *params) {
         }
     });
     return result ?: @{@"error": @"Failed to seek"};
+}
+
+#pragma mark - Range Selection & Batch Export
+
+// Helper: build a CMTime from seconds using the sequence timescale
+static FCPBridge_CMTime FCPBridge_buildCMTime(double seconds, id timeline) {
+    int32_t timescale = 24000; // default
+    SEL seqSel = @selector(sequence);
+    if ([timeline respondsToSelector:seqSel]) {
+        id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, seqSel);
+        if (sequence) {
+            SEL fdSel = NSSelectorFromString(@"frameDuration");
+            if ([sequence respondsToSelector:fdSel]) {
+                FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))objc_msgSend)(sequence, fdSel);
+                if (fd.timescale > 0) timescale = fd.timescale;
+            }
+        }
+    }
+    FCPBridge_CMTime t;
+    t.value = (int64_t)(seconds * timescale);
+    t.timescale = timescale;
+    t.flags = 1; // kCMTimeFlags_Valid
+    t.epoch = 0;
+    return t;
+}
+
+// Helper: simulate a key press in FCP (posts key down + key up events)
+static void FCPBridge_simulateKeyPress(unsigned short keyCode, NSString *chars, NSEventModifierFlags mods) {
+    id app = ((id (*)(id, SEL))objc_msgSend)(
+        objc_getClass("NSApplication"), @selector(sharedApplication));
+    id window = ((id (*)(id, SEL))objc_msgSend)(app, @selector(mainWindow));
+    NSInteger winNum = window ? [(NSWindow *)window windowNumber] : 0;
+
+    NSEvent *keyDown = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                        location:NSZeroPoint
+                                   modifierFlags:mods
+                                       timestamp:[[NSProcessInfo processInfo] systemUptime]
+                                    windowNumber:winNum
+                                         context:nil
+                                      characters:chars
+                     charactersIgnoringModifiers:chars
+                                       isARepeat:NO
+                                         keyCode:keyCode];
+    [app sendEvent:keyDown];
+
+    NSEvent *keyUp = [NSEvent keyEventWithType:NSEventTypeKeyUp
+                                      location:NSZeroPoint
+                                 modifierFlags:mods
+                                     timestamp:[[NSProcessInfo processInfo] systemUptime]
+                                  windowNumber:winNum
+                                       context:nil
+                                    characters:chars
+                   charactersIgnoringModifiers:chars
+                                     isARepeat:NO
+                                       keyCode:keyCode];
+    [app sendEvent:keyUp];
+}
+
+// Helper: seek playhead and mark in/out using simulated key presses
+static BOOL FCPBridge_seekAndMark(id timeline, FCPBridge_CMTime time, NSString *actionSelector) {
+    // Seek playhead
+    SEL setSel = @selector(setPlayheadTime:);
+    if (![timeline respondsToSelector:setSel]) return NO;
+    ((void (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(timeline, setSel, time);
+
+    // Let FCP update playhead position
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+
+    // Simulate key press: 'I' (keyCode 34) for mark in, 'O' (keyCode 31) for mark out
+    if ([actionSelector isEqualToString:@"setRangeStart:"]) {
+        FCPBridge_simulateKeyPress(34, @"i", 0); // 'I' key = mark in
+    } else if ([actionSelector isEqualToString:@"setRangeEnd:"]) {
+        FCPBridge_simulateKeyPress(31, @"o", 0); // 'O' key = mark out
+    } else if ([actionSelector isEqualToString:@"clearRange:"]) {
+        FCPBridge_simulateKeyPress(7, @"x", NSEventModifierFlagOption); // Option+X = clear range
+    } else {
+        // Fallback: try responder chain
+        id app = ((id (*)(id, SEL))objc_msgSend)(
+            objc_getClass("NSApplication"), @selector(sharedApplication));
+        SEL actionSel = NSSelectorFromString(actionSelector);
+        return ((BOOL (*)(id, SEL, SEL, id, id))objc_msgSend)(
+            app, @selector(sendAction:to:from:), actionSel, nil, nil);
+    }
+
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    return YES;
+}
+
+static NSDictionary *FCPBridge_handleSetRange(NSDictionary *params) {
+    NSNumber *startSec = params[@"startSeconds"];
+    NSNumber *endSec = params[@"endSeconds"];
+    if (!startSec || !endSec) {
+        return @{@"error": @"startSeconds and endSeconds parameters required"};
+    }
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            id timeline = FCPBridge_getActiveTimelineModule();
+            if (!timeline) {
+                result = @{@"error": @"No active timeline module"};
+                return;
+            }
+
+            double startVal = [startSec doubleValue];
+            double endVal = [endSec doubleValue];
+
+            // Build CMTimes
+            FCPBridge_CMTime startTime = FCPBridge_buildCMTime(startVal, timeline);
+            FCPBridge_CMTime endTime = FCPBridge_buildCMTime(endVal, timeline);
+
+            // Seek to start, mark in
+            BOOL inOk = FCPBridge_seekAndMark(timeline, startTime, @"setRangeStart:");
+            // Seek to end, mark out
+            BOOL outOk = FCPBridge_seekAndMark(timeline, endTime, @"setRangeEnd:");
+
+            result = @{
+                @"status": @"ok",
+                @"startSeconds": @(startVal),
+                @"endSeconds": @(endVal),
+                @"rangeStartSet": @(inOk),
+                @"rangeEndSet": @(outOk),
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to set range"};
+}
+
+// Helper: collect exportable clips with their time ranges (no ARC-managed ObjC objects in the mix)
+static NSArray *FCPBridge_collectExportableClips(id primaryObj, NSSet *selectedSet) {
+    SEL erSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+    if (![primaryObj respondsToSelector:erSel]) return nil;
+
+    NSArray *allItems = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
+    if (![allItems isKindOfClass:[NSArray class]]) return nil;
+
+    Class transitionClass = objc_getClass("FFAnchoredTransition");
+    NSMutableArray *clips = [NSMutableArray array];
+
+    for (id item in allItems) {
+        if (transitionClass && [item isKindOfClass:transitionClass]) continue;
+        NSString *className = NSStringFromClass([item class]);
+        if ([className containsString:@"Gap"]) continue;
+        if (selectedSet && ![selectedSet containsObject:item]) continue;
+
+        @try {
+            FCPBridge_CMTimeRange range = ((FCPBridge_CMTimeRange (*)(id, SEL, id))objc_msgSend)(
+                primaryObj, erSel, item);
+            NSString *name = @"Untitled";
+            if ([item respondsToSelector:@selector(displayName)]) {
+                id n = ((id (*)(id, SEL))objc_msgSend)(item, @selector(displayName));
+                if (n) name = n;
+            }
+            FCPBridge_CMTime endTime = range.start;
+            if (range.duration.timescale == range.start.timescale) {
+                endTime.value = range.start.value + range.duration.value;
+            } else if (range.duration.timescale > 0) {
+                endTime.value = range.start.value +
+                    (range.duration.value * range.start.timescale / range.duration.timescale);
+            }
+            [clips addObject:@{
+                @"name": name,
+                @"startTime": FCPBridge_serializeCMTime(range.start),
+                @"endTime": FCPBridge_serializeCMTime(endTime),
+                @"startCMTime": [NSValue valueWithBytes:&range.start objCType:@encode(FCPBridge_CMTime)],
+                @"endCMTime": [NSValue valueWithBytes:&endTime objCType:@encode(FCPBridge_CMTime)],
+            }];
+        } @catch (NSException *e) { /* skip */ }
+    }
+    return clips;
+}
+
+// --- Batch Export: swizzle approach ---
+// We swizzle FFSequenceExporter's showSharePanelWithSources:... to skip the modal dialog
+// and directly queue the export. The original method creates a share panel, runs it modally,
+// then queues batches. Our replacement creates the panel silently, extracts batches, and queues.
+
+static NSURL *sBatchExportFolderURL = nil;
+static NSString *sBatchExportFileName = nil;
+static BOOL sBatchExportActive = NO;
+static IMP sOrigShowSharePanel = NULL;
+static NSInteger sBatchExportPendingCount = 0; // tracks async exports still running
+static FCPBridge_CMTime sBatchExportClipStart;
+static FCPBridge_CMTime sBatchExportClipEnd;
+
+// Swizzle NSWorkspace openURL: to suppress auto-open of exported files
+static IMP sOrigOpenURL = NULL;
+static BOOL FCPBridge_swizzled_openURL(id self, SEL _cmd, id url) {
+    if (sBatchExportPendingCount > 0 && url && [url isKindOfClass:[NSURL class]]) {
+        // Suppress opening files from the batch export folder
+        NSString *path = [(NSURL *)url path];
+        NSString *folderPath = [sBatchExportFolderURL path];
+        if (folderPath && [path hasPrefix:folderPath]) {
+            FCPBridge_log(@"[BatchExport] Suppressed auto-open: %@", path);
+            sBatchExportPendingCount--;
+            return YES; // pretend we opened it
+        }
+    }
+    // Call original
+    return sOrigOpenURL ? ((BOOL (*)(id, SEL, id))sOrigOpenURL)(self, _cmd, url) : NO;
+}
+
+// Also suppress activateFileViewerSelectingURLs: (Reveal in Finder)
+static IMP sOrigRevealURLs = NULL;
+static void FCPBridge_swizzled_revealURLs(id self, SEL _cmd, id urls) {
+    if (sBatchExportPendingCount > 0 && urls) {
+        FCPBridge_log(@"[BatchExport] Suppressed reveal in Finder");
+        return;
+    }
+    if (sOrigRevealURLs) ((void (*)(id, SEL, id))sOrigRevealURLs)(self, _cmd, urls);
+}
+
+// Suppress openURL:configuration:completionHandler: (modern API)
+static IMP sOrigOpenURLConfig = NULL;
+static void FCPBridge_swizzled_openURLConfig(id self, SEL _cmd, id url, id config, id handler) {
+    if (sBatchExportPendingCount > 0 && url && [url isKindOfClass:[NSURL class]]) {
+        NSString *path = [(NSURL *)url path];
+        NSString *folderPath = [sBatchExportFolderURL path];
+        if (folderPath && [path hasPrefix:folderPath]) {
+            FCPBridge_log(@"[BatchExport] Suppressed openURL:config: %@", path);
+            sBatchExportPendingCount--;
+            if (handler) ((void (^)(id, id))handler)(nil, nil);
+            return;
+        }
+    }
+    if (sOrigOpenURLConfig) ((void (*)(id, SEL, id, id, id))sOrigOpenURLConfig)(self, _cmd, url, config, handler);
+}
+
+// Suppress openURLs:withApplicationAtURL:configuration:completionHandler:
+static IMP sOrigOpenURLs = NULL;
+static void FCPBridge_swizzled_openURLs(id self, SEL _cmd, id urls, id appURL, id config, id handler) {
+    if (sBatchExportPendingCount > 0 && urls) {
+        FCPBridge_log(@"[BatchExport] Suppressed openURLs: batch");
+        sBatchExportPendingCount--;
+        if (handler) ((void (^)(id, id))handler)(nil, nil);
+        return;
+    }
+    if (sOrigOpenURLs) ((void (*)(id, SEL, id, id, id, id))sOrigOpenURLs)(self, _cmd, urls, appURL, config, handler);
+}
+
+// Suppress openFile: (deprecated but still used)
+static IMP sOrigOpenFile = NULL;
+static BOOL FCPBridge_swizzled_openFile(id self, SEL _cmd, id path) {
+    if (sBatchExportPendingCount > 0 && path) {
+        NSString *folderPath = [sBatchExportFolderURL path];
+        if (folderPath && [(NSString *)path hasPrefix:folderPath]) {
+            sBatchExportPendingCount--;
+            return YES;
+        }
+    }
+    return sOrigOpenFile ? ((BOOL (*)(id, SEL, id))sOrigOpenFile)(self, _cmd, path) : NO;
+}
+
+// Replacement for -[FFSequenceExporter showSharePanelWithSources:destination:destinationURL:parentWindow:]
+// Called after shareToDestination:parentWindow: has already converted sources to CK format
+static void FCPBridge_swizzled_showSharePanel(id self, SEL _cmd, id sources, id dest, id destURL, id parentWindow) {
+    if (!sBatchExportActive) {
+        // Not in batch mode - call original
+        if (sOrigShowSharePanel) {
+            ((void (*)(id, SEL, id, id, id, id))sOrigShowSharePanel)(self, _cmd, sources, dest, destURL, parentWindow);
+        }
+        return;
+    }
+
+    FCPBridge_log(@"[BatchExport] Swizzled showSharePanel called with %@ sources, dest=%@",
+        sources ? @([(NSArray *)sources count]) : @"nil", NSStringFromClass([dest class]));
+
+    @try {
+        // Determine panel class (consumer vs pro)
+        BOOL isConsumer = ((BOOL (*)(id, SEL))objc_msgSend)(
+            objc_getClass("Flexo"), NSSelectorFromString(@"isConsumerUI"));
+
+        Class panelClass = isConsumer
+            ? objc_getClass("FFConsumerSharePanel")
+            : objc_getClass("FFSharePanel");
+        if (!panelClass) panelClass = objc_getClass("FFBaseSharePanel");
+
+        // Modify source to set clip-specific in/out range
+        id firstSource = [(NSArray *)sources firstObject];
+        id sourceToUse = firstSource;
+
+        SEL mutableCopySel = @selector(mutableCopy);
+        SEL setInOutSel = NSSelectorFromString(@"setInPoint:outPoint:");
+        if (firstSource && [firstSource respondsToSelector:mutableCopySel] &&
+            sBatchExportClipStart.flags == 1 && sBatchExportClipEnd.flags == 1) {
+            // Create a mutable copy and set the clip's range as in/out points
+            sourceToUse = ((id (*)(id, SEL))objc_msgSend)(firstSource, mutableCopySel);
+            if (sourceToUse && [sourceToUse respondsToSelector:setInOutSel]) {
+                // Convert our CMTime to NSValue objects that the source expects
+                // The source's setInPoint:outPoint: takes CMTime-wrapping objects
+                // Let's try creating PCTimeObject or similar
+                SEL inPtSel = NSSelectorFromString(@"inPoint");
+                id origIn = [firstSource respondsToSelector:inPtSel]
+                    ? ((id (*)(id, SEL))objc_msgSend)(firstSource, inPtSel) : nil;
+                FCPBridge_log(@"[BatchExport] Original inPoint: %@ (class: %@)",
+                    origIn, origIn ? NSStringFromClass([origIn class]) : @"nil");
+
+                // Try creating time objects from our CMTime values
+                // PCTimeObject or similar wraps CMTime
+                Class timeObjClass = objc_getClass("PCTimeObject");
+                if (timeObjClass) {
+                    SEL initWithTimeSel = NSSelectorFromString(@"timeObjectWithCMTime:");
+                    if ([(id)timeObjClass respondsToSelector:initWithTimeSel]) {
+                        id startObj = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                            (id)timeObjClass, initWithTimeSel, sBatchExportClipStart);
+                        id endObj = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                            (id)timeObjClass, initWithTimeSel, sBatchExportClipEnd);
+                        if (startObj && endObj) {
+                            ((void (*)(id, SEL, id, id))objc_msgSend)(sourceToUse, setInOutSel, startObj, endObj);
+                            FCPBridge_log(@"[BatchExport] Set in/out: %@ - %@", startObj, endObj);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Create the panel silently (no runModal)
+        id panel = nil;
+        void *rawError = NULL;
+
+        if (isConsumer) {
+            SEL createSel = NSSelectorFromString(@"sharePanelWithSource:destination:error:");
+            panel = ((id (*)(id, SEL, id, id, void **))objc_msgSend)(
+                (id)panelClass, createSel, sourceToUse, dest, &rawError);
+        } else {
+            NSArray *modSources = @[sourceToUse];
+            SEL createSel = NSSelectorFromString(@"sharePanelWithSources:destination:error:");
+            panel = ((id (*)(id, SEL, id, id, void **))objc_msgSend)(
+                (id)panelClass, createSel, modSources, dest, &rawError);
+        }
+
+        if (!panel) {
+            id panelError = rawError ? (__bridge id)rawError : nil;
+            FCPBridge_log(@"[BatchExport] Panel creation failed: %@",
+                panelError ? ((id (*)(id, SEL))objc_msgSend)(panelError, @selector(localizedDescription)) : @"nil");
+            return;
+        }
+
+        // Set destination URL to our batch export folder
+        NSURL *outputFolderURL = sBatchExportFolderURL ?: (NSURL *)destURL;
+        SEL setURLSel = NSSelectorFromString(@"setDestinationURL:");
+        if ([panel respondsToSelector:setURLSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(panel, setURLSel, outputFolderURL);
+        }
+
+        // Set delegate (the exporter itself, needed for queuing)
+        SEL setDelegateSel = NSSelectorFromString(@"setDelegate:");
+        if ([panel respondsToSelector:setDelegateSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(panel, setDelegateSel, self);
+        }
+
+        // Get batches (created during panel init)
+        NSArray *batches = ((id (*)(id, SEL))objc_msgSend)(panel, NSSelectorFromString(@"batches"));
+        FCPBridge_log(@"[BatchExport] Panel created %lu batches", (unsigned long)(batches ? batches.count : 0));
+
+        if (!batches || batches.count == 0) {
+            FCPBridge_log(@"[BatchExport] No batches from panel");
+            return;
+        }
+
+        // Set per-clip filename on targets if provided
+        if (sBatchExportFileName && sBatchExportFolderURL) {
+            NSURL *fileURL = [sBatchExportFolderURL URLByAppendingPathComponent:sBatchExportFileName];
+            for (id batch in batches) {
+                id jobs = ((id (*)(id, SEL))objc_msgSend)(batch, NSSelectorFromString(@"jobs"));
+                if (!jobs || ![jobs isKindOfClass:[NSArray class]]) continue;
+                for (id job in jobs) {
+                    id targets = ((id (*)(id, SEL))objc_msgSend)(job, NSSelectorFromString(@"targets"));
+                    if (!targets || ![targets isKindOfClass:[NSArray class]]) continue;
+                    for (id target in targets) {
+                        if ([target respondsToSelector:NSSelectorFromString(@"setDestinationURL:")]) {
+                            ((void (*)(id, SEL, id))objc_msgSend)(target,
+                                NSSelectorFromString(@"setDestinationURL:"), fileURL);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Queue the export operations directly (no dialog!)
+        SEL queueSel = NSSelectorFromString(@"queueShareOperationsForBatches:addToTheater:");
+        if ([self respondsToSelector:queueSel]) {
+            FCPBridge_log(@"[BatchExport] Queuing batches on %@", NSStringFromClass([self class]));
+            ((void (*)(id, SEL, id, BOOL))objc_msgSend)(self, queueSel, batches, NO);
+            FCPBridge_log(@"[BatchExport] Queued successfully!");
+        } else {
+            FCPBridge_log(@"[BatchExport] Exporter doesn't respond to queueShareOperationsForBatches:");
+        }
+    } @catch (NSException *e) {
+        FCPBridge_log(@"[BatchExport] Exception in swizzled showSharePanel: %@", e.reason);
+    }
+}
+
+// Unused - kept for reference
+static NSString *FCPBridge_queueClipExport(id timeline, FCPBridge_CMTime startTime, FCPBridge_CMTime endTime,
+                                            NSURL *fileURL, id dest) {
+    // Set range for this clip
+    FCPBridge_seekAndMark(timeline, startTime, @"setRangeStart:");
+    FCPBridge_seekAndMark(timeline, endTime, @"setRangeEnd:");
+
+    // Get sources for this range via shareSelection:
+    SEL selSel = NSSelectorFromString(@"shareSelection:");
+    if (![timeline respondsToSelector:selSel]) return @"no shareSelection: method";
+
+    void *rawSources = ((void * (*)(id, SEL, id))objc_msgSend)(timeline, selSel, nil);
+    if (!rawSources) return @"no sources for range";
+
+    id sources = (__bridge id)rawSources;
+    FCPBridge_log(@"[BatchExport] shareSelection: returned %@ (class: %@)", sources, NSStringFromClass([sources class]));
+
+    if (![sources isKindOfClass:[NSArray class]]) {
+        return [NSString stringWithFormat:@"sources not array, got %@", NSStringFromClass([sources class])];
+    }
+    NSUInteger sourceCount = [(NSArray *)sources count];
+    if (sourceCount == 0) return @"empty sources";
+    FCPBridge_log(@"[BatchExport] Got %lu sources", (unsigned long)sourceCount);
+
+    // Create share panel silently to build CK batch objects
+    Class panelClass = objc_getClass("FFConsumerSharePanel")
+        ?: objc_getClass("FFSharePanel")
+        ?: objc_getClass("FFBaseSharePanel");
+    if (!panelClass) return @"no share panel class";
+    FCPBridge_log(@"[BatchExport] Using panel class: %@", NSStringFromClass(panelClass));
+
+    SEL createSel = NSSelectorFromString(@"sharePanelWithSource:destination:error:");
+    if (![(id)panelClass respondsToSelector:createSel]) return @"panel class has no create method";
+
+    id firstSource = [(NSArray *)sources firstObject];
+    FCPBridge_log(@"[BatchExport] First source: %@ (class: %@)", firstSource, NSStringFromClass([firstSource class]));
+
+    __unsafe_unretained id panelError = nil;
+    void *rawPanel = ((void * (*)(id, SEL, id, id, __unsafe_unretained id *))objc_msgSend)(
+        (id)panelClass, createSel, firstSource, dest, &panelError);
+    if (!rawPanel) {
+        NSString *errStr = panelError
+            ? [NSString stringWithFormat:@"panel: %@",
+               ((id (*)(id, SEL))objc_msgSend)(panelError, @selector(localizedDescription))]
+            : @"panel creation returned nil";
+        FCPBridge_log(@"[BatchExport] %@", errStr);
+        return errStr;
+    }
+    id panel = (__bridge id)rawPanel;
+    FCPBridge_log(@"[BatchExport] Panel created: %@", NSStringFromClass([panel class]));
+
+    // Set destination URL
+    SEL setURLSel = NSSelectorFromString(@"setDestinationURL:");
+    if ([panel respondsToSelector:setURLSel]) {
+        ((void (*)(id, SEL, id))objc_msgSend)(panel, setURLSel, [fileURL URLByDeletingLastPathComponent]);
+    }
+
+    // Extract batches
+    SEL batchesSel = NSSelectorFromString(@"batches");
+    if (![panel respondsToSelector:batchesSel]) return @"panel has no batches method";
+    NSArray *batches = ((id (*)(id, SEL))objc_msgSend)(panel, batchesSel);
+    if (!batches || ![batches isKindOfClass:[NSArray class]]) {
+        FCPBridge_log(@"[BatchExport] batches returned: %@ (class: %@)", batches, batches ? NSStringFromClass([batches class]) : @"nil");
+        return @"no batches";
+    }
+    FCPBridge_log(@"[BatchExport] Got %lu batches", (unsigned long)batches.count);
+    if (batches.count == 0) return @"zero batches";
+
+    // Log batch structure
+    for (NSUInteger bi = 0; bi < batches.count; bi++) {
+        id batch = batches[bi];
+        FCPBridge_log(@"[BatchExport] Batch %lu: %@ (class: %@)", (unsigned long)bi, batch, NSStringFromClass([batch class]));
+        SEL jobsSel = NSSelectorFromString(@"jobs");
+        if ([batch respondsToSelector:jobsSel]) {
+            NSArray *jobs = ((id (*)(id, SEL))objc_msgSend)(batch, jobsSel);
+            FCPBridge_log(@"[BatchExport]   Jobs: %lu", (unsigned long)(jobs ? [(NSArray *)jobs count] : 0));
+            if (jobs && [jobs isKindOfClass:[NSArray class]]) {
+                for (id job in jobs) {
+                    SEL targetsSel = NSSelectorFromString(@"targets");
+                    if ([job respondsToSelector:targetsSel]) {
+                        NSArray *targets = ((id (*)(id, SEL))objc_msgSend)(job, targetsSel);
+                        FCPBridge_log(@"[BatchExport]     Targets: %lu", (unsigned long)(targets ? [(NSArray *)targets count] : 0));
+                        if (targets && [targets isKindOfClass:[NSArray class]]) {
+                            for (id target in targets) {
+                                // Set destination URL on target
+                                SEL setDestSel = NSSelectorFromString(@"setDestinationURL:");
+                                if ([target respondsToSelector:setDestSel]) {
+                                    ((void (*)(id, SEL, id))objc_msgSend)(target, setDestSel, fileURL);
+                                    FCPBridge_log(@"[BatchExport]     Set target URL: %@", fileURL);
+                                }
+                                // Log output URLs
+                                SEL outSel = NSSelectorFromString(@"outputURLs");
+                                if ([target respondsToSelector:outSel]) {
+                                    id urls = ((id (*)(id, SEL))objc_msgSend)(target, outSel);
+                                    FCPBridge_log(@"[BatchExport]     Output URLs: %@", urls);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Create exporter and queue
+    Class exporterClass = objc_getClass("FFSequenceExporter");
+    SEL expSel = NSSelectorFromString(@"sequenceExporterWithSelection:useTimelinePlayback:");
+    if (!exporterClass || ![(id)exporterClass respondsToSelector:expSel]) return @"no exporter class";
+
+    void *rawExporter = ((void * (*)(id, SEL, id, id))objc_msgSend)(
+        (id)exporterClass, expSel, sources, nil);
+    if (!rawExporter) return @"exporter creation failed";
+    id exporter = (__bridge id)rawExporter;
+    FCPBridge_log(@"[BatchExport] Exporter: %@", NSStringFromClass([exporter class]));
+
+    SEL queueSel = NSSelectorFromString(@"queueShareOperationsForBatches:addToTheater:");
+    if (![exporter respondsToSelector:queueSel]) return @"exporter has no queue method";
+
+    FCPBridge_log(@"[BatchExport] Queuing %lu batches...", (unsigned long)batches.count);
+    ((void (*)(id, SEL, id, BOOL))objc_msgSend)(exporter, queueSel, batches, NO);
+    FCPBridge_log(@"[BatchExport] Queued successfully");
+    return @"queued";
+}
+
+NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params) {
+    NSString *scope = params[@"scope"] ?: @"all";
+    NSString *folderPath = params[@"folder"];
+
+    __block NSDictionary *result = nil;
+    FCPBridge_executeOnMainThread(^{
+        @try {
+            id timeline = FCPBridge_getActiveTimelineModule();
+            if (!timeline) { result = @{@"error": @"No active timeline module"}; return; }
+
+            id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+            if (!sequence) { result = @{@"error": @"No sequence in timeline"}; return; }
+
+            id primaryObj = [sequence respondsToSelector:@selector(primaryObject)]
+                ? ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject)) : nil;
+            if (!primaryObj) { result = @{@"error": @"Cannot access primary storyline"}; return; }
+
+            // Show folder picker
+            NSURL *folderURL = nil;
+            if (folderPath) {
+                folderURL = [NSURL fileURLWithPath:folderPath];
+            } else {
+                NSOpenPanel *openPanel = [NSOpenPanel openPanel];
+                openPanel.canChooseFiles = NO;
+                openPanel.canChooseDirectories = YES;
+                openPanel.canCreateDirectories = YES;
+                openPanel.prompt = @"Export Here";
+                openPanel.message = @"Choose destination folder for batch export";
+                NSModalResponse resp = [openPanel runModal];
+                if (resp != NSModalResponseOK) { result = @{@"status": @"cancelled"}; return; }
+                folderURL = openPanel.URL;
+            }
+            if (!folderURL) { result = @{@"error": @"No folder selected"}; return; }
+            [[NSFileManager defaultManager] createDirectoryAtURL:folderURL
+                                     withIntermediateDirectories:YES attributes:nil error:nil];
+
+            // Get selected set if needed
+            NSSet *selectedSet = nil;
+            if ([scope isEqualToString:@"selected"]) {
+                SEL selSel = NSSelectorFromString(@"selectedItems:includeItemBeforePlayheadIfLast:");
+                if ([timeline respondsToSelector:selSel]) {
+                    id sel = ((id (*)(id, SEL, BOOL, BOOL))objc_msgSend)(timeline, selSel, NO, NO);
+                    if ([sel isKindOfClass:[NSArray class]]) selectedSet = [NSSet setWithArray:sel];
+                }
+                if (!selectedSet || selectedSet.count == 0) {
+                    result = @{@"error": @"No clips selected"}; return;
+                }
+            }
+
+            // Get default share destination
+            Class destClass = objc_getClass("FFShareDestination");
+            id dest = destClass ? ((id (*)(id, SEL))objc_msgSend)((id)destClass,
+                NSSelectorFromString(@"defaultUserDestination")) : nil;
+            if (!dest) { result = @{@"error": @"No default share destination. Configure in File > Share > Add Destination."}; return; }
+
+            // Collect clips
+            NSArray *clips = FCPBridge_collectExportableClips(primaryObj, selectedSet);
+            if (!clips || clips.count == 0) { result = @{@"error": @"No exportable clips"}; return; }
+
+            // Install swizzle on FFSequenceExporter to bypass share dialog
+            Class exporterClass = objc_getClass("FFSequenceExporter");
+            SEL showPanelSel = NSSelectorFromString(@"showSharePanelWithSources:destination:destinationURL:parentWindow:");
+            Method origMethod = exporterClass ? class_getInstanceMethod(exporterClass, showPanelSel) : NULL;
+
+            if (!origMethod) {
+                result = @{@"error": @"Cannot find showSharePanelWithSources: method on FFSequenceExporter"};
+                return;
+            }
+
+            // Save original and install swizzle
+            sOrigShowSharePanel = method_getImplementation(origMethod);
+            method_setImplementation(origMethod, (IMP)FCPBridge_swizzled_showSharePanel);
+            sBatchExportActive = YES;
+            sBatchExportFolderURL = folderURL;
+            sBatchExportPendingCount = clips.count;
+
+            // Swizzle NSWorkspace methods to suppress auto-open of exported files
+            Class wsClass = [NSWorkspace class];
+            Method m;
+            m = class_getInstanceMethod(wsClass, @selector(openURL:));
+            if (m && !sOrigOpenURL) { sOrigOpenURL = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_openURL); }
+
+            m = class_getInstanceMethod(wsClass, @selector(activateFileViewerSelectingURLs:));
+            if (m && !sOrigRevealURLs) { sOrigRevealURLs = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_revealURLs); }
+
+            m = class_getInstanceMethod(wsClass, NSSelectorFromString(@"openURL:configuration:completionHandler:"));
+            if (m && !sOrigOpenURLConfig) { sOrigOpenURLConfig = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_openURLConfig); }
+
+            m = class_getInstanceMethod(wsClass, NSSelectorFromString(@"openURLs:withApplicationAtURL:configuration:completionHandler:"));
+            if (m && !sOrigOpenURLs) { sOrigOpenURLs = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_openURLs); }
+
+            m = class_getInstanceMethod(wsClass, @selector(openFile:));
+            if (m && !sOrigOpenFile) { sOrigOpenFile = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_openFile); }
+
+            // Set destination action to "Save only" (no auto-open)
+            SEL actionSel = NSSelectorFromString(@"action");
+            SEL setActionSel = NSSelectorFromString(@"setAction:");
+            id origAction = nil;
+            if ([dest respondsToSelector:actionSel]) {
+                origAction = ((id (*)(id, SEL))objc_msgSend)(dest, actionSel);
+            }
+            if ([dest respondsToSelector:setActionSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(dest, setActionSel, nil); // nil = save only
+            }
+
+            // Get share helper
+            id shareHelper = ((id (*)(id, SEL))objc_msgSend)(timeline, NSSelectorFromString(@"shareHelper"));
+            SEL shareSel = NSSelectorFromString(@"_shareToDestination:isDefault:");
+
+            NSMutableArray *exportResults = [NSMutableArray array];
+            NSInteger exported = 0;
+
+            for (NSUInteger i = 0; i < clips.count; i++) {
+                NSDictionary *clipInfo = clips[i];
+                FCPBridge_CMTime startCMTime, endCMTime;
+                [clipInfo[@"startCMTime"] getValue:&startCMTime];
+                [clipInfo[@"endCMTime"] getValue:&endCMTime];
+
+                NSString *clipName = clipInfo[@"name"];
+                NSString *safeName = [[clipName stringByReplacingOccurrencesOfString:@"/" withString:@"-"]
+                                      stringByReplacingOccurrencesOfString:@":" withString:@"-"];
+                // Use clip name directly; append index only if duplicate
+                NSString *baseName = safeName;
+                NSString *candidate = baseName;
+                NSUInteger dupIdx = 2;
+                while ([[NSFileManager defaultManager] fileExistsAtPath:
+                        [[folderURL URLByAppendingPathComponent:
+                          [candidate stringByAppendingPathExtension:@"mov"]] path]]) {
+                    candidate = [NSString stringWithFormat:@"%@ %lu", baseName, (unsigned long)dupIdx++];
+                }
+                sBatchExportFileName = candidate;
+
+                NSString *status = @"unknown";
+                @try {
+                    // Store clip range for the swizzled showSharePanel
+                    sBatchExportClipStart = startCMTime;
+                    sBatchExportClipEnd = endCMTime;
+
+                    // Set in/out range using simulated I/O key presses
+                    FCPBridge_seekAndMark(timeline, startCMTime, @"setRangeStart:");
+                    FCPBridge_seekAndMark(timeline, endCMTime, @"setRangeEnd:");
+
+                    // Trigger the normal share flow - our swizzle intercepts the dialog
+                    if (shareHelper && [shareHelper respondsToSelector:shareSel]) {
+                        ((void (*)(id, SEL, id, BOOL))objc_msgSend)(shareHelper, shareSel, nil, YES);
+                        status = @"queued";
+                        exported++;
+                    } else {
+                        status = @"no share helper";
+                    }
+                } @catch (NSException *e) {
+                    status = [NSString stringWithFormat:@"error: %@", e.reason];
+                }
+
+                // Let FCP process events between clips
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+
+                [exportResults addObject:@{
+                    @"name": clipName,
+                    @"startTime": clipInfo[@"startTime"],
+                    @"endTime": clipInfo[@"endTime"],
+                    @"status": status,
+                }];
+            }
+
+            // Restore showSharePanel swizzle
+            if (origMethod && sOrigShowSharePanel) {
+                method_setImplementation(origMethod, sOrigShowSharePanel);
+            }
+            sBatchExportActive = NO;
+            sBatchExportFileName = nil;
+            sBatchExportFolderURL = nil;
+            sOrigShowSharePanel = NULL;
+
+            // Restore original destination action
+            if ([dest respondsToSelector:setActionSel] && origAction) {
+                ((void (*)(id, SEL, id))objc_msgSend)(dest, setActionSel, origAction);
+            }
+
+            // Clear range
+            id app = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("NSApplication"), @selector(sharedApplication));
+            ((BOOL (*)(id, SEL, SEL, id, id))objc_msgSend)(
+                app, @selector(sendAction:to:from:),
+                NSSelectorFromString(@"clearRange:"), nil, nil);
+
+            result = @{
+                @"status": @"ok",
+                @"folder": [folderURL path] ?: @"",
+                @"exported": @(exported),
+                @"total": @(clips.count),
+                @"clips": exportResults,
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to batch export"};
 }
 
 static NSDictionary *FCPBridge_handleTimelineGetState(NSDictionary *params) {
@@ -3177,6 +3925,10 @@ static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
         result = FCPBridge_handleTimelineGetState(params);
     } else if ([method isEqualToString:@"timeline.getDetailedState"]) {
         result = FCPBridge_handleTimelineGetDetailedState(params);
+    } else if ([method isEqualToString:@"timeline.setRange"]) {
+        result = FCPBridge_handleSetRange(params);
+    } else if ([method isEqualToString:@"timeline.batchExport"]) {
+        result = FCPBridge_handleBatchExport(params);
     }
     // playback.* namespace
     else if ([method isEqualToString:@"playback.action"]) {

@@ -281,19 +281,38 @@ def get_timeline_clips(limit: int = 100) -> str:
 
     items = r.get("items", [])
     if items:
-        lines.append(f"\n{'Idx':<4} {'Class':<30} {'Name':<20} {'Duration':>10} {'Lane':>5} {'Sel':>4} {'Handle'}")
-        lines.append("-" * 95)
+        has_pos = any("startTime" in i for i in items)
+        if has_pos:
+            lines.append(f"\n{'Idx':<4} {'Class':<30} {'Name':<20} {'Start':>8} {'End':>8} {'Duration':>10} {'Sel':>4} {'Handle'}")
+            lines.append("-" * 110)
+        else:
+            lines.append(f"\n{'Idx':<4} {'Class':<30} {'Name':<20} {'Duration':>10} {'Lane':>5} {'Sel':>4} {'Handle'}")
+            lines.append("-" * 95)
         for item in items:
             dur_s = item.get("duration", {}).get("seconds", 0)
-            lines.append(
-                f"{item.get('index', '?'):<4} "
-                f"{item.get('class', '?'):<30} "
-                f"{str(item.get('name', ''))[:20]:<20} "
-                f"{dur_s:>9.3f}s "
-                f"{item.get('lane', 0):>5} "
-                f"{'*' if item.get('selected') else ' ':>4} "
-                f"{item.get('handle', '')}"
-            )
+            if has_pos:
+                start_s = item.get("startTime", {}).get("seconds", 0)
+                end_s = item.get("endTime", {}).get("seconds", 0)
+                lines.append(
+                    f"{item.get('index', '?'):<4} "
+                    f"{item.get('class', '?'):<30} "
+                    f"{str(item.get('name', ''))[:20]:<20} "
+                    f"{start_s:>7.2f}s "
+                    f"{end_s:>7.2f}s "
+                    f"{dur_s:>9.3f}s "
+                    f"{'*' if item.get('selected') else ' ':>4} "
+                    f"{item.get('handle', '')}"
+                )
+            else:
+                lines.append(
+                    f"{item.get('index', '?'):<4} "
+                    f"{item.get('class', '?'):<30} "
+                    f"{str(item.get('name', ''))[:20]:<20} "
+                    f"{dur_s:>9.3f}s "
+                    f"{item.get('lane', 0):>5} "
+                    f"{'*' if item.get('selected') else ' ':>4} "
+                    f"{item.get('handle', '')}"
+                )
 
     return "\n".join(lines)
 
@@ -308,6 +327,54 @@ def get_selected_clips() -> str:
     if not items:
         return "No clips selected"
     return _fmt({"selectedCount": len(items), "items": items})
+
+
+@mcp.tool()
+def set_timeline_range(start_seconds: float, end_seconds: float) -> str:
+    """Set the timeline in/out range (mark in/out) to specific times in seconds.
+    This positions the playhead and marks the range start and end points.
+    Useful for defining export ranges or reviewing specific sections.
+    """
+    r = bridge.call("timeline.setRange", startSeconds=start_seconds, endSeconds=end_seconds)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return (
+        f"Range set: {r.get('startSeconds', 0):.3f}s - {r.get('endSeconds', 0):.3f}s\n"
+        f"Mark in: {'OK' if r.get('rangeStartSet') else 'FAILED'}\n"
+        f"Mark out: {'OK' if r.get('rangeEndSet') else 'FAILED'}"
+    )
+
+
+@mcp.tool()
+def batch_export(scope: str = "all", folder: str = "") -> str:
+    """Batch export every clip from the active timeline as individual files.
+    A folder picker appears once, then all clips are exported automatically
+    with effects/color grading baked in. No further interaction needed.
+
+    Args:
+        scope: "all" exports every clip, "selected" exports only selected clips
+        folder: Optional output folder path. If empty, a folder picker dialog appears.
+    """
+    params = {"scope": scope}
+    if folder:
+        params["folder"] = folder
+    r = bridge.call("timeline.batchExport", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    if r.get("status") == "cancelled":
+        return "Batch export cancelled by user."
+
+    lines = [
+        f"Batch export: {r.get('exported', 0)}/{r.get('total', 0)} clips queued",
+        f"Folder: {r.get('folder', '?')}",
+    ]
+    clips = r.get("clips", [])
+    for c in clips:
+        start = c.get("startTime", {}).get("seconds", 0)
+        end = c.get("endTime", {}).get("seconds", 0)
+        lines.append(f"  [{c.get('status', '?')}] {c.get('name', '?')} ({start:.2f}s - {end:.2f}s)")
+    return "\n".join(lines)
 
 
 @mcp.tool()
