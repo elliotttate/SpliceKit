@@ -37,9 +37,17 @@ When FCP writes clips to the pasteboard, `FFPasteboardItem` serializes them as a
 
 The `ffpasteboardobject` data is encoded by `FFCoder.encodeData:options:error:` with `FFXMLAssetUsageKey = 0`.
 
-### The UTI Type
+### The UTI Types
 
-FCP's native pasteboard UTI is `com.apple.flexo.proFFPasteboardUTI` (Pro version). There's a separate consumer/iMovie variant. A promise UTI also exists for deferred data loading.
+**Native (internal)**: `com.apple.flexo.proFFPasteboardUTI` (Pro version). A separate consumer/iMovie variant exists. A promise UTI also exists for deferred data loading.
+
+**FCPXML (public, documented by Apple)**:
+- **Generic**: `com.apple.finalcutpro.xml` — always supported
+- **Version-specific** (FCP 10.5+): `com.apple.finalcutpro.xml.v1-8`, `.v1-9`, `.v1-10`, `.v1-11`, `.v1-12`, `.v1-13`, `.v1-14`
+- FCP looks for the **highest version-specific type** first; falls back to generic if not found
+- When writing, FCP places the current DTD version on both the generic type and all versioned types
+
+These public UTI strings are what `IXXMLPasteboardType.current`, `.generic`, etc. return internally. You can use the public strings directly without runtime discovery.
 
 ### Readable Types (What FCP Accepts on Paste)
 
@@ -47,7 +55,7 @@ FCP's `+[FFPasteboard readableTypes]` registers these types in order:
 
 1. `FFPasteboardUTI` (native FCP format — pro or consumer)
 2. `NSPasteboardTypeURL` (file URLs)
-3. `[IXXMLPasteboardType all]` (all FCPXML version UTIs)
+3. `[IXXMLPasteboardType all]` (all FCPXML version UTIs — the `com.apple.finalcutpro.xml.*` types listed above)
 4. `NSFilePromiseReceiver` readable types
 
 ---
@@ -92,22 +100,22 @@ If pasteboard does NOT contain FFPasteboardItem
 
 Write FCPXML data directly to `NSPasteboard` using `IXXMLPasteboardType` UTI strings. FCP's XML paste path will import the media and preserve all attributes declared in the XML.
 
-### Step 1: Discover the UTI Strings at Runtime
+### Step 1: Use the Public FCPXML Pasteboard UTI
+
+Apple documents these pasteboard types publicly. No runtime discovery needed:
 
 ```objc
-Class IXType = objc_getClass("IXXMLPasteboardType");
-NSString *currentType  = [IXType performSelector:@selector(current)];
-NSString *genericType  = [IXType performSelector:@selector(generic)];
-NSString *stringType   = [IXType performSelector:@selector(string)];
-NSArray  *allTypes     = [IXType performSelector:@selector(all)];
+// Public UTI strings — documented by Apple for workflow extensions and drag-and-drop
+NSString *genericType = @"com.apple.finalcutpro.xml";           // Always works
+NSString *versionType = @"com.apple.finalcutpro.xml.v1-11";    // Version-specific
 
-NSLog(@"Current: %@", currentType);
-NSLog(@"Generic: %@", genericType);
-NSLog(@"String:  %@", stringType);
-NSLog(@"All:     %@", allTypes);
+// Alternatively, resolve at runtime from FCP's Interchange framework:
+Class IXType = objc_getClass("IXXMLPasteboardType");
+NSString *currentType = [IXType performSelector:@selector(current)];
+NSArray  *allTypes    = [IXType performSelector:@selector(all)];
 ```
 
-Cache these strings — they won't change during a session.
+FCP checks for the highest version-specific type first, then falls back to generic. For maximum compatibility, write to both the versioned type and the generic type.
 
 ### Step 2: Build FCPXML with Asset + Attributes
 
@@ -118,8 +126,10 @@ NSString *fcpxml = [NSString stringWithFormat:
     @"<fcpxml version=\"1.11\">\n"
     @"  <resources>\n"
     @"    <format id=\"r0\" frameDuration=\"1/24s\" width=\"1920\" height=\"1080\"/>\n"
-    @"    <asset id=\"r1\" src=\"%@\" hasAudio=\"1\" hasVideo=\"0\"\n"
-    @"           audioSources=\"1\" audioChannels=\"2\" audioRate=\"48000\"/>\n"
+    @"    <asset id=\"r1\" hasAudio=\"1\" hasVideo=\"0\"\n"
+    @"           audioSources=\"1\" audioChannels=\"2\" audioRate=\"48000\">\n"
+    @"      <media-rep kind=\"original-media\" src=\"%@\"/>\n"
+    @"    </asset>\n"
     @"  </resources>\n"
     @"  <library>\n"
     @"    <event name=\"Restored SFX\">\n"
@@ -127,7 +137,8 @@ NSString *fcpxml = [NSString stringWithFormat:
     @"        <sequence format=\"r0\" duration=\"%@\">\n"
     @"          <spine>\n"
     @"            <asset-clip ref=\"r1\" name=\"%@\" duration=\"%@\"\n"
-    @"                        start=\"0s\" format=\"r0\">\n"
+    @"                        start=\"0s\" format=\"r0\"\n"
+    @"                        audioRole=\"effects\">\n"
     @"              <adjust-volume amount=\"%@dB\"/>\n"
     @"            </asset-clip>\n"
     @"          </spine>\n"
@@ -143,25 +154,30 @@ NSString *fcpxml = [NSString stringWithFormat:
     volumeStr];       // e.g., "-6" for -6dB
 ```
 
+> **Note**: The `<media-rep>` element inside `<asset>` is the official way to reference media files (per Apple's FCPXML spec). The `kind="original-media"` attribute tells FCP this is the original source file. The `audioRole` attribute on `<asset-clip>` assigns the audio role (e.g., `dialogue`, `music`, `effects`).
+
 FCPXML supports a wide range of attributes:
 
 ```xml
 <!-- Volume -->
 <adjust-volume amount="-6dB"/>
 
-<!-- Pan -->
-<adjust-panner mode="stereo" amount="-50"/>
+<!-- Audio Panning (mode: 0=Default, 1=Stereo L/R, 2=Create Space, 3=Dialogue, 4=Music, 5=Ambience) -->
+<adjust-panner mode="1" amount="-50"/>
 
-<!-- Effects -->
+<!-- Effects (ref points to an effect resource) -->
 <filter-video ref="r2" name="Gaussian Blur">
     <param name="Amount" key="9999/gaussianBlur/radius" value="10"/>
 </filter-video>
+<filter-audio ref="r3" name="Channel EQ">
+    <data key="effectData">[base64-encoded AU state]</data>
+</filter-audio>
 
-<!-- Transform -->
-<adjust-transform position="100 50" scale="1.2 1.2" rotation="15"/>
+<!-- Transform (position/scale as % of frame height, rotation in degrees) -->
+<adjust-transform position="100 50" scale="1.2 1.2" rotation="15" anchor="0 0"/>
 
-<!-- Opacity / Blend Mode -->
-<adjust-blend amount="0.75" mode="multiply"/>
+<!-- Opacity / Blend Mode (amount: 0.0-1.0, mode: integer — see blend mode table) -->
+<adjust-blend amount="0.75" mode="14"/>
 ```
 
 ### Step 3: Write to Pasteboard
@@ -170,8 +186,45 @@ FCPXML supports a wide range of attributes:
 NSData *xmlData = [fcpxml dataUsingEncoding:NSUTF8StringEncoding];
 NSPasteboard *pb = [NSPasteboard generalPasteboard];
 [pb clearContents];
-[pb setData:xmlData forType:currentType];
+
+// Write to both generic and version-specific types for maximum compatibility
+[pb setData:xmlData forType:@"com.apple.finalcutpro.xml"];
+[pb setData:xmlData forType:@"com.apple.finalcutpro.xml.v1-11"];
 ```
+
+### Step 3 (Alternative): Use the Official Promise Pattern
+
+Apple's documented approach for workflow extensions uses `NSPasteboardItemDataProvider` to lazily provide FCPXML data. This is the official way to drag clips into FCP:
+
+```objc
+// In your data provider class:
+@interface MyPasteboardProvider : NSObject <NSPasteboardItemDataProvider>
+@property (nonatomic, copy) NSString *fcpxml;
+@end
+
+@implementation MyPasteboardProvider
+- (void)pasteboard:(NSPasteboard *)pasteboard
+              item:(NSPasteboardItem *)item
+provideDataForType:(NSPasteboardType)type {
+    NSData *xmlData = [self.fcpxml dataUsingEncoding:NSUTF8StringEncoding];
+    [item setData:xmlData forType:type];
+}
+@end
+
+// Usage:
+NSPasteboardItem *pbItem = [[NSPasteboardItem alloc] init];
+MyPasteboardProvider *provider = [[MyPasteboardProvider alloc] init];
+provider.fcpxml = fcpxml;
+[pbItem setDataProvider:provider
+               forTypes:@[@"com.apple.finalcutpro.xml",
+                          @"com.apple.finalcutpro.xml.v1-11"]];
+
+NSPasteboard *pb = [NSPasteboard generalPasteboard];
+[pb clearContents];
+[pb writeObjects:@[pbItem]];
+```
+
+This is particularly useful for drag-and-drop: FCP requests the FCPXML only when the drop occurs, not when the drag starts.
 
 ### Step 4: Trigger Paste
 
@@ -192,6 +245,18 @@ id timelineModule = /* get active FFAnchoredTimelineModule */;
 6. Sets target to the current project's `defaultMediaEvent`
 7. Runs `importClipsWithOptions:taskDelegate:` — this resolves the `src=` URL, imports the media file, creates `FFAsset` entries
 8. Returns imported clips ready for timeline insertion
+
+### FCP Drop/Paste Behavior (per Apple docs)
+
+How FCP handles FCPXML content depends on what the XML describes:
+
+| FCPXML Contains | FCP Does |
+|-----------------|----------|
+| Clips dragged to timeline | Adds to event containing open project; inserts at drop/playhead point |
+| Events | Merges into library; handles naming conflicts with numerical suffixes |
+| Clips/projects to event | Adds items; prompts on name conflicts |
+| Clips/projects to library | Creates dated event (e.g., "06-29-19"); adds items |
+| Library | Merges all content using naming conflict rules |
 
 ### Advantages
 
@@ -396,60 +461,236 @@ This path activates when the pasteboard has **file URLs** alongside other data. 
 
 ---
 
-## Appendix A: FCPXML Attribute Reference
+## Appendix A: Complete FCPXML Attribute Reference
 
-Common attributes you can embed in FCPXML for Solution 1:
+All attributes below can be embedded in FCPXML for Solution 1. Based on Apple's official FCPXML DTD documentation.
+
+### Asset Definition
 
 ```xml
-<!-- Audio volume -->
+<asset id="r1" uid="optional-unique-id"
+       hasVideo="1" hasAudio="1"
+       audioSources="1" audioChannels="2" audioRate="48000"
+       videoSources="1"
+       colorSpaceOverride="1-1-1"
+       customLUTOverride="64 (Panasonic_VLog_VGamut)"
+       projectionOverride="none"
+       stereoscopicOverride="mono">
+    <media-rep kind="original-media" src="file:///path/to/media.mov"/>
+</asset>
+```
+
+**Color space triplets** (primaries-transfer-matrix): `1-1-1` (Rec. 709), `6-1-6` (Rec. 601 NTSC), `5-1-6` (Rec. 601 PAL), `9-1-9` (Rec. 2020), `9-16-9` (Rec. 2020 PQ), `9-18-9` (Rec. 2020 HLG).
+
+### Audio Adjustments
+
+```xml
+<!-- Volume in dB -->
 <adjust-volume amount="-6dB"/>
 
-<!-- Stereo pan -->
-<adjust-panner mode="stereo" amount="-25"/>
+<!-- Volume with keyframe animation -->
+<adjust-volume>
+    <param name="amount">
+        <keyframeAnimation>
+            <keyframe time="0s" value="-12dB" curve="smooth"/>
+            <keyframe time="2s" value="0dB" curve="smooth"/>
+        </keyframeAnimation>
+    </param>
+</adjust-volume>
 
-<!-- Transform (position, scale, rotation) -->
-<adjust-transform position="0 0" anchor="0 0" scale="1 1" rotation="0"/>
+<!-- Panning (mode: 0=Default, 1=Stereo L/R, 2=Create Space, 3=Dialogue,
+     4=Music, 5=Ambience, 6=Circle, 7=Rotate, 8=Back to Front,
+     9=Left Surround to Right Front, 10=Right Surround to Left Front) -->
+<adjust-panner mode="1" amount="-50"
+    left_right_mix="0" front_back_mix="0" LFE_balance="0"
+    surround_width="0" rotation="0" stereo_spread="0"/>
 
-<!-- Opacity and blend mode -->
-<adjust-blend amount="1.0" mode="normal"/>
+<!-- EQ -->
+<adjust-EQ/>
 
-<!-- Color correction -->
-<adjust-colorConform enabled="1"/>
+<!-- Noise reduction (amount: 0-100) -->
+<adjust-noiseReduction amount="50"/>
 
-<!-- Speed/retime -->
+<!-- Hum reduction (frequency: 50 or 60 Hz) -->
+<adjust-humReduction frequency="60"/>
+
+<!-- Loudness -->
+<adjust-loudness amount="0"/>
+
+<!-- Match EQ (binary format) -->
+<adjust-matchEQ>
+    <data key="effectData">[base64]</data>
+</adjust-matchEQ>
+```
+
+### Video Adjustments
+
+```xml
+<!-- Transform (position/scale as % of frame height, rotation in degrees) -->
+<adjust-transform enabled="1"
+    position="0 0" anchor="0 0" scale="1 1" rotation="0"
+    tracking="tracking-shape-ref"/>
+
+<!-- Opacity and blend mode (see blend mode table below) -->
+<adjust-blend amount="1.0" mode="0"/>
+
+<!-- Crop -->
+<adjust-crop mode="trim" enabled="1">
+    <crop-rect left="0" right="0" top="0" bottom="0"/>
+</adjust-crop>
+
+<!-- Corners (four-corner distortion) -->
+<adjust-corners enabled="1"
+    botLeft="0 0" botRight="0 0" topLeft="0 0" topRight="0 0"/>
+
+<!-- Stabilization -->
+<adjust-stabilization type="automatic"/>
+
+<!-- Rolling shutter reduction -->
+<adjust-rollingShutter amount="0"/>
+
+<!-- Conform (how image fills frame) -->
+<adjust-conform type="fit"/>
+```
+
+### Blend Mode Values
+
+| Value | Mode | Value | Mode |
+|-------|------|-------|------|
+| 0 | Normal | 17 | Vivid Light |
+| 2 | Subtract | 18 | Linear Light |
+| 3 | Darken | 19 | Pin Light |
+| 4 | Multiply | 20 | Hard Mix |
+| 5 | Color Burn | 22 | Difference |
+| 6 | Linear Burn | 23 | Exclusion |
+| 8 | Add | 25 | Stencil Alpha |
+| 9 | Lighten | 26 | Stencil Luma |
+| 10 | Screen | 27 | Silhouette Alpha |
+| 11 | Color Dodge | 28 | Silhouette Luma |
+| 12 | Linear Dodge | 29 | Behind |
+| 14 | Overlay | 31 | Alpha Add |
+| 15 | Soft Light | 32 | Premultiplied Mix |
+| 16 | Hard Light | | |
+
+### Effects
+
+```xml
+<!-- Video filter (ref points to effect resource) -->
+<filter-video ref="r2" name="Gaussian Blur">
+    <param name="Amount" key="9999/gaussianBlur/radius" value="10"/>
+</filter-video>
+
+<!-- Audio filter -->
+<filter-audio ref="r3" name="Channel EQ">
+    <data key="effectData">[base64-encoded Audio Unit state]</data>
+    <data key="effectConfig">[base64-encoded configuration]</data>
+</filter-audio>
+
+<!-- Color correction with ASC CDL (exports as XML comment) -->
+<filter-video ref="r4" name="Color Correction">
+    <!-- info-asc-cdl: slope="1.05 1.05 1.05" offset="0.0275 0.0275 0.0275" power="1.25 1.2 1" -->
+</filter-video>
+
+<!-- Masked filter (shape mask on video effect) -->
+<filter-video ref="r5" name="Blur">
+    <filter-video-mask>
+        <mask-shape/>
+    </filter-video-mask>
+</filter-video>
+```
+
+### Speed / Retime
+
+```xml
+<!-- timeMap: maps output time → source time -->
 <timeMap>
     <timept time="0s" value="0s" interp="smooth2"/>
-    <timept time="5s" value="10s" interp="smooth2"/>
+    <timept time="10s" value="5s" interp="smooth2"/>  <!-- 50% speed -->
 </timeMap>
 
-<!-- Markers -->
+<!-- Reverse playback -->
+<timeMap>
+    <timept time="0s" value="10s" interp="linear"/>
+    <timept time="10s" value="0s" interp="linear"/>
+</timeMap>
+
+<!-- Frame sampling (for retime quality) -->
+<frame-sampling value="floor"/>  <!-- or "nearest-neighbor", "frame-blending", "optical-flow" -->
+```
+
+### Markers, Keywords, Ratings
+
+```xml
+<!-- Standard marker -->
 <marker start="3s" duration="1/24s" value="Important moment"/>
-<chapter-marker start="5s" duration="1/24s" value="Chapter 1"/>
+
+<!-- Chapter marker -->
+<chapter-marker start="5s" duration="1/24s" value="Chapter 1"
+    posterOffset="0s"/>
+
+<!-- To-do marker -->
+<marker start="8s" duration="1/24s" value="Fix audio">
+    <marker-completion completed="0"/>
+</marker>
 
 <!-- Keywords -->
 <keyword start="0s" duration="10s" value="SFX, Foley"/>
 
+<!-- Rating (value: "favorite" or "reject") -->
+<rating start="0s" duration="10s" value="favorite"/>
+
 <!-- Audio role assignment -->
 <audio-role-source role="dialogue.dialogue-1"/>
+```
 
-<!-- Fade in/out handles -->
-<adjust-volume>
-    <param name="amount">
-        <fadeIn type="easeIn" duration="1s"/>
-        <fadeOut type="easeOut" duration="1s"/>
-    </param>
-</adjust-volume>
+### Timing Attributes (All Story Elements)
+
+Time values use rational seconds: `1001/30000s` (29.97fps), `1001/60000s` (59.94fps), or whole seconds `5s`.
+
+```xml
+<asset-clip ref="r1" name="Clip"
+    offset="10s"       <!-- position in parent timeline -->
+    start="5s"         <!-- start of local timeline -->
+    duration="15s"     <!-- extent in parent time -->
+    audioRole="effects"
+    videoRole="video.video-1">
+```
+
+### 360 Video Adjustments
+
+```xml
+<adjust-360-transform enabled="1"/>
+<adjust-orientation enabled="1"/>
+<adjust-reorient enabled="1"/>
 ```
 
 ---
 
-## Appendix B: Pasteboard Type Discovery Script
+## Appendix B: Public Pasteboard Types & Discovery
 
-Run this once to capture the exact UTI strings for your FCP version:
+### Known Public UTI Strings (Apple-Documented)
+
+These are documented by Apple for workflow extensions and drag-and-drop integration:
+
+| UTI String | Purpose |
+|------------|---------|
+| `com.apple.finalcutpro.xml` | Generic FCPXML — always supported |
+| `com.apple.finalcutpro.xml.v1-8` | FCPXML 1.8 (FCP 10.4) |
+| `com.apple.finalcutpro.xml.v1-9` | FCPXML 1.9 (FCP 10.4.1) |
+| `com.apple.finalcutpro.xml.v1-10` | FCPXML 1.10 (FCP 10.5) |
+| `com.apple.finalcutpro.xml.v1-11` | FCPXML 1.11 (FCP 10.6) |
+| `com.apple.finalcutpro.xml.v1-12` | FCPXML 1.12 |
+| `com.apple.finalcutpro.xml.v1-13` | FCPXML 1.13 |
+| `com.apple.finalcutpro.xml.v1-14` | FCPXML 1.14 |
+
+**Best practice** (per Apple docs): Support the generic type (current DTD at your release) and also version-specific types for current and previous DTD versions.
+
+### Runtime Discovery (Optional)
+
+If you want to confirm what the running FCP version supports:
 
 ```objc
-// Call from within FCP's process (e.g., via injected dylib or FCPBridge)
-
+// From within FCP's process (e.g., via injected dylib or FCPBridge)
 Class IXType = objc_getClass("IXXMLPasteboardType");
 
 NSLog(@"=== IXXMLPasteboardType UTIs ===");
@@ -458,26 +699,19 @@ NSLog(@"previous:         %@", [IXType previous]);
 NSLog(@"previousPrevious: %@", [IXType previousPrevious]);
 NSLog(@"generic:          %@", [IXType generic]);
 NSLog(@"string:           %@", [IXType string]);
-NSLog(@"fileURL:          %@", [IXType fileURL]);
-NSLog(@"bookmarkData:     %@", [IXType bookmarkData]);
-NSLog(@"allData:          %@", [IXType allData]);
 NSLog(@"all:              %@", [IXType all]);
-
-// Also capture the native pasteboard UTI
-// Look for it in registered drag types on the timeline view
-id timelineModule = /* active timeline module */;
-id timelineView = [timelineModule performSelector:@selector(view)];
-NSLog(@"Registered types: %@", [timelineView registeredDraggedTypes]);
 ```
 
-The `FFXMLTranslationTask` checks pasteboard types in this priority order:
-1. `IXXMLPasteboardType.current`
+### Paste Priority Order
+
+FCP's `FFXMLTranslationTask` checks pasteboard types in this order:
+1. `IXXMLPasteboardType.current` (highest version)
 2. `IXXMLPasteboardType.previous`
 3. `IXXMLPasteboardType.previousPrevious`
 4. `IXXMLPasteboardType.generic`
 5. Falls back to `IXXMLPasteboardType.string` (reads as plain text, converts to data)
 
-When writing FCPXML to the pasteboard, use `current` for best compatibility with the running FCP version.
+When writing, use both the generic type and the version-specific type matching your FCPXML version for maximum compatibility.
 
 ---
 
@@ -496,7 +730,92 @@ When writing FCPXML to the pasteboard, use `current` for best compatibility with
 
 ---
 
-## Appendix D: Debugging Pasteboard Contents
+## Appendix D: Workflow Extension Timeline API
+
+If you're building a workflow extension (`.appex`), you have official API access to the FCP timeline. This is relevant for Solution 3 (programmatic attribute restoration) and for monitoring when clips are pasted.
+
+### Timeline Access Pattern
+
+```swift
+import ProExtension
+
+// 1. Get host singleton
+guard let host = ProExtensionHostSingleton() as? FCPXHost else { return }
+
+// 2. Access timeline
+guard let timeline = host.timeline else { return }
+
+// 3. Register for changes
+timeline.add(self) // self conforms to FCPXTimelineObserver
+
+// 4. Read current state
+let sequence = timeline.activeSequence       // FCPXSequence?
+let playhead = timeline.playheadTime()       // CMTime
+let range = timeline.sequenceTimeRange       // CMTimeRange
+
+// 5. Move playhead
+let newPos = timeline.movePlayhead(to: targetTime)  // returns confirmed CMTime
+```
+
+### Observer Callbacks
+
+```swift
+extension MyViewController: FCPXTimelineObserver {
+    func activeSequenceChanged() {
+        // New sequence loaded — refresh UI
+        let seq = host.timeline?.activeSequence
+        print("Sequence: \(seq?.name), duration: \(seq?.duration)")
+    }
+    
+    func playheadTimeChanged() {
+        // Playhead moved (click, drag, or playback stop — NOT during playback)
+        let time = host.timeline?.playheadTime()
+    }
+    
+    func sequenceTimeRangeChanged() {
+        // Timeline bounds changed
+        let range = host.timeline?.sequenceTimeRange
+    }
+}
+```
+
+### Navigating the Container Hierarchy
+
+```swift
+let sequence = timeline.activeSequence          // FCPXSequence
+let project = sequence?.container as? FCPXProject  // FCPXProject
+let event = project?.container as? FCPXEvent       // FCPXEvent (uid, name)
+let library = event?.container as? FCPXLibrary     // FCPXLibrary (url, name)
+```
+
+### Security-Scoped Bookmarks
+
+If your extension needs to access media files on disk, you need security-scoped bookmark entitlements:
+
+```xml
+<!-- In your .entitlements file -->
+<key>com.apple.security.files.bookmarks.app-scope</key>
+<true/>
+<key>com.apple.security.files.bookmarks.document-scope</key>
+<true/>
+```
+
+When receiving bookmark data (e.g., from FCPXML drag-out from FCP):
+1. Decode Base64-encoded bookmark data
+2. Resolve to security-scoped URL with `NSURLBookmarkResolutionWithSecurityScope`
+3. Call `startAccessingSecurityScopedResource()` before file access
+4. Call `stopAccessingSecurityScopedResource()` when done
+
+### Key Limitations
+
+- Workflow extensions run **out-of-process** — no direct access to FCP's internal classes
+- The `FCPXTimeline` API is read-only for sequence/playhead; you can move the playhead but can't directly modify clips
+- To modify the timeline, you must go through FCPXML (paste/import) or Apple Events
+- FCP terminates extensions when the floating window closes — save state to persistent storage
+
+---
+
+## Appendix E: Debugging Pasteboard Contents
 
 To inspect what's currently on the pasteboard:
 
