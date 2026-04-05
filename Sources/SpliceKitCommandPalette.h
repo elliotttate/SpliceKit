@@ -1,35 +1,36 @@
 //
-//  FCPCommandPalette.h
+//  SpliceKitCommandPalette.h
 //  Command palette for quick access to FCP actions + Apple LLM natural language
 //
 
-#ifndef FCPCommandPalette_h
-#define FCPCommandPalette_h
+#ifndef SpliceKitCommandPalette_h
+#define SpliceKitCommandPalette_h
 
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 
 // Command categories
-typedef NS_ENUM(NSInteger, FCPCommandCategory) {
-    FCPCommandCategoryEditing,
-    FCPCommandCategoryPlayback,
-    FCPCommandCategoryColor,
-    FCPCommandCategorySpeed,
-    FCPCommandCategoryMarkers,
-    FCPCommandCategoryTitles,
-    FCPCommandCategoryKeyframes,
-    FCPCommandCategoryEffects,
-    FCPCommandCategoryTranscript,
-    FCPCommandCategoryExport,
-    FCPCommandCategoryAI,
-    FCPCommandCategoryOptions,
+typedef NS_ENUM(NSInteger, SpliceKitCommandCategory) {
+    SpliceKitCommandCategoryEditing,
+    SpliceKitCommandCategoryPlayback,
+    SpliceKitCommandCategoryColor,
+    SpliceKitCommandCategorySpeed,
+    SpliceKitCommandCategoryMarkers,
+    SpliceKitCommandCategoryTitles,
+    SpliceKitCommandCategoryKeyframes,
+    SpliceKitCommandCategoryEffects,
+    SpliceKitCommandCategoryTranscript,
+    SpliceKitCommandCategoryExport,
+    SpliceKitCommandCategoryAI,
+    SpliceKitCommandCategoryMusic,
+    SpliceKitCommandCategoryOptions,
 };
 
-@interface FCPCommand : NSObject
+@interface SpliceKitCommand : NSObject
 @property (nonatomic, strong) NSString *name;           // Display name
 @property (nonatomic, strong) NSString *action;         // Action ID (e.g. "blade")
 @property (nonatomic, strong) NSString *type;           // "timeline", "playback", "transcript"
-@property (nonatomic, assign) FCPCommandCategory category;
+@property (nonatomic, assign) SpliceKitCommandCategory category;
 @property (nonatomic, strong) NSString *categoryName;   // Display category name
 @property (nonatomic, strong) NSString *shortcut;       // Keyboard shortcut hint (display only)
 @property (nonatomic, strong) NSString *detail;         // Short description
@@ -39,7 +40,7 @@ typedef NS_ENUM(NSInteger, FCPCommandCategory) {
 @property (nonatomic, assign) BOOL isSeparatorRow;       // transient: section divider
 @end
 
-@interface FCPCommandPalette : NSObject
+@interface SpliceKitCommandPalette : NSObject
 
 + (instancetype)sharedPalette;
 
@@ -53,10 +54,10 @@ typedef NS_ENUM(NSInteger, FCPCommandCategory) {
 - (NSDictionary *)executeCommand:(NSString *)action type:(NSString *)type;
 
 // Search commands
-- (NSArray<FCPCommand *> *)searchCommands:(NSString *)query;
+- (NSArray<SpliceKitCommand *> *)searchCommands:(NSString *)query;
 
 // Get command at display row (accounting for AI row offset)
-- (FCPCommand *)commandForDisplayRow:(NSInteger)row;
+- (SpliceKitCommand *)commandForDisplayRow:(NSInteger)row;
 
 // Context menu for right-click in browse mode
 - (NSMenu *)contextMenuForRow:(NSInteger)row;
@@ -66,4 +67,4 @@ typedef NS_ENUM(NSInteger, FCPCommandCategory) {
 
 @end
 
-#endif /* FCPCommandPalette_h */
+#endif /* SpliceKitCommandPalette_h */

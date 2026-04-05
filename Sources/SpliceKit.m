@@ -1,47 +1,55 @@
 //
-//  FCPBridge.m
-//  Main entry point - constructor, class caching, app launch hook
+//  SpliceKit.m
+//  Main entry point — this is where everything starts.
+//
+//  The __attribute__((constructor)) at the bottom fires before FCP's main() runs.
+//  From there we: set up logging, patch out crash-prone code paths (CloudContent,
+//  shutdown hang), and wait for the app to finish launching. Once it does, we
+//  install our menu, toolbar buttons, feature swizzles, and spin up the server.
 //
 
-#import "FCPBridge.h"
-#import "FCPCommandPalette.h"
+#import "SpliceKit.h"
+#import "SpliceKitCommandPalette.h"
 #import <AppKit/AppKit.h>
 
 #pragma mark - Logging
+//
+// We log to both NSLog (shows up in Console.app) and a file on disk.
+// The file is invaluable for debugging crashes that happened while you
+// weren't looking at Console — just `cat ~/Library/Logs/SpliceKit/splicekit.log`.
+//
 
 static NSString *sLogPath = nil;
 static NSFileHandle *sLogHandle = nil;
 static dispatch_queue_t sLogQueue = nil;
 
-static void FCPBridge_initLogging(void) {
-    sLogQueue = dispatch_queue_create("com.fcpbridge.log", DISPATCH_QUEUE_SERIAL);
+static void SpliceKit_initLogging(void) {
+    sLogQueue = dispatch_queue_create("com.splicekit.log", DISPATCH_QUEUE_SERIAL);
 
-    // Write to ~/Library/Logs/FCPBridge/fcpbridge.log
-    NSString *logDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/FCPBridge"];
+    NSString *logDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/SpliceKit"];
     [[NSFileManager defaultManager] createDirectoryAtPath:logDir withIntermediateDirectories:YES attributes:nil error:nil];
-    sLogPath = [logDir stringByAppendingPathComponent:@"fcpbridge.log"];
+    sLogPath = [logDir stringByAppendingPathComponent:@"splicekit.log"];
 
-    // Create or truncate the log file
+    // Start fresh each launch so the log doesn't grow forever
     [[NSFileManager defaultManager] createFileAtPath:sLogPath contents:nil attributes:nil];
     sLogHandle = [NSFileHandle fileHandleForWritingAtPath:sLogPath];
     [sLogHandle seekToEndOfFile];
 }
 
-void FCPBridge_log(NSString *format, ...) {
+void SpliceKit_log(NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
 
-    // Also NSLog
-    NSLog(@"[FCPBridge] %@", message);
+    NSLog(@"[SpliceKit] %@", message);
 
-    // Write to file
+    // Append to log file on a serial queue so we don't block the caller
     if (sLogHandle && sLogQueue) {
         NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
                                                             dateStyle:NSDateFormatterNoStyle
                                                             timeStyle:NSDateFormatterMediumStyle];
-        NSString *line = [NSString stringWithFormat:@"[%@] [FCPBridge] %@\n", timestamp, message];
+        NSString *line = [NSString stringWithFormat:@"[%@] [SpliceKit] %@\n", timestamp, message];
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
         dispatch_async(sLogQueue, ^{
             [sLogHandle writeData:data];
@@ -51,30 +59,32 @@ void FCPBridge_log(NSString *format, ...) {
 }
 
 #pragma mark - Socket Path
+//
+// FCP runs in a partial sandbox. Our entitlements grant read-write to "/",
+// so /tmp usually works. But on some setups it doesn't — the sandbox silently
+// denies the write. We probe for it and fall back to the app's cache dir.
+//
 
 static char sSocketPath[1024] = {0};
 
-const char *FCPBridge_getSocketPath(void) {
+const char *SpliceKit_getSocketPath(void) {
     if (sSocketPath[0] != '\0') return sSocketPath;
 
-    // Try /tmp first - works if not sandboxed or has exception
-    // The entitlements include absolute-path.read-write: ["/"]
-    // so /tmp should work. But if not, fall back to container.
-    NSString *path = @"/tmp/fcpbridge.sock";
+    NSString *path = @"/tmp/splicekit.sock";
 
-    // Test writability
-    NSString *testPath = @"/tmp/fcpbridge_test";
+    // Quick write test to see if the sandbox lets us use /tmp
+    NSString *testPath = @"/tmp/splicekit_test";
     BOOL canWrite = [[NSFileManager defaultManager] createFileAtPath:testPath
                                                             contents:[@"test" dataUsingEncoding:NSUTF8StringEncoding]
                                                           attributes:nil];
     if (canWrite) {
         [[NSFileManager defaultManager] removeItemAtPath:testPath error:nil];
     } else {
-        // Fall back to app-specific cache directory
-        NSString *cacheDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches/FCPBridge"];
+        // /tmp blocked — use the container instead
+        NSString *cacheDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches/SpliceKit"];
         [[NSFileManager defaultManager] createDirectoryAtPath:cacheDir withIntermediateDirectories:YES attributes:nil error:nil];
-        path = [cacheDir stringByAppendingPathComponent:@"fcpbridge.sock"];
-        FCPBridge_log(@"Using fallback socket path: %@", path);
+        path = [cacheDir stringByAppendingPathComponent:@"splicekit.sock"];
+        SpliceKit_log(@"Using fallback socket path: %@", path);
     }
 
     strncpy(sSocketPath, [path UTF8String], sizeof(sSocketPath) - 1);
@@ -82,59 +92,74 @@ const char *FCPBridge_getSocketPath(void) {
 }
 
 #pragma mark - Cached Class References
+//
+// We look these up once and stash them globally. Most of these come from Flexo.framework
+// (FCP's core editing engine). If Apple renames them in a future version, the compatibility
+// check below will tell us exactly which ones are missing.
+//
 
-Class FCPBridge_FFAnchoredTimelineModule = nil;
-Class FCPBridge_FFAnchoredSequence = nil;
-Class FCPBridge_FFLibrary = nil;
-Class FCPBridge_FFLibraryDocument = nil;
-Class FCPBridge_FFEditActionMgr = nil;
-Class FCPBridge_FFModelDocument = nil;
-Class FCPBridge_FFPlayer = nil;
-Class FCPBridge_FFActionContext = nil;
-Class FCPBridge_PEAppController = nil;
-Class FCPBridge_PEDocument = nil;
+Class SpliceKit_FFAnchoredTimelineModule = nil;
+Class SpliceKit_FFAnchoredSequence = nil;
+Class SpliceKit_FFLibrary = nil;
+Class SpliceKit_FFLibraryDocument = nil;
+Class SpliceKit_FFEditActionMgr = nil;
+Class SpliceKit_FFModelDocument = nil;
+Class SpliceKit_FFPlayer = nil;
+Class SpliceKit_FFActionContext = nil;
+Class SpliceKit_PEAppController = nil;
+Class SpliceKit_PEDocument = nil;
 
 #pragma mark - Compatibility Check
 
-static void FCPBridge_checkCompatibility(void) {
+// Runs after FCP finishes loading all its frameworks.
+// Looks up each critical class by name and caches the reference.
+// If something's missing, we log it but keep going — partial functionality
+// is better than no functionality.
+static void SpliceKit_checkCompatibility(void) {
     NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
     NSString *version = info[@"CFBundleShortVersionString"];
     NSString *build = info[@"CFBundleVersion"];
-    FCPBridge_log(@"FCP version %@ (build %@)", version, build);
+    SpliceKit_log(@"FCP version %@ (build %@)", version, build);
 
-    // Verify critical classes
     struct { const char *name; Class *ref; } classes[] = {
-        {"FFAnchoredTimelineModule", &FCPBridge_FFAnchoredTimelineModule},
-        {"FFAnchoredSequence",       &FCPBridge_FFAnchoredSequence},
-        {"FFLibrary",                &FCPBridge_FFLibrary},
-        {"FFLibraryDocument",        &FCPBridge_FFLibraryDocument},
-        {"FFEditActionMgr",          &FCPBridge_FFEditActionMgr},
-        {"FFModelDocument",          &FCPBridge_FFModelDocument},
-        {"FFPlayer",                 &FCPBridge_FFPlayer},
-        {"FFActionContext",          &FCPBridge_FFActionContext},
-        {"PEAppController",         &FCPBridge_PEAppController},
-        {"PEDocument",              &FCPBridge_PEDocument},
+        {"FFAnchoredTimelineModule", &SpliceKit_FFAnchoredTimelineModule},
+        {"FFAnchoredSequence",       &SpliceKit_FFAnchoredSequence},
+        {"FFLibrary",                &SpliceKit_FFLibrary},
+        {"FFLibraryDocument",        &SpliceKit_FFLibraryDocument},
+        {"FFEditActionMgr",          &SpliceKit_FFEditActionMgr},
+        {"FFModelDocument",          &SpliceKit_FFModelDocument},
+        {"FFPlayer",                 &SpliceKit_FFPlayer},
+        {"FFActionContext",          &SpliceKit_FFActionContext},
+        {"PEAppController",         &SpliceKit_PEAppController},
+        {"PEDocument",              &SpliceKit_PEDocument},
     };
 
     int found = 0, total = sizeof(classes) / sizeof(classes[0]);
     for (int i = 0; i < total; i++) {
         *classes[i].ref = objc_getClass(classes[i].name);
         if (*classes[i].ref) {
+            // Log the method count as a quick sanity check — if it's wildly
+            // different from what we expect, the class might have been gutted
             unsigned int methodCount = 0;
             Method *methods = class_copyMethodList(*classes[i].ref, &methodCount);
             free(methods);
-            FCPBridge_log(@"  OK: %s (%u methods)", classes[i].name, methodCount);
+            SpliceKit_log(@"  OK: %s (%u methods)", classes[i].name, methodCount);
             found++;
         } else {
-            FCPBridge_log(@"  MISSING: %s", classes[i].name);
+            SpliceKit_log(@"  MISSING: %s", classes[i].name);
         }
     }
-    FCPBridge_log(@"Class check: %d/%d found", found, total);
+    SpliceKit_log(@"Class check: %d/%d found", found, total);
 }
 
-#pragma mark - FCPBridge Menu
+#pragma mark - SpliceKit Menu
+//
+// We add our own top-level "SpliceKit" menu to FCP's menu bar, right before Help.
+// It has entries for the transcript editor, command palette, and a submenu of
+// toggleable options (effect drag, pinch zoom, etc).
+//
 
-@interface FCPBridgeMenuController : NSObject
+@interface SpliceKitMenuController : NSObject
 + (instancetype)shared;
 - (void)toggleTranscriptPanel:(id)sender;
 - (void)toggleCommandPalette:(id)sender;
@@ -145,19 +170,19 @@ static void FCPBridge_checkCompatibility(void) {
 @property (nonatomic, weak) NSButton *paletteToolbarButton;
 @end
 
-@implementation FCPBridgeMenuController
+@implementation SpliceKitMenuController
 
 + (instancetype)shared {
-    static FCPBridgeMenuController *instance = nil;
+    static SpliceKitMenuController *instance = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
     return instance;
 }
 
 - (void)toggleTranscriptPanel:(id)sender {
-    Class panelClass = objc_getClass("FCPTranscriptPanel");
+    Class panelClass = objc_getClass("SpliceKitTranscriptPanel");
     if (!panelClass) {
-        FCPBridge_log(@"FCPTranscriptPanel class not found");
+        SpliceKit_log(@"SpliceKitTranscriptPanel class not found");
         return;
     }
     id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
@@ -173,28 +198,28 @@ static void FCPBridge_checkCompatibility(void) {
 }
 
 - (void)toggleCommandPalette:(id)sender {
-    [[FCPCommandPalette sharedPalette] togglePalette];
+    [[SpliceKitCommandPalette sharedPalette] togglePalette];
 }
 
 - (void)toggleEffectDragAsAdjustmentClip:(id)sender {
-    BOOL newState = !FCPBridge_isEffectDragAsAdjustmentClipEnabled();
-    FCPBridge_setEffectDragAsAdjustmentClipEnabled(newState);
+    BOOL newState = !SpliceKit_isEffectDragAsAdjustmentClipEnabled();
+    SpliceKit_setEffectDragAsAdjustmentClipEnabled(newState);
     if ([sender isKindOfClass:[NSMenuItem class]]) {
         [(NSMenuItem *)sender setState:newState ? NSControlStateValueOn : NSControlStateValueOff];
     }
 }
 
 - (void)toggleViewerPinchZoom:(id)sender {
-    BOOL newState = !FCPBridge_isViewerPinchZoomEnabled();
-    FCPBridge_setViewerPinchZoomEnabled(newState);
+    BOOL newState = !SpliceKit_isViewerPinchZoomEnabled();
+    SpliceKit_setViewerPinchZoomEnabled(newState);
     if ([sender isKindOfClass:[NSMenuItem class]]) {
         [(NSMenuItem *)sender setState:newState ? NSControlStateValueOn : NSControlStateValueOff];
     }
 }
 
 - (void)toggleVideoOnlyKeepsAudioDisabled:(id)sender {
-    BOOL newState = !FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled();
-    FCPBridge_setVideoOnlyKeepsAudioDisabledEnabled(newState);
+    BOOL newState = !SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled();
+    SpliceKit_setVideoOnlyKeepsAudioDisabledEnabled(newState);
     if ([sender isKindOfClass:[NSMenuItem class]]) {
         [(NSMenuItem *)sender setState:newState ? NSControlStateValueOn : NSControlStateValueOff];
     }
@@ -204,7 +229,7 @@ static void FCPBridge_checkCompatibility(void) {
     NSButton *btn = self.toolbarButton;
     if (!btn) return;
     btn.state = active ? NSControlStateValueOn : NSControlStateValueOff;
-    // Match FCP's active style: blue tint on the icon when active
+    // Match FCP's native toolbar style — active buttons get a blue accent tint
     if (active) {
         btn.contentTintColor = [NSColor controlAccentColor];
         btn.bezelColor = [NSColor colorWithWhite:0.0 alpha:0.5];
@@ -216,22 +241,22 @@ static void FCPBridge_checkCompatibility(void) {
 
 @end
 
-static void FCPBridge_installMenu(void) {
+static void SpliceKit_installMenu(void) {
     NSMenu *mainMenu = [NSApp mainMenu];
     if (!mainMenu) {
-        FCPBridge_log(@"No main menu found - skipping menu install");
+        SpliceKit_log(@"No main menu found - skipping menu install");
         return;
     }
 
-    // Create "FCPBridge" top-level menu
-    NSMenu *bridgeMenu = [[NSMenu alloc] initWithTitle:@"FCPBridge"];
+    // Create "SpliceKit" top-level menu
+    NSMenu *bridgeMenu = [[NSMenu alloc] initWithTitle:@"SpliceKit"];
 
     NSMenuItem *transcriptItem = [[NSMenuItem alloc]
         initWithTitle:@"Transcript Editor"
                action:@selector(toggleTranscriptPanel:)
         keyEquivalent:@"t"];
     transcriptItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
-    transcriptItem.target = [FCPBridgeMenuController shared];
+    transcriptItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:transcriptItem];
 
     NSMenuItem *paletteItem = [[NSMenuItem alloc]
@@ -239,7 +264,7 @@ static void FCPBridge_installMenu(void) {
                action:@selector(toggleCommandPalette:)
         keyEquivalent:@"p"];
     paletteItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
-    paletteItem.target = [FCPBridgeMenuController shared];
+    paletteItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:paletteItem];
 
     // --- Options submenu ---
@@ -251,8 +276,8 @@ static void FCPBridge_installMenu(void) {
         initWithTitle:@"Effect Drag as Adjustment Clip"
                action:@selector(toggleEffectDragAsAdjustmentClip:)
         keyEquivalent:@""];
-    effectDragItem.target = [FCPBridgeMenuController shared];
-    effectDragItem.state = FCPBridge_isEffectDragAsAdjustmentClipEnabled()
+    effectDragItem.target = [SpliceKitMenuController shared];
+    effectDragItem.state = SpliceKit_isEffectDragAsAdjustmentClipEnabled()
         ? NSControlStateValueOn : NSControlStateValueOff;
     [optionsMenu addItem:effectDragItem];
 
@@ -260,16 +285,16 @@ static void FCPBridge_installMenu(void) {
         initWithTitle:@"Viewer Pinch-to-Zoom"
                action:@selector(toggleViewerPinchZoom:)
         keyEquivalent:@""];
-    pinchZoomItem.target = [FCPBridgeMenuController shared];
-    pinchZoomItem.state = FCPBridge_isViewerPinchZoomEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
+    pinchZoomItem.target = [SpliceKitMenuController shared];
+    pinchZoomItem.state = SpliceKit_isViewerPinchZoomEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
     [optionsMenu addItem:pinchZoomItem];
 
     NSMenuItem *videoOnlyKeepsAudioItem = [[NSMenuItem alloc]
         initWithTitle:@"Video-Only Edit Keeps Audio (Disabled)"
                action:@selector(toggleVideoOnlyKeepsAudioDisabled:)
         keyEquivalent:@""];
-    videoOnlyKeepsAudioItem.target = [FCPBridgeMenuController shared];
-    videoOnlyKeepsAudioItem.state = FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled()
+    videoOnlyKeepsAudioItem.target = [SpliceKitMenuController shared];
+    videoOnlyKeepsAudioItem.state = SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled()
         ? NSControlStateValueOn : NSControlStateValueOff;
     [optionsMenu addItem:videoOnlyKeepsAudioItem];
 
@@ -278,7 +303,7 @@ static void FCPBridge_installMenu(void) {
     [bridgeMenu addItem:optionsMenuItem];
 
     // Add the menu to the menu bar (before the last item which is usually "Help")
-    NSMenuItem *bridgeMenuItem = [[NSMenuItem alloc] initWithTitle:@"FCPBridge" action:nil keyEquivalent:@""];
+    NSMenuItem *bridgeMenuItem = [[NSMenuItem alloc] initWithTitle:@"SpliceKit" action:nil keyEquivalent:@""];
     bridgeMenuItem.submenu = bridgeMenu;
 
     NSInteger helpIndex = [mainMenu indexOfItemWithTitle:@"Help"];
@@ -288,19 +313,20 @@ static void FCPBridge_installMenu(void) {
         [mainMenu addItem:bridgeMenuItem];
     }
 
-    FCPBridge_log(@"FCPBridge menu installed (Ctrl+Option+T for Transcript Editor, Cmd+Shift+P for Command Palette)");
+    SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T for Transcript Editor, Cmd+Shift+P for Command Palette)");
 }
 
-static NSString * const kFCPBridgeTranscriptToolbarID = @"FCPBridgeTranscriptItemID";
-static NSString * const kFCPBridgePaletteToolbarID = @"FCPBridgePaletteItemID";
+static NSString * const kSpliceKitTranscriptToolbarID = @"SpliceKitTranscriptItemID";
+static NSString * const kSpliceKitPaletteToolbarID = @"SpliceKitPaletteItemID";
 static IMP sOriginalToolbarItemForIdentifier = NULL;
 
-// Swizzled toolbar delegate method — returns our custom item for our identifier,
-// passes everything else to the original implementation.
-static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *toolbar,
+// We swizzle FCP's toolbar delegate so it knows about our custom toolbar items.
+// When FCP asks "what item goes at this identifier?", we intercept our IDs and
+// return our buttons. Everything else passes through to the original handler.
+static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *toolbar,
                                                    NSString *identifier, BOOL willInsert) {
-    if ([identifier isEqualToString:kFCPBridgeTranscriptToolbarID]) {
-        NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:kFCPBridgeTranscriptToolbarID];
+    if ([identifier isEqualToString:kSpliceKitTranscriptToolbarID]) {
+        NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:kSpliceKitTranscriptToolbarID];
         item.label = @"Transcript";
         item.paletteLabel = @"Transcript Editor";
         item.toolTip = @"Transcript Editor";
@@ -319,16 +345,16 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
         button.image = icon;
         button.alternateImage = icon;
         button.imagePosition = NSImageOnly;
-        button.target = [FCPBridgeMenuController shared];
+        button.target = [SpliceKitMenuController shared];
         button.action = @selector(toggleTranscriptPanel:);
 
-        [FCPBridgeMenuController shared].toolbarButton = button;
+        [SpliceKitMenuController shared].toolbarButton = button;
         item.view = button;
 
         return item;
     }
-    if ([identifier isEqualToString:kFCPBridgePaletteToolbarID]) {
-        NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:kFCPBridgePaletteToolbarID];
+    if ([identifier isEqualToString:kSpliceKitPaletteToolbarID]) {
+        NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:kSpliceKitPaletteToolbarID];
         item.label = @"Commands";
         item.paletteLabel = @"Command Palette";
         item.toolTip = @"Command Palette (Cmd+Shift+P)";
@@ -346,10 +372,10 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
         button.bordered = YES;
         button.image = icon;
         button.imagePosition = NSImageOnly;
-        button.target = [FCPBridgeMenuController shared];
+        button.target = [SpliceKitMenuController shared];
         button.action = @selector(toggleCommandPalette:);
 
-        [FCPBridgeMenuController shared].paletteToolbarButton = button;
+        [SpliceKitMenuController shared].paletteToolbarButton = button;
         item.view = button;
 
         return item;
@@ -359,10 +385,12 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
         self, _cmd, toolbar, identifier, willInsert);
 }
 
-@implementation FCPBridgeMenuController (Toolbar)
+@implementation SpliceKitMenuController (Toolbar)
 
 + (void)installToolbarButton {
-    // Observe window-did-become-main to catch the toolbar as soon as it's ready
+    // FCP's main window isn't ready immediately at launch — we need to wait
+    // for it. We use a two-pronged approach: listen for the notification,
+    // and also poll as a fallback in case we missed it.
     __block id observer = [[NSNotificationCenter defaultCenter]
         addObserverForName:NSWindowDidBecomeMainNotification
         object:nil queue:[NSOperationQueue mainQueue]
@@ -371,7 +399,7 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
             if (window.toolbar) {
                 [[NSNotificationCenter defaultCenter] removeObserver:observer];
                 observer = nil;
-                [FCPBridgeMenuController addToolbarButtonToWindow:window];
+                [SpliceKitMenuController addToolbarButtonToWindow:window];
             }
         }];
 
@@ -381,15 +409,16 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
 
 + (void)installToolbarButtonAttempt:(int)attempt {
     if (attempt >= 30) {
-        FCPBridge_log(@"No main window for toolbar button after %d attempts", attempt);
+        // 30 seconds is plenty. If there's no toolbar by now, something's wrong.
+        SpliceKit_log(@"No main window for toolbar button after %d attempts", attempt);
         return;
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        // Check all windows, not just mainWindow
+        // FCP sometimes has multiple windows — check all of them
         for (NSWindow *w in [NSApp windows]) {
             if (w.toolbar && w.toolbar.items.count > 0) {
-                [FCPBridgeMenuController addToolbarButtonToWindow:w];
+                [SpliceKitMenuController addToolbarButtonToWindow:w];
                 return;
             }
         }
@@ -401,14 +430,15 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
     @try {
         NSToolbar *toolbar = window.toolbar;
         if (!toolbar) {
-            FCPBridge_log(@"No toolbar on main window");
+            SpliceKit_log(@"No toolbar on main window");
             return;
         }
 
-        // Swizzle the toolbar delegate to handle our custom item identifier
+        // We need to teach FCP's toolbar delegate about our custom item IDs.
+        // The cleanest way is to swizzle the delegate's itemForItemIdentifier: method.
         id delegate = toolbar.delegate;
         if (!delegate) {
-            FCPBridge_log(@"No toolbar delegate");
+            SpliceKit_log(@"No toolbar delegate");
             return;
         }
 
@@ -417,27 +447,28 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
             Method m = class_getInstanceMethod([delegate class], sel);
             if (m) {
                 sOriginalToolbarItemForIdentifier = method_getImplementation(m);
-                method_setImplementation(m, (IMP)FCPBridge_toolbar_itemForItemIdentifier);
-                FCPBridge_log(@"Swizzled toolbar delegate %@ for custom item", NSStringFromClass([delegate class]));
+                method_setImplementation(m, (IMP)SpliceKit_toolbar_itemForItemIdentifier);
+                SpliceKit_log(@"Swizzled toolbar delegate %@ for custom item", NSStringFromClass([delegate class]));
             }
         }
 
-        // Check existing items — remove stale ones, skip if already present
+        // Guard against double-insertion — can happen if both the notification
+        // and the polling fallback fire. Also clean up stale items (no view).
         BOOL hasTranscript = NO, hasPalette = NO;
         for (NSInteger i = (NSInteger)toolbar.items.count - 1; i >= 0; i--) {
             NSToolbarItem *ti = toolbar.items[(NSUInteger)i];
-            if ([ti.itemIdentifier isEqualToString:kFCPBridgeTranscriptToolbarID]) {
+            if ([ti.itemIdentifier isEqualToString:kSpliceKitTranscriptToolbarID]) {
                 if (ti.view) {
                     if ([ti.view isKindOfClass:[NSButton class]])
-                        [FCPBridgeMenuController shared].toolbarButton = (NSButton *)ti.view;
+                        [SpliceKitMenuController shared].toolbarButton = (NSButton *)ti.view;
                     hasTranscript = YES;
                 } else {
                     [toolbar removeItemAtIndex:(NSUInteger)i];
                 }
-            } else if ([ti.itemIdentifier isEqualToString:kFCPBridgePaletteToolbarID]) {
+            } else if ([ti.itemIdentifier isEqualToString:kSpliceKitPaletteToolbarID]) {
                 if (ti.view) {
                     if ([ti.view isKindOfClass:[NSButton class]])
-                        [FCPBridgeMenuController shared].paletteToolbarButton = (NSButton *)ti.view;
+                        [SpliceKitMenuController shared].paletteToolbarButton = (NSButton *)ti.view;
                     hasPalette = YES;
                 } else {
                     [toolbar removeItemAtIndex:(NSUInteger)i];
@@ -445,11 +476,12 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
             }
         }
         if (hasTranscript && hasPalette) {
-            FCPBridge_log(@"Both toolbar buttons already present — skipping");
+            SpliceKit_log(@"Both toolbar buttons already present — skipping");
             return;
         }
 
-        // Find flexible space to insert before it
+        // Insert our buttons just before the flexible space — that's where
+        // they look most natural, grouped with FCP's own tool buttons.
         NSUInteger insertIdx = toolbar.items.count;
         for (NSUInteger i = 0; i < toolbar.items.count; i++) {
             NSToolbarItem *ti = toolbar.items[i];
@@ -459,172 +491,188 @@ static id FCPBridge_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
             }
         }
         if (!hasPalette) {
-            [toolbar insertItemWithItemIdentifier:kFCPBridgePaletteToolbarID atIndex:insertIdx];
-            FCPBridge_log(@"Command Palette toolbar button inserted at index %lu", (unsigned long)insertIdx);
+            [toolbar insertItemWithItemIdentifier:kSpliceKitPaletteToolbarID atIndex:insertIdx];
+            SpliceKit_log(@"Command Palette toolbar button inserted at index %lu", (unsigned long)insertIdx);
             insertIdx++;
         }
         if (!hasTranscript) {
-            [toolbar insertItemWithItemIdentifier:kFCPBridgeTranscriptToolbarID atIndex:insertIdx];
-            FCPBridge_log(@"Transcript toolbar button inserted at index %lu", (unsigned long)insertIdx);
+            [toolbar insertItemWithItemIdentifier:kSpliceKitTranscriptToolbarID atIndex:insertIdx];
+            SpliceKit_log(@"Transcript toolbar button inserted at index %lu", (unsigned long)insertIdx);
         }
 
     } @catch (NSException *e) {
-        FCPBridge_log(@"Failed to install toolbar button: %@", e.reason);
+        SpliceKit_log(@"Failed to install toolbar button: %@", e.reason);
     }
 }
 
 @end
 
 #pragma mark - App Launch Handler
+//
+// This fires once FCP is fully loaded and its UI is ready. We can't do most of
+// our setup in the constructor because FCP's frameworks aren't loaded yet at that
+// point — you'll get nil back from objc_getClass for anything in Flexo.framework.
+//
 
-static void FCPBridge_appDidLaunch(void) {
-    FCPBridge_log(@"================================================");
-    FCPBridge_log(@"App launched. Starting control server...");
-    FCPBridge_log(@"================================================");
+static void SpliceKit_appDidLaunch(void) {
+    SpliceKit_log(@"================================================");
+    SpliceKit_log(@"App launched. Starting control server...");
+    SpliceKit_log(@"================================================");
 
     // Run compatibility check now that all frameworks are loaded
-    FCPBridge_checkCompatibility();
+    SpliceKit_checkCompatibility();
 
     // Count total loaded classes
     unsigned int classCount = 0;
     Class *allClasses = objc_copyClassList(&classCount);
     free(allClasses);
-    FCPBridge_log(@"Total ObjC classes in process: %u", classCount);
+    SpliceKit_log(@"Total ObjC classes in process: %u", classCount);
 
-    // Install FCPBridge menu in the menu bar
-    FCPBridge_installMenu();
+    // Install Enhancements menu in the menu bar
+    SpliceKit_installMenu();
 
     // Install toolbar button in FCP's main window
-    [FCPBridgeMenuController installToolbarButton];
+    [SpliceKitMenuController installToolbarButton];
 
     // Install transition freeze-extend swizzle (adds "Use Freeze Frames" button
     // to the "not enough extra media" dialog)
-    FCPBridge_installTransitionFreezeExtendSwizzle();
+    SpliceKit_installTransitionFreezeExtendSwizzle();
 
     // Install effect-drag-as-adjustment-clip swizzle (allows dragging effects
     // to empty timeline space to create adjustment clips)
-    FCPBridge_installEffectDragAsAdjustmentClip();
+    SpliceKit_installEffectDragAsAdjustmentClip();
 
     // Install viewer pinch-to-zoom if previously enabled
-    if (FCPBridge_isViewerPinchZoomEnabled()) {
-        FCPBridge_installViewerPinchZoom();
+    if (SpliceKit_isViewerPinchZoomEnabled()) {
+        SpliceKit_installViewerPinchZoom();
     }
 
     // Install video-only-keeps-audio-disabled swizzle if previously enabled
-    if (FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled()) {
-        FCPBridge_installVideoOnlyKeepsAudioDisabled();
+    if (SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled()) {
+        SpliceKit_installVideoOnlyKeepsAudioDisabled();
     }
 
     // Install effect browser favorites context menu (always on)
-    FCPBridge_installEffectFavoritesSwizzle();
+    SpliceKit_installEffectFavoritesSwizzle();
 
     // Start the control server on a background thread
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        FCPBridge_startControlServer();
+        SpliceKit_startControlServer();
     });
 }
 
-#pragma mark - CloudContent Crash Prevention
+#pragma mark - Crash Prevention & Startup Fixes
+//
+// FCP has a few code paths that crash or hang when running outside its normal
+// signed/entitled environment. We patch them out before they have a chance to fire.
+//
+// These swizzles are applied in the constructor (before main), so they need to
+// target classes that are available early — mostly Swift classes in the main
+// binary and ProCore framework classes.
+//
 
+// Replacement IMPs for blocking problematic methods
 static void noopMethod(id self, SEL _cmd) {
-    FCPBridge_log(@"BLOCKED: -[%@ %@]", NSStringFromClass([self class]), NSStringFromSelector(_cmd));
+    SpliceKit_log(@"BLOCKED: -[%@ %@]", NSStringFromClass([self class]), NSStringFromSelector(_cmd));
 }
 
 static void noopMethodWithArg(id self, SEL _cmd, id arg) {
-    FCPBridge_log(@"BLOCKED: -[%@ %@]", NSStringFromClass([self class]), NSStringFromSelector(_cmd));
+    SpliceKit_log(@"BLOCKED: -[%@ %@]", NSStringFromClass([self class]), NSStringFromSelector(_cmd));
 }
 
 static BOOL returnNO(id self, SEL _cmd) {
-    FCPBridge_log(@"BLOCKED (returning NO): +[%@ %@]",
+    SpliceKit_log(@"BLOCKED (returning NO): +[%@ %@]",
                   NSStringFromClass(object_getClass(self)), NSStringFromSelector(_cmd));
     return NO;
 }
 
 static void noopMethodWith2Args(id self, SEL _cmd, id arg1, id arg2) {}
 
-static void FCPBridge_fixShutdownHang(void) {
-    // FCP's PCUserDefaultsMigrator.copyUserDefaultsToGroupContainer hangs on quit
-    // by enumerating a huge media directory via getattrlistbulk. Swizzle it to no-op.
+// PCUserDefaultsMigrator runs on quit and calls copyDataFromSource:toTarget:,
+// which walks a potentially massive media directory tree via getattrlistbulk.
+// On large libraries this hangs for 30+ seconds, making FCP feel like it froze.
+// Since we don't need the migration, we just no-op it.
+static void SpliceKit_fixShutdownHang(void) {
     Class migrator = objc_getClass("PCUserDefaultsMigrator");
     if (migrator) {
         SEL sel = NSSelectorFromString(@"copyDataFromSource:toTarget:");
         Method m = class_getInstanceMethod(migrator, sel);
         if (m) {
             method_setImplementation(m, (IMP)noopMethodWith2Args);
-            FCPBridge_log(@"Swizzled PCUserDefaultsMigrator.copyDataFromSource: (fixes shutdown hang)");
+            SpliceKit_log(@"Swizzled PCUserDefaultsMigrator.copyDataFromSource: (fixes shutdown hang)");
         }
     }
 }
 
-static void FCPBridge_disableCloudContent(void) {
-    FCPBridge_log(@"Disabling CloudContent/ImagePlayground...");
+// CloudContent/ImagePlayground crashes at launch because:
+//   PEAppController.presentMainWindowOnAppLaunch: checks CloudContentFeatureFlag.isEnabled,
+//   which triggers CloudContentCatalog.shared -> CCFirstLaunchHelper -> CloudKit.
+//   Without proper iCloud entitlements, CloudKit throws an uncaught exception.
+//
+// Fix: make the feature flag return NO so the entire code path is skipped.
+// Same deal with FFImagePlayground.isAvailable — it goes through a similar CloudKit path.
+static void SpliceKit_disableCloudContent(void) {
+    SpliceKit_log(@"Disabling CloudContent/ImagePlayground...");
 
-    // The crash path in -[PEAppController presentMainWindowOnAppLaunch:]:
-    //   if (+[CloudContentFeatureFlag isEnabled]) {  <-- gate the whole flow
-    //     CloudContentCatalog.shared -> CCFirstLaunchHelper -> CloudKit (crash)
-    //   }
-    // Fix: make +[CloudContentFeatureFlag isEnabled] return NO
-
-    // CloudContentFeatureFlag is a Swift class with mangled name
-    // _TtC13Final_Cut_Pro23CloudContentFeatureFlag
+    // Swift class names get mangled. Try the mangled name first, then the demangled form.
     Class ccFlag = objc_getClass("_TtC13Final_Cut_Pro23CloudContentFeatureFlag");
     if (!ccFlag) {
-        // Try alternate name
         ccFlag = objc_getClass("Final_Cut_Pro.CloudContentFeatureFlag");
     }
 
     if (ccFlag) {
-        // Swizzle the class method +isEnabled to return NO
         Method m = class_getClassMethod(ccFlag, @selector(isEnabled));
         if (m) {
             method_setImplementation(m, (IMP)returnNO);
-            FCPBridge_log(@"  Swizzled +[CloudContentFeatureFlag isEnabled] -> NO");
+            SpliceKit_log(@"  Swizzled +[CloudContentFeatureFlag isEnabled] -> NO");
         } else {
-            FCPBridge_log(@"  WARNING: +isEnabled not found on CloudContentFeatureFlag");
+            SpliceKit_log(@"  WARNING: +isEnabled not found on CloudContentFeatureFlag");
         }
     } else {
-        FCPBridge_log(@"  WARNING: CloudContentFeatureFlag class not found");
+        SpliceKit_log(@"  WARNING: CloudContentFeatureFlag class not found");
     }
 
-    // Also disable FFImagePlayground.isAvailable which can also crash
     Class ipClass = objc_getClass("_TtC5Flexo17FFImagePlayground");
     if (!ipClass) ipClass = objc_getClass("Flexo.FFImagePlayground");
     if (ipClass) {
         Method m = class_getClassMethod(ipClass, @selector(isAvailable));
         if (m) {
             method_setImplementation(m, (IMP)returnNO);
-            FCPBridge_log(@"  Swizzled +[FFImagePlayground isAvailable] -> NO");
+            SpliceKit_log(@"  Swizzled +[FFImagePlayground isAvailable] -> NO");
         }
     }
 
-    FCPBridge_log(@"CloudContent/ImagePlayground disabled.");
+    SpliceKit_log(@"CloudContent/ImagePlayground disabled.");
 }
 
-#pragma mark - Constructor (called on dylib load)
+#pragma mark - Constructor
+//
+// __attribute__((constructor)) means this runs automatically when the dylib is loaded,
+// before FCP's main() function. At this point most of FCP's frameworks aren't loaded
+// yet, so we can only do early setup: logging, crash prevention patches, and
+// registering for the "app finished launching" notification where the real work happens.
+//
 
 __attribute__((constructor))
-static void FCPBridge_init(void) {
-    // Initialize logging first
-    FCPBridge_initLogging();
+static void SpliceKit_init(void) {
+    SpliceKit_initLogging();
 
-    FCPBridge_log(@"================================================");
-    FCPBridge_log(@"FCPBridge v%s initializing...", FCPBRIDGE_VERSION);
-    FCPBridge_log(@"PID: %d", getpid());
-    FCPBridge_log(@"Home: %@", NSHomeDirectory());
-    FCPBridge_log(@"================================================");
+    SpliceKit_log(@"================================================");
+    SpliceKit_log(@"SpliceKit v%s initializing...", SPLICEKIT_VERSION);
+    SpliceKit_log(@"PID: %d", getpid());
+    SpliceKit_log(@"Home: %@", NSHomeDirectory());
+    SpliceKit_log(@"================================================");
 
-    // Swizzle out CloudContent first-launch flow that crashes without iCloud entitlements
-    FCPBridge_disableCloudContent();
+    // These patches need to land before FCP's own init code runs
+    SpliceKit_disableCloudContent();
+    SpliceKit_fixShutdownHang();
 
-    // Fix shutdown hang caused by PCUserDefaultsMigrator
-    FCPBridge_fixShutdownHang();
-
-    // Register for app launch notification
+    // Everything else waits for the app to finish launching
     [[NSNotificationCenter defaultCenter]
         addObserverForName:NSApplicationDidFinishLaunchingNotification
         object:nil queue:nil usingBlock:^(NSNotification *note) {
-            FCPBridge_appDidLaunch();
+            SpliceKit_appDidLaunch();
         }];
 
-    FCPBridge_log(@"Constructor complete. Waiting for app launch...");
+    SpliceKit_log(@"Constructor complete. Waiting for app launch...");
 }

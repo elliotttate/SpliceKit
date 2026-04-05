@@ -1,68 +1,91 @@
 //
-//  FCPBridgeRuntime.m
-//  ObjC runtime access utilities - class discovery, method introspection
+//  SpliceKitRuntime.m
+//  ObjC runtime utilities — the foundation everything else is built on.
+//
+//  FCP doesn't have a public API, so we talk to it through raw objc_msgSend
+//  calls and runtime introspection. This file provides the plumbing:
+//  - Safe message sending (nil-checks before dispatch)
+//  - Main thread execution (tricky because of FCP's modal dialogs)
+//  - Class/method discovery for reverse-engineering FCP's internals
 //
 
-#import "FCPBridge.h"
+#import "SpliceKit.h"
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 
 #pragma mark - Safe Message Sending
+//
+// These look trivial, but they save us from scattered nil-checks everywhere.
+// When you're chasing a 5-deep KVC chain through FCP's object graph,
+// any link can be nil and sending a message to nil silently returns 0/nil.
+// That's fine for ObjC, but we want to *know* when something's missing.
+//
 
-id FCPBridge_sendMsg(id target, SEL selector) {
+id SpliceKit_sendMsg(id target, SEL selector) {
     if (!target) return nil;
     return ((id (*)(id, SEL))objc_msgSend)(target, selector);
 }
 
-id FCPBridge_sendMsg1(id target, SEL selector, id arg1) {
+id SpliceKit_sendMsg1(id target, SEL selector, id arg1) {
     if (!target) return nil;
     return ((id (*)(id, SEL, id))objc_msgSend)(target, selector, arg1);
 }
 
-id FCPBridge_sendMsg2(id target, SEL selector, id arg1, id arg2) {
+id SpliceKit_sendMsg2(id target, SEL selector, id arg1, id arg2) {
     if (!target) return nil;
     return ((id (*)(id, SEL, id, id))objc_msgSend)(target, selector, arg1, arg2);
 }
 
-BOOL FCPBridge_sendMsgBool(id target, SEL selector) {
+BOOL SpliceKit_sendMsgBool(id target, SEL selector) {
     if (!target) return NO;
     return ((BOOL (*)(id, SEL))objc_msgSend)(target, selector);
 }
 
 #pragma mark - Main Thread Dispatch
+//
+// Almost everything in FCP's UI layer (timeline, inspector, viewer) is main-thread-only.
+// Our JSON-RPC requests arrive on background threads, so we need to hop over.
+//
+// The wrinkle: dispatch_sync(dispatch_get_main_queue(), ...) deadlocks when FCP
+// is showing a modal dialog (sheet, save panel, etc.) because the main queue
+// doesn't drain during modal run loops. CFRunLoopPerformBlock + kCFRunLoopCommonModes
+// sidesteps this by scheduling directly on the run loop instead of the GCD queue.
+//
 
-void FCPBridge_executeOnMainThread(dispatch_block_t block) {
+void SpliceKit_executeOnMainThread(dispatch_block_t block) {
     if ([NSThread isMainThread]) {
         block();
     } else {
-        // Use CFRunLoopPerformBlock with kCFRunLoopCommonModes so it works
-        // even when FCP is running a modal event loop (sheets, dialogs).
-        // dispatch_sync deadlocks in that situation because the main queue
-        // isn't drained during modal sessions.
         dispatch_semaphore_t sem = dispatch_semaphore_create(0);
         CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
             block();
             dispatch_semaphore_signal(sem);
         });
         CFRunLoopWakeUp(CFRunLoopGetMain());
-        // Timeout after 20 seconds to prevent deadlocks when the main thread
-        // is stuck (e.g., loading CompressorKit during startup, modal dialogs).
+
+        // 20s timeout — better than a silent deadlock.
+        // This can happen during startup (CompressorKit load) or heavy modal dialogs.
         long waitResult = dispatch_semaphore_wait(sem,
             dispatch_time(DISPATCH_TIME_NOW, 20LL * NSEC_PER_SEC));
         if (waitResult != 0) {
-            NSLog(@"[FCPBridge] WARNING: Main thread dispatch timed out (20s). "
+            NSLog(@"[SpliceKit] WARNING: Main thread dispatch timed out (20s). "
                   @"Main thread may be blocked by startup or modal dialog.");
         }
     }
 }
 
-void FCPBridge_executeOnMainThreadAsync(dispatch_block_t block) {
+void SpliceKit_executeOnMainThreadAsync(dispatch_block_t block) {
     dispatch_async(dispatch_get_main_queue(), block);
 }
 
 #pragma mark - Class Discovery
+//
+// These are the reverse-engineering tools. FCP has 78K+ ObjC classes across
+// dozens of frameworks. We can enumerate them by Mach-O image (to see what
+// came from Flexo vs ProAppSupport vs TimelineKit) or grab the full list.
+//
 
-NSArray *FCPBridge_classesInImage(const char *imageName) {
+NSArray *SpliceKit_classesInImage(const char *imageName) {
     NSMutableArray *result = [NSMutableArray array];
     unsigned int count = 0;
     const char **names = objc_copyClassNamesForImage(imageName, &count);
@@ -75,7 +98,10 @@ NSArray *FCPBridge_classesInImage(const char *imageName) {
     return result;
 }
 
-NSDictionary *FCPBridge_methodsForClass(Class cls) {
+// Returns every method on a class: selector name, type encoding, and IMP address.
+// The IMP address is useful for setting breakpoints or cross-referencing with
+// disassembly when you're trying to figure out what a method actually does.
+NSDictionary *SpliceKit_methodsForClass(Class cls) {
     NSMutableDictionary *methods = [NSMutableDictionary dictionary];
     unsigned int count = 0;
     Method *methodList = class_copyMethodList(cls, &count);
@@ -96,7 +122,10 @@ NSDictionary *FCPBridge_methodsForClass(Class cls) {
     return methods;
 }
 
-NSArray *FCPBridge_allLoadedClasses(void) {
+// Grab every class in the process, sorted alphabetically.
+// Some classes are flaky (Swift generics, partially-loaded bundles) so we
+// wrap the name lookup in a try-catch to avoid crashing on garbage metadata.
+NSArray *SpliceKit_allLoadedClasses(void) {
     NSMutableArray *result = [NSMutableArray array];
     unsigned int count = 0;
     Class *classes = objc_copyClassList(&count);
@@ -111,7 +140,7 @@ NSArray *FCPBridge_allLoadedClasses(void) {
                     }
                 }
             } @catch (NSException *e) {
-                // Skip problematic classes
+                // Some classes blow up when you touch them — just skip 'em
             }
         }
         free(classes);
