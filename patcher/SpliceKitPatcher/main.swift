@@ -100,18 +100,7 @@ class PatcherModel: ObservableObject {
             }
         }
 
-        // 3. Common locations
-        if found.isEmpty {
-            for path in [
-                NSHomeDirectory() + "/Documents/GitHub/SpliceKit",
-                NSHomeDirectory() + "/Desktop/SpliceKit",
-                NSHomeDirectory() + "/SpliceKit",
-            ] {
-                if FileManager.default.fileExists(atPath: path + "/Sources/SpliceKit.m") {
-                    found = path; break
-                }
-            }
-        }
+        // 3. No hardcoded user paths — skip to cache dir
 
         // 4. Cache dir (download during patch)
         if found.isEmpty {
@@ -375,19 +364,14 @@ class PatcherModel: ObservableObject {
             """
         try plist.write(toFile: fwDir + "/Versions/A/Resources/Info.plist", atomically: true, encoding: .utf8)
 
-        // Deploy tools to locations the runtime code can find
-        let toolsDirs = [
-            NSHomeDirectory() + "/Desktop/SpliceKit/build",
-            NSHomeDirectory() + "/Documents/GitHub/SpliceKit/build",
-        ]
-        for toolsDir in toolsDirs {
-            shell("mkdir -p '\(toolsDir)'")
-            if FileManager.default.fileExists(atPath: silenceBin) {
-                shell("cp '\(silenceBin)' '\(toolsDir)/silence-detector'")
-            }
-            if FileManager.default.fileExists(atPath: parakeetBin) {
-                shell("cp '\(parakeetBin)' '\(toolsDir)/parakeet-transcriber'")
-            }
+        // Deploy tools to ~/Applications/SpliceKit/tools/
+        let toolsDir = destDir + "/tools"
+        shell("mkdir -p '\(toolsDir)'")
+        if FileManager.default.fileExists(atPath: silenceBin) {
+            shell("cp '\(silenceBin)' '\(toolsDir)/silence-detector'")
+        }
+        if FileManager.default.fileExists(atPath: parakeetBin) {
+            shell("cp '\(parakeetBin)' '\(toolsDir)/parakeet-transcriber'")
         }
         // Also deploy parakeet-transcriber into the framework Resources so it's found first
         if FileManager.default.fileExists(atPath: parakeetBin) {

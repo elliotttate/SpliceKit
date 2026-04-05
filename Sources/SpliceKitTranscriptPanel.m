@@ -1785,14 +1785,11 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
     NSString *builtPath = [buildDir stringByAppendingPathComponent:@"parakeet-transcriber"];
     if ([fm fileExistsAtPath:builtPath]) return builtPath;
 
-    // 2. Common deploy directories (matching silence-detector pattern)
+    // 2. Standard tool locations (portable — no user-specific paths)
     NSString *home = NSHomeDirectory();
     NSArray *searchPaths = @[
-        [home stringByAppendingPathComponent:@"Desktop/SpliceKit/build/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"Documents/GitHub/SpliceKit/build/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"Desktop/SpliceKit/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"Documents/GitHub/SpliceKit/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"SpliceKit/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Applications/SpliceKit/tools/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Library/Application Support/SpliceKit/tools/parakeet-transcriber"],
         [home stringByAppendingPathComponent:@"Library/Caches/SpliceKit/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
     ];
     for (NSString *path in searchPaths) {
@@ -1806,10 +1803,8 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *home = NSHomeDirectory();
     NSArray *candidates = @[
-        [home stringByAppendingPathComponent:@"Documents/GitHub/SpliceKit/tools/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"Desktop/SpliceKit/tools/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"SpliceKit/tools/parakeet-transcriber"],
         [home stringByAppendingPathComponent:@"Library/Caches/SpliceKit/tools/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Library/Application Support/SpliceKit/tools/parakeet-transcriber"],
     ];
     for (NSString *path in candidates) {
         if ([fm fileExistsAtPath:[path stringByAppendingPathComponent:@"Package.swift"]]) {

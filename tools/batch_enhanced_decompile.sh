@@ -9,8 +9,8 @@ IDAT="/Applications/IDA Professional 9.3.app/Contents/MacOS/idat"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT="$SCRIPT_DIR/ida_apply_and_decompile.py"
 EXPORT_DIR="$SCRIPT_DIR/../ida_export"
-FCP_APP="${FCP_APP:-/Users/briantate/Applications/SpliceKit/Final Cut Pro.app}"
-OUTPUT_ROOT="${1:-/Users/briantate/Desktop/FinalCutPro_Decompiled}"
+FCP_APP="${FCP_APP:-$HOME/Applications/SpliceKit/Final Cut Pro.app}"
+OUTPUT_ROOT="${1:-$HOME/Desktop/FinalCutPro_Decompiled}"
 
 BINARIES=(
   # Tier 1 — Core

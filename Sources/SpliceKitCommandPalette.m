@@ -1522,9 +1522,8 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     // 2. Common deploy directories
     NSString *home = NSHomeDirectory();
     NSArray *paths = @[
-        [home stringByAppendingPathComponent:@"Desktop/SpliceKit/build/silence-detector"],
-        [home stringByAppendingPathComponent:@"Documents/GitHub/SpliceKit/build/silence-detector"],
-        [home stringByAppendingPathComponent:@"SpliceKit/build/silence-detector"],
+        [home stringByAppendingPathComponent:@"Applications/SpliceKit/tools/silence-detector"],
+        [home stringByAppendingPathComponent:@"Library/Application Support/SpliceKit/tools/silence-detector"],
         [home stringByAppendingPathComponent:@"Library/Caches/SpliceKit/build/silence-detector"],
     ];
     for (NSString *p in paths) {
@@ -1650,7 +1649,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
                 dispatch_async(dispatch_get_main_queue(), ^{
                     NSAlert *a = [[NSAlert alloc] init];
                     a.messageText = @"Silence Detector Not Found";
-                    a.informativeText = @"Build it with:\n  cd ~/Desktop/SpliceKit && make tools";
+                    a.informativeText = @"Re-run the SpliceKit patcher to install tools, or build from source with 'make tools'.";
                     a.alertStyle = NSAlertStyleWarning;
                     [a runModal];
                 });

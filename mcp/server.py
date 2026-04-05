@@ -2151,8 +2151,9 @@ def detect_beats(file_path: str, sensitivity: float = 0.5, min_bpm: float = 60.0
     # Run beat-detector as an external process (AVFoundation deadlocks inside FCP)
     tool_paths = [
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "build", "beat-detector"),
+        os.path.expanduser("~/Applications/SpliceKit/tools/beat-detector"),
+        os.path.expanduser("~/Library/Application Support/SpliceKit/tools/beat-detector"),
         "/usr/local/bin/beat-detector",
-        os.path.expanduser("~/Documents/GitHub/SpliceKit/build/beat-detector"),
     ]
     tool = None
     for p in tool_paths:
@@ -2160,7 +2161,7 @@ def detect_beats(file_path: str, sensitivity: float = 0.5, min_bpm: float = 60.0
             tool = p
             break
     if not tool:
-        return "Error: beat-detector tool not found. Build it with: cd SpliceKit && swiftc -O -o build/beat-detector tools/beat-detector.swift"
+        return "Error: beat-detector tool not found. Re-run the SpliceKit patcher to install tools, or build from source with: swiftc -O -o build/beat-detector tools/beat-detector.swift"
 
     try:
         result = subprocess.run(
