@@ -151,6 +151,21 @@ class PatcherModel: ObservableObject {
         }
     }
 
+    /// Lightweight poll of the bridge connection state. Runs the `lsof` probe
+    /// off the main thread and only updates `bridgeConnected` when it actually
+    /// changes, so the StatusPanel's indicator light reflects FCP's live state
+    /// without the user having to hit Refresh.
+    func pollBridgeStatus() async {
+        let connected: Bool = await Task.detached { [self] in
+            let r = self.shell("lsof -i :9876 2>/dev/null | grep LISTEN")
+            return !r.isEmpty
+        }.value
+
+        if connected != bridgeConnected {
+            bridgeConnected = connected
+        }
+    }
+
     func patch() {
         guard !isPatching else { return }
         isPatching = true

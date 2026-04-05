@@ -84,5 +84,14 @@ struct StatusPanel: View {
             }
         }
         .padding(24)
+        .task {
+            // Keep the connection indicator in sync with FCP's live state.
+            // Runs only while the panel is mounted; cancelled automatically
+            // on panel/view dismissal.
+            while !Task.isCancelled {
+                await model.pollBridgeStatus()
+                try? await Task.sleep(for: .seconds(1.5))
+            }
+        }
     }
 }
