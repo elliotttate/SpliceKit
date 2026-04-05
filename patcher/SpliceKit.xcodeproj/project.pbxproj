@@ -61,6 +61,24 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		22D74E212F81FDBB00A9252B /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				22D74E1E2F81FBD900A9252B /* Credits.rtf */,
+				AA0000000000000000000008 /* Assets.xcassets */,
+				AA0000000000000000000009 /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		22D74E222F81FDCB00A9252B /* Code */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000001 /* SpliceKitApp.swift */,
+			);
+			path = Code;
+			sourceTree = "<group>";
+		};
 		CC0000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
@@ -73,12 +91,10 @@
 		CC0000000000000000000002 /* SpliceKit */ = {
 			isa = PBXGroup;
 			children = (
-				22D74E1E2F81FBD900A9252B /* Credits.rtf */,
-				AA0000000000000000000001 /* SpliceKitApp.swift */,
+				22D74E222F81FDCB00A9252B /* Code */,
 				CC0000000000000000000003 /* Models */,
 				CC0000000000000000000004 /* Views */,
-				AA0000000000000000000008 /* Assets.xcassets */,
-				AA0000000000000000000009 /* Info.plist */,
+				22D74E212F81FDBB00A9252B /* Resources */,
 			);
 			path = SpliceKit;
 			sourceTree = "<group>";
