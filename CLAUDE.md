@@ -714,7 +714,20 @@ RUNTIME_JSON=ida_export/Flexo.json DECOMPILE_OUTPUT_DIR=output \
 SpliceKit includes a full debugging toolkit that provides Xcode/lldb-level capabilities
 from within FCP's process, accessible via MCP. No debugger attachment required.
 
-### Method Tracing (replaces breakpoints)
+### Breakpoints (pause + inspect + continue)
+```
+debug.breakpoint(action="add", className="FFAnchoredTimelineModule", selector="blade:")
+# ... press B in FCP — execution pauses, breakpoint.hit event fires ...
+debug.breakpoint(action="inspect")                                    # see paused state
+debug.breakpoint(action="inspectSelf", keyPath="sequence.displayName") # inspect properties
+debug.breakpoint(action="continue")                                   # resume execution
+debug.breakpoint(action="step")                                       # resume + break on next call
+```
+Supports conditional breakpoints (`condition="keyPath"`), hit counts (`hitCount=5`),
+and one-shot breakpoints (`oneShot=True`). FCP freezes while paused (same as Xcode).
+The JSON-RPC server stays alive on a separate thread so you can inspect state.
+
+### Method Tracing (non-blocking alternative)
 ```
 debug.traceMethod(action="add", className="FFAnchoredTimelineModule",
                   selector="blade:", logStack=True)
@@ -723,6 +736,8 @@ debug.traceMethod(action="getLog", limit=10)  # see calls + call stacks
 debug.traceMethod(action="removeAll")          # clean up
 ```
 Traces are broadcast to MCP clients in real-time as JSON-RPC notifications.
+Use tracing when you want to observe without pausing, breakpoints when you need
+to inspect state at a specific moment.
 
 ### Property Watching (replaces watchpoints)
 ```

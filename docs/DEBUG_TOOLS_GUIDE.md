@@ -11,6 +11,7 @@ All debug tools are accessed via JSON-RPC on `127.0.0.1:9876`.
 
 | Endpoint | Purpose |
 |----------|---------|
+| `debug.breakpoint` | True breakpoints: pause execution, inspect state, continue/step |
 | `debug.traceMethod` | Swizzle methods to log calls, args, and call stacks |
 | `debug.watch` | KVO-based property change observation |
 | `debug.crashHandler` | Catch uncaught exceptions and signals |
@@ -29,6 +30,163 @@ All debug tools are accessed via JSON-RPC on `127.0.0.1:9876`.
 | `debug.getImageSections` | Read Mach-O section data |
 | `debug.getImageSymbols` | Read symbol tables |
 | `debug.getNotificationNames` | List all notification name constants |
+
+## Breakpoints (`debug.breakpoint`)
+
+True breakpoints that pause FCP execution at any ObjC method, let you inspect the
+full object state while paused, then continue or step. FCP's UI freezes while
+paused — exactly like Xcode's debugger, but controlled entirely through MCP.
+
+The JSON-RPC server runs on a separate thread, so it keeps accepting commands
+while FCP is paused. This is what makes inspect/continue/step possible.
+
+### Set a breakpoint
+
+```python
+# Basic breakpoint
+debug.breakpoint(action="add", className="FFAnchoredTimelineModule", selector="blade:")
+
+# Conditional breakpoint — only fires when keyPath evaluates to truthy
+debug.breakpoint(action="add", className="FFAnchoredTimelineModule",
+                 selector="blade:", condition="sequence.hasContainedItems")
+
+# Hit count — only fires on the Nth call
+debug.breakpoint(action="add", className="FFAnchoredTimelineModule",
+                 selector="blade:", hitCount=3)
+
+# One-shot — fires once then auto-removes
+debug.breakpoint(action="add", className="FFAnchoredTimelineModule",
+                 selector="blade:", oneShot=True)
+```
+
+### When a breakpoint fires
+
+1. The calling thread is **paused** (blocks on a semaphore)
+2. A `breakpoint.hit` event is broadcast to MCP clients:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+    "type": "breakpoint.hit",
+    "data": {
+      "breakpoint": "FFAnchoredTimelineModule.blade:",
+      "selector": "blade:",
+      "selfClass": "FFAnchoredTimelineModule",
+      "self": "<FFAnchoredTimelineModule: 0x...>",
+      "selfHandle": "obj_42",
+      "firstArg": "<sender description>",
+      "firstArgHandle": "obj_43",
+      "callStack": ["0 SpliceKit ...", "1 Flexo ...", ...],
+      "timestamp": 1743811200.123,
+      "threadName": "main",
+      "isMainThread": true
+    }
+  }
+}
+```
+
+### Inspect state while paused
+
+```python
+# Get the full paused state
+debug.breakpoint(action="inspect")
+# Returns: {paused: true, breakpoint: "...", selfHandle: "obj_42", callStack: [...], ...}
+
+# Inspect properties on the paused self object
+debug.breakpoint(action="inspectSelf", keyPath="sequence.displayName")
+# Returns: {keyPath: "sequence.displayName", value: "My Timeline", class: "__NSCFString"}
+
+debug.breakpoint(action="inspectSelf", keyPath="sequence.primaryObject.containedItems.count")
+# Returns: {keyPath: "...", value: "12", class: "__NSCFNumber"}
+
+# Store a property value as a handle for deeper inspection
+debug.breakpoint(action="inspectSelf", keyPath="sequence", storeResult=True)
+# Returns: {keyPath: "sequence", value: "...", class: "FFAnchoredSequence", handle: "obj_44"}
+
+# Use debug.eval with the stored handle
+debug.eval(target="obj_44", chain=["primaryObject", "containedItems", "count"])
+```
+
+### Resume execution
+
+```python
+# Continue — resume normal execution
+debug.breakpoint(action="continue")
+
+# Step — resume but auto-break on the next call to any breakpointed method
+# on the same class
+debug.breakpoint(action="step")
+# Returns: {message: "Stepping — will break on next call to FFAnchoredTimelineModule"}
+```
+
+### Manage breakpoints
+
+```python
+debug.breakpoint(action="list")       # list all breakpoints + paused state
+debug.breakpoint(action="disable", className="...", selector="...")  # keep but don't fire
+debug.breakpoint(action="enable", className="...", selector="...")   # re-enable
+debug.breakpoint(action="remove", className="...", selector="...")   # remove + unswizzle
+debug.breakpoint(action="removeAll")  # remove all + resume if paused
+```
+
+### Breakpoint modes
+
+| Args | Mode | Behavior |
+|------|------|----------|
+| 0-1 object args (after self+_cmd) | `swizzle` | Full breakpoint — pauses, inspects, forwards to original |
+| 2+ object args | `trace_only` | Registered but not swizzled (can't safely forward args). Use `debug.traceMethod` instead |
+
+### Workflow: Reverse-engineering how FCP implements blade
+
+```python
+# 1. Set breakpoint
+debug.breakpoint(action="add", className="FFAnchoredTimelineModule",
+                 selector="blade:", oneShot=True)
+
+# 2. Press B in FCP to blade at playhead
+# → FCP freezes, breakpoint.hit event fires
+
+# 3. Inspect the timeline module's state
+debug.breakpoint(action="inspectSelf", keyPath="sequence.displayName")
+debug.breakpoint(action="inspectSelf", keyPath="selectedItems.count")
+debug.breakpoint(action="inspectSelf", keyPath="currentPlayheadTime")
+
+# 4. Look at the call stack to see how we got here
+debug.breakpoint(action="inspect")  # callStack field shows the full chain
+
+# 5. Continue execution
+debug.breakpoint(action="continue")
+```
+
+### Workflow: Debugging the freeze-extend crash
+
+```python
+# 1. Set breakpoint on the method that crashes
+debug.breakpoint(action="add", className="FFAnchoredTimelineModule",
+                 selector="retimeHold:")
+
+# 2. Trigger the operation
+timeline_action("retimeHold")
+# → Breakpoint fires BEFORE the crash
+
+# 3. Inspect state to understand what's wrong
+debug.breakpoint(action="inspectSelf", keyPath="selectedItems")
+debug.breakpoint(action="inspectSelf", keyPath="sequence.primaryObject")
+
+# 4. Continue to let it crash (crash handler will catch the details)
+debug.crashHandler(action="install")
+debug.breakpoint(action="continue")
+# → Crash handler captures the exception + stack trace
+debug.crashHandler(action="getLog")
+```
+
+### Safety notes
+
+- Breakpoints on the JSON-RPC server thread are automatically skipped (prevents deadlock)
+- `removeAll` auto-resumes if execution is paused (prevents stuck threads)
+- One-shot breakpoints auto-unswizzle after firing
+- Disabled breakpoints still intercept but call the original without pausing
 
 ## Method Tracing (`debug.traceMethod`)
 

@@ -155,12 +155,20 @@ class BridgeConnection:
             self.sock.connect((SPLICEKIT_HOST, SPLICEKIT_PORT))
             self._buf = b""
 
-    def call(self, method: str, **params) -> dict:
+    def call(self, method: str, params_dict=None, **params) -> dict:
         """Send a JSON-RPC request and wait for the response.
+
+        Accepts params as keyword args OR as a single dict positional arg:
+            bridge.call("method", key="value")       # kwargs
+            bridge.call("method", {"key": "value"})  # dict
 
         Returns the result dict on success, or {"error": "..."} on failure.
         Handles connection errors gracefully — the next call will auto-reconnect.
         """
+        if params_dict is not None:
+            if isinstance(params_dict, dict):
+                params = {**params_dict, **params}
+            # else ignore non-dict positional (shouldn't happen)
         try:
             self.ensure_connected()
         except (ConnectionRefusedError, OSError) as e:
@@ -2619,6 +2627,659 @@ def get_notification_names(binary: str = "") -> str:
     if binary:
         params["binary"] = binary
     r = bridge.call("debug.getNotificationNames", params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Debug: Breakpoints
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def debug_breakpoint(action: str = "list", class_name: str = "", selector: str = "",
+                     condition: str = "", hit_count: int = 0, one_shot: bool = False,
+                     key_path: str = "", store_result: bool = False,
+                     class_method: bool = False) -> str:
+    """Set, manage, and interact with in-process breakpoints on FCP methods.
+
+    True breakpoints that pause FCP execution, let you inspect state, then continue.
+    FCP's UI freezes while paused (same as Xcode). The JSON-RPC server stays alive
+    on a separate thread so you can inspect and continue.
+
+    Args:
+        action: One of:
+            - "add": Set a breakpoint on className.selector
+            - "remove": Remove a breakpoint
+            - "removeAll": Remove all breakpoints (auto-resumes if paused)
+            - "list": List all breakpoints and paused state
+            - "enable": Re-enable a disabled breakpoint
+            - "disable": Disable without removing
+            - "continue": Resume paused execution
+            - "step": Resume but auto-break on next call to same class
+            - "inspect": Get current paused state (self, args, call stack)
+            - "inspectSelf": Evaluate a keyPath on the paused self object
+        class_name: ObjC class name (e.g. "FFAnchoredTimelineModule")
+        selector: ObjC selector (e.g. "blade:")
+        condition: Optional keyPath on self that must be truthy for bp to fire
+        hit_count: Only fire after this many calls (skip earlier ones)
+        one_shot: If true, auto-remove after first hit
+        key_path: For inspectSelf — the property path to evaluate
+        store_result: For inspectSelf — store the result as a handle
+        class_method: If true, breakpoint a class method (+) instead of instance (-)
+
+    When a breakpoint fires, a "breakpoint.hit" event is broadcast with:
+    - selfClass, self description, selfHandle
+    - firstArg (if present), firstArgHandle
+    - callStack (up to 20 frames)
+    - threadName, isMainThread
+
+    While paused, use debug_eval(), call_method_with_args(), or inspectSelf
+    to examine state before continuing.
+    """
+    params = {"action": action}
+    if class_name:
+        params["className"] = class_name
+    if selector:
+        params["selector"] = selector
+    if condition:
+        params["condition"] = condition
+    if hit_count > 0:
+        params["hitCount"] = hit_count
+    if one_shot:
+        params["oneShot"] = True
+    if key_path:
+        params["keyPath"] = key_path
+    if store_result:
+        params["storeResult"] = True
+    if class_method:
+        params["classMethod"] = True
+    r = bridge.call("debug.breakpoint", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Debug: Method Tracing
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def debug_trace_method(action: str = "list", class_name: str = "", selector: str = "",
+                       log_stack: bool = False, log_args: bool = True,
+                       limit: int = 50, class_method: bool = False) -> str:
+    """Trace ObjC method calls without pausing execution.
+
+    Swizzles the target method to log every call with timestamp, self, and
+    optionally the call stack. Traces are stored in a circular buffer (500 entries)
+    and broadcast to MCP clients in real-time.
+
+    Use this when you want to observe call patterns without freezing FCP.
+    Use debug_breakpoint() when you need to pause and inspect.
+
+    Args:
+        action: One of:
+            - "add": Start tracing className.selector
+            - "remove": Stop tracing a specific method
+            - "removeAll": Stop all traces
+            - "list": List active traces
+            - "getLog": Read trace log entries
+            - "clearLog": Clear the trace log buffer
+        class_name: ObjC class name
+        selector: ObjC selector
+        log_stack: Include call stack in trace entries (slower but more info)
+        log_args: Log argument info (default true)
+        limit: For getLog — max entries to return
+        class_method: Trace a class method (+) instead of instance (-)
+    """
+    params = {"action": action}
+    if class_name:
+        params["className"] = class_name
+    if selector:
+        params["selector"] = selector
+    if log_stack:
+        params["logStack"] = True
+    if not log_args:
+        params["logArgs"] = False
+    if action == "getLog":
+        params["limit"] = limit
+    if class_method:
+        params["classMethod"] = True
+    r = bridge.call("debug.traceMethod", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Debug: Property Watching (KVO)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def debug_watch(action: str = "list", handle: str = "", class_name: str = "",
+                key_path: str = "", watch_key: str = "") -> str:
+    """Watch ObjC property changes via KVO (Key-Value Observing).
+
+    When a watched property changes, old/new values are broadcast to MCP clients.
+
+    Args:
+        action: One of:
+            - "add": Start watching a property
+            - "remove": Stop watching (requires watch_key)
+            - "removeAll": Stop all watches
+            - "list": List active watches
+        handle: Object handle (e.g. "obj_1") to watch
+        class_name: Class name (resolved to singleton if no handle)
+        key_path: The property to watch (e.g. "mainWindow", "sequence.displayName")
+        watch_key: For remove — the key returned when the watch was created
+    """
+    params = {"action": action}
+    if handle:
+        params["handle"] = handle
+    if class_name:
+        params["className"] = class_name
+    if key_path:
+        params["keyPath"] = key_path
+    if watch_key:
+        params["watchKey"] = watch_key
+    r = bridge.call("debug.watch", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Debug: Crash Handler
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def debug_crash_handler(action: str = "install") -> str:
+    """Install or query the in-process crash handler.
+
+    Catches uncaught NSExceptions and Unix signals (SIGABRT, SIGSEGV, SIGBUS,
+    SIGFPE, SIGILL) inside FCP. Captures full stack traces and broadcasts to
+    MCP clients before the process terminates.
+
+    Args:
+        action: One of:
+            - "install": Install exception + signal handlers (idempotent)
+            - "status": Check if installed + crash count
+            - "getLog": Read captured crash stack traces
+            - "clearLog": Clear the crash log
+    """
+    r = bridge.call("debug.crashHandler", action=action)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Debug: Thread Inspection
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def debug_threads(detailed: bool = False) -> str:
+    """List all threads in FCP's process with CPU usage and state.
+
+    Uses Mach kernel APIs for accurate thread counts and per-thread metrics.
+
+    Args:
+        detailed: If true, include per-thread CPU usage, run state, and
+                  call stacks for the current and main threads.
+
+    Returns thread count, operation queue info, and optionally per-thread:
+    - cpuUsage (percentage 0-100)
+    - userTime / systemTime (seconds)
+    - runState (1=running, 2=stopped, 3=waiting)
+    - suspended flag
+    """
+    r = bridge.call("debug.threads", detailed=detailed)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Debug: Expression Evaluation
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def debug_eval(expression: str = "", chain: str = "", target: str = "",
+               store_result: bool = False) -> str:
+    """Evaluate ObjC property chains inside FCP's process.
+
+    Two modes:
+    1. Dot expression: "NSApp.delegate._targetLibrary.displayName"
+    2. Chain array: ["delegate", "_targetLibrary", "displayName"]
+
+    Each step tries respondsToSelector: first, then KVC valueForKey: as fallback.
+
+    Args:
+        expression: Dot-separated property chain (e.g. "NSApp.delegate.className")
+                   Starting points: "NSApp", "obj_XXX" (handle), or any class name
+        chain: Comma-separated chain of property/method names (alternative to expression)
+               e.g. "delegate,_targetLibrary,displayName"
+        target: Object handle to start the chain from (e.g. "obj_1"). If omitted,
+                starts from NSApp for chain mode.
+        store_result: Store the final result as a handle for further inspection
+
+    Returns the result value, its class, and optionally a handle.
+    """
+    params = {}
+    if expression:
+        params["expression"] = expression
+    if chain:
+        params["chain"] = [s.strip() for s in chain.split(",")]
+    if target:
+        params["target"] = target
+    if store_result:
+        params["storeResult"] = True
+    r = bridge.call("debug.eval", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Debug: Hot Plugin Loading
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def debug_load_plugin(action: str = "list", path: str = "") -> str:
+    """Dynamically load or unload code in FCP's running process.
+
+    Load compiled .dylib or .bundle files without restarting FCP.
+    The dylib's __attribute__((constructor)) runs immediately on load.
+    Use for hot-patching fixes or adding features at runtime.
+
+    Args:
+        action: One of:
+            - "load": Load a dylib or bundle into FCP
+            - "unload": Unload a previously loaded dylib
+            - "list": List currently loaded plugins
+        path: File path to the .dylib or .bundle to load/unload
+
+    Workflow:
+    1. Write patch code (ObjC with constructor function)
+    2. Compile: clang -dynamiclib -framework Foundation -o /tmp/fix.dylib fix.m
+    3. Load: debug_load_plugin(action="load", path="/tmp/fix.dylib")
+    4. Test the change
+    5. Unload: debug_load_plugin(action="unload", path="/tmp/fix.dylib")
+    """
+    params = {"action": action}
+    if path:
+        params["path"] = path
+    r = bridge.call("debug.loadPlugin", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Debug: Notification Observation
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def debug_observe_notification(action: str = "list", name: str = "",
+                               log_object: bool = False) -> str:
+    """Subscribe to FCP's internal NSNotification events.
+
+    Events are broadcast to MCP clients in real-time with notification name,
+    object class, and userInfo dictionary.
+
+    Args:
+        action: One of:
+            - "add": Start observing a notification
+            - "remove": Stop observing (requires name)
+            - "removeAll": Stop all observers
+            - "list": List active observers
+        name: Notification name (e.g. "FFEffectsChangedNotification").
+              Use "*" to observe ALL notifications (high volume — use briefly).
+        log_object: Include the notification's object description in events
+
+    Common notifications:
+    - FFEffectsChangedNotification: effect stack modified
+    - FFEffectStackChangedNotification: effect added/removed
+    - FFAssetMediaChangedNotification: media asset changes
+    - FFBeatGridSettingsChangedNotification: beat grid toggled
+    - FFQTMovieExporterFinishedNotification: export completes
+    See fcp_symbols/notifications.txt for all 337 notification names.
+    """
+    params = {"action": action}
+    if name:
+        params["name"] = name
+    if log_object:
+        params["logObject"] = True
+    r = bridge.call("debug.observeNotification", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Direct Timeline Actions (parameterized Flexo methods)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def direct_timeline_action(action: str = "", selector: str = "",
+                           rate: float = 0, ripple: bool = False,
+                           allow_variable_speed: bool = True,
+                           to_zero: bool = False, from_zero: bool = False,
+                           frames_to_jump: int = 0, speed: float = 0,
+                           name: str = "", marker: str = "",
+                           type_: str = "", completed: bool = False,
+                           amount: float = 0, relative: bool = True,
+                           fade_in: bool = True, duration: float = 0,
+                           enabled: bool = True, effect_id: str = "",
+                           keywords: str = "", language: str = "",
+                           format_: str = "", multicam: bool = False,
+                           as_split: bool = False, is_delta: bool = False,
+                           replace_with_gap: bool = False,
+                           on_edges: bool = True, on_left: bool = True,
+                           add_title: bool = True,
+                           interpolation: str = "",
+                           store_result: bool = False) -> str:
+    """Call Flexo's parameterized action methods directly on FFAnchoredTimelineModule.
+
+    More powerful than timeline_action() because these accept real parameters
+    (rates, durations, flags) instead of just dispatching through the responder chain.
+
+    Args:
+        action: The action name. Available actions:
+
+            Retiming/Speed:
+              retimeSetRate (rate, ripple, allow_variable_speed)
+              retimeHoldPreset, retimeReverse, retimeBladeSpeedPreset
+              retimeSpeedRamp (to_zero, from_zero)
+              retimeInstantReplay (rate, allow_variable_speed, add_title)
+              retimeJumpCut (frames_to_jump, allow_variable_speed)
+              retimeRewind (speed, allow_variable_speed)
+              retimeSetInterpolation (interpolation)
+              insertFreezeFrame
+
+            Markers:
+              changeMarkerType (type_: "chapter"/"todo"/"note")
+              changeMarkerName (name, marker handle)
+              markMarkerCompleted (completed, marker handle)
+              removeMarker (marker handle)
+
+            Audio:
+              changeAudioVolume (amount, relative)
+              applyAudioFadesDirect (fade_in, duration)
+              setAudioPlayEnable (enabled)
+              setBackgroundMusic (enabled)
+              detachAudioDirect, alignAudioToVideoDirect
+
+            Trim/Edit:
+              splitAtTime, trimDuration (is_delta)
+              extendOverNextClip, joinThroughEdits (on_edges, on_left)
+              removeEdits (replace_with_gap), insertGapDirect
+
+            Clips:
+              breakApartClipItems, createCompoundClipDirect (multicam)
+              liftAnchoredEdits, renameDirect (name)
+              deleteItemsInArray, moveClipsToTrash
+
+            Keywords/Roles:
+              addKeywords (keywords: comma-separated), removeKeywords
+              setRole
+
+            Effects:
+              removeEffectByID (effect_id), invertEffectMasks, toggleEnabled
+
+            Multicam:
+              deleteMultiAngle, renameAngle (name), audioSyncMultiAngle
+
+            Variants:
+              addVariants, removeVariants, finalizeVariant
+
+            Captions:
+              duplicateCaptions (language, format_)
+
+            Music:
+              alignToMusicMarkers, alignClipsAtMusicMarkers (as_split)
+
+            Project:
+              newProject (name), newEvent (name), validateAndRepair
+
+            Other:
+              autoReframeDirect, addTransitionsDirect
+              analyzeAndOptimize, resolveLaneConflicts, resolveLaneGaps
+              nudgeAnchoredItems, nudgeSpineItems
+
+        selector: Raw ObjC selector for fallback (e.g. "actionValidateAndRepair:validateMode:error:")
+    """
+    params = {}
+    if action:
+        params["action"] = action
+    if selector:
+        params["selector"] = selector
+    if rate != 0:
+        params["rate"] = rate
+    if ripple:
+        params["ripple"] = True
+    if not allow_variable_speed:
+        params["allowVariableSpeed"] = False
+    if to_zero:
+        params["toZero"] = True
+    if from_zero:
+        params["fromZero"] = True
+    if frames_to_jump > 0:
+        params["framesToJump"] = frames_to_jump
+    if speed != 0:
+        params["speed"] = speed
+    if name:
+        params["name"] = name
+    if marker:
+        params["marker"] = marker
+    if type_:
+        params["type"] = type_
+    if completed:
+        params["completed"] = True
+    if amount != 0:
+        params["amount"] = amount
+    if not relative:
+        params["relative"] = False
+    if not fade_in:
+        params["fadeIn"] = False
+    if duration != 0:
+        params["duration"] = duration
+    if not enabled:
+        params["enabled"] = False
+    if effect_id:
+        params["effectID"] = effect_id
+    if keywords:
+        params["keywords"] = [k.strip() for k in keywords.split(",")]
+    if language:
+        params["language"] = language
+    if format_:
+        params["format"] = format_
+    if multicam:
+        params["multicam"] = True
+    if as_split:
+        params["asSplit"] = True
+    if is_delta:
+        params["isDelta"] = True
+    if replace_with_gap:
+        params["replaceWithGap"] = True
+    if not on_edges:
+        params["onEdges"] = False
+    if not on_left:
+        params["onLeft"] = False
+    if not add_title:
+        params["addTitle"] = False
+    if interpolation:
+        params["interpolation"] = interpolation
+    r = bridge.call("timeline.directAction", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ---------------------------------------------------------------------------
+# Missing endpoints: beats, browser, pasteboard, seek, stabilize, swizzle,
+# titles, transcript engine
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def detect_beats(file_path: str, sensitivity: float = 0.5,
+                 min_bpm: int = 0, max_bpm: int = 0) -> str:
+    """Detect beats, bars, sections, and BPM in an audio file.
+
+    Runs the beat-detector tool externally (FCP's hardened runtime prevents
+    in-process audio file access). Build first:
+        swiftc -O -o build/beat-detector tools/beat-detector.swift
+
+    Args:
+        file_path: Path to audio file (mp3, wav, aif, etc.)
+        sensitivity: Detection sensitivity 0.0-1.0 (higher = more beats)
+        min_bpm: Minimum BPM to consider (0 = auto)
+        max_bpm: Maximum BPM to consider (0 = auto)
+    """
+    r = bridge.call("beats.detect", file_path=file_path,
+                    sensitivity=sensitivity, min_bpm=min_bpm, max_bpm=max_bpm)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def browser_list_clips(event: str = "") -> str:
+    """List clips in the FCP browser (media library).
+
+    Returns clips from the active library's events with name, duration,
+    media type, and handle for further operations.
+
+    Args:
+        event: Optional event name to filter by
+    """
+    params = {}
+    if event:
+        params["event"] = event
+    r = bridge.call("browser.listClips", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def browser_append_clip(handle: str = "", index: int = -1, name: str = "") -> str:
+    """Append a clip from the browser to the timeline.
+
+    Resolve the clip by handle (from browser_list_clips), index, or name.
+
+    Args:
+        handle: Object handle of the clip (e.g. "obj_5")
+        index: Index of the clip in the browser
+        name: Name of the clip to find
+    """
+    params = {}
+    if handle:
+        params["handle"] = handle
+    if index >= 0:
+        params["index"] = index
+    if name:
+        params["name"] = name
+    r = bridge.call("browser.appendClip", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def paste_fcpxml(xml: str = "") -> str:
+    """Import FCPXML content via the pasteboard (no file I/O, no dialogs).
+
+    Puts FCPXML data on the system pasteboard and triggers FCP's internal
+    paste-from-XML handler. Faster and cleaner than file-based import.
+
+    Args:
+        xml: FCPXML content string
+    """
+    params = {}
+    if xml:
+        params["xml"] = xml
+    r = bridge.call("fcpxml.pasteImport", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def seek_to_time(seconds: float) -> str:
+    """Jump the playhead to an exact time in seconds.
+
+    Faster and more precise than stepping frames. Uses CMTime internally
+    with the timeline's native timescale for frame-accurate positioning.
+
+    Args:
+        seconds: Time in seconds (e.g. 3.5 for 3.5 seconds in)
+    """
+    r = bridge.call("playback.seekToTime", seconds=seconds)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def stabilize_subject() -> str:
+    """Stabilize the selected clip around a tracked subject.
+
+    Uses the Vision framework to detect and track a subject at the current
+    playhead position, then applies inverse position keyframes so the subject
+    stays fixed on screen while the background moves.
+
+    Requirements: a clip must be selected and the playhead should be on a frame
+    where the subject is clearly visible.
+    """
+    r = bridge.call("stabilize.subject")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def insert_title(name: str = "", effect_id: str = "") -> str:
+    """Insert a title or generator into the timeline.
+
+    Resolves by display name or effect ID. If name is provided, searches
+    all available title effects for a case-insensitive match.
+
+    Args:
+        name: Display name of the title (e.g. "Basic Title", "Lower Third")
+        effect_id: Direct effect ID (e.g. "FFBasicTitleEffect")
+    """
+    params = {}
+    if name:
+        params["name"] = name
+    if effect_id:
+        params["effectID"] = effect_id
+    r = bridge.call("titles.insert", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def set_transcript_engine(engine: str) -> str:
+    """Set the speech recognition engine for transcript panel.
+
+    Args:
+        engine: One of:
+            - "fcpNative": FCP's built-in AASpeechAnalyzer
+            - "appleSpeech": Apple's SFSpeechRecognizer (slower, network-capable)
+    """
+    r = bridge.call("transcript.setEngine", engine=engine)
     if _err(r):
         return f"Error: {r.get('error', r)}"
     return _fmt(r)

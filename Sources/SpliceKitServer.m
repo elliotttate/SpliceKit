@@ -14613,6 +14613,464 @@ static NSDictionary *SpliceKit_handleDebugObserveNotification(NSDictionary *para
     return @{@"status": @"ok", @"observing": name};
 }
 
+#pragma mark - Debug: Breakpoints
+
+// True breakpoint system: swizzle a method, pause the calling thread,
+// let the MCP client inspect state, then resume on command.
+//
+// Architecture:
+//   - Each breakpoint swizzles the target method with a trampoline
+//   - The trampoline captures self, args, call stack
+//   - It posts a "breakpoint.hit" event to MCP clients
+//   - It blocks on a dispatch_semaphore until "continue" or "step" is received
+//   - While paused, the JSON-RPC server keeps running (separate thread)
+//     so the client can call debug.eval, call_method, etc.
+//   - FCP's UI freezes while paused (same behavior as Xcode)
+//
+// Limitations:
+//   - Block-based IMP can only safely intercept methods with 0-1 object args
+//     after self+_cmd (the block captures the first arg, varargs aren't accessible)
+//   - For multi-arg methods, we capture self and call stack but not individual args
+//   - Breakpoints on the JSON-RPC dispatch thread would deadlock (we prevent this)
+
+// Breakpoint state
+static NSMutableDictionary<NSString *, NSDictionary *> *sBreakpoints = nil;
+static dispatch_semaphore_t sBreakpointSemaphore = nil;
+static NSMutableDictionary *sBreakpointHitState = nil;    // current paused state
+static BOOL sBreakpointPaused = NO;                       // is execution paused?
+static NSString *sBreakpointStepClass = nil;              // for "step" mode
+static BOOL sBreakpointStepActive = NO;
+static dispatch_queue_t sBreakpointQueue = nil;
+
+static void SpliceKit_ensureBreakpointStorage(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sBreakpoints = [NSMutableDictionary dictionary];
+        sBreakpointSemaphore = dispatch_semaphore_create(0);
+        sBreakpointHitState = [NSMutableDictionary dictionary];
+        sBreakpointQueue = dispatch_queue_create("com.splicekit.breakpoint", DISPATCH_QUEUE_SERIAL);
+    });
+}
+
+// Called by the trampoline when a breakpoint is hit.
+// Pauses the current thread until continue/step is received.
+static void SpliceKit_breakpointHit(NSString *key, id self_obj, SEL _cmd,
+                                     id firstArg, NSArray *callStack,
+                                     NSDictionary *bpConfig) {
+    // Never pause when the main thread is executing a block dispatched from our
+    // JSON-RPC handler — the RPC thread is blocked on a semaphore waiting for
+    // this block to finish, so pausing here would deadlock both threads.
+    if ([NSThread isMainThread] && SpliceKit_isMainThreadInRPCDispatch()) {
+        SpliceKit_log(@"[Breakpoint] SKIPPED %@ (main thread in RPC dispatch — would deadlock)", key);
+        return;
+    }
+
+    // Check condition if set
+    NSString *condition = bpConfig[@"condition"];
+    if (condition.length > 0 && self_obj) {
+        @try {
+            // Evaluate condition as a keyPath on self
+            id val = [self_obj valueForKeyPath:condition];
+            // If result is falsy, skip this breakpoint hit
+            if (!val || ([val respondsToSelector:@selector(boolValue)] && ![val boolValue])) {
+                return;
+            }
+        } @catch (NSException *e) {
+            // Condition eval failed — break anyway
+        }
+    }
+
+    // Check hit count
+    NSNumber *hitCountLimit = bpConfig[@"hitCount"];
+    if (hitCountLimit) {
+        static NSMutableDictionary<NSString *, NSNumber *> *sHitCounts = nil;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{ sHitCounts = [NSMutableDictionary dictionary]; });
+        NSInteger current = [sHitCounts[key] integerValue] + 1;
+        sHitCounts[key] = @(current);
+        if (current < [hitCountLimit integerValue]) {
+            return; // Haven't reached the hit count threshold yet
+        }
+    }
+
+    // Build the hit state
+    NSMutableDictionary *state = [NSMutableDictionary dictionary];
+    state[@"breakpoint"] = key;
+    state[@"selector"] = NSStringFromSelector(_cmd);
+    state[@"timestamp"] = @([[NSDate date] timeIntervalSince1970]);
+    state[@"threadName"] = [NSThread currentThread].name ?: @"(unnamed)";
+    state[@"isMainThread"] = @([NSThread isMainThread]);
+
+    if (self_obj) {
+        state[@"selfClass"] = NSStringFromClass([self_obj class]);
+        NSString *selfDesc = [self_obj description];
+        if (selfDesc.length > 500) selfDesc = [selfDesc substringToIndex:500];
+        state[@"self"] = selfDesc;
+        // Store self as a handle so the client can inspect it while paused
+        state[@"selfHandle"] = SpliceKit_storeHandle(self_obj);
+    }
+    if (firstArg) {
+        state[@"firstArgClass"] = NSStringFromClass([firstArg class]);
+        NSString *argDesc = [firstArg description];
+        if (argDesc.length > 500) argDesc = [argDesc substringToIndex:500];
+        state[@"firstArg"] = argDesc;
+        state[@"firstArgHandle"] = SpliceKit_storeHandle(firstArg);
+    }
+    if (callStack) {
+        state[@"callStack"] = callStack.count > 20
+            ? [callStack subarrayWithRange:NSMakeRange(0, 20)]
+            : callStack;
+    }
+
+    // Set paused state
+    dispatch_sync(sBreakpointQueue, ^{
+        [sBreakpointHitState setDictionary:state];
+        sBreakpointPaused = YES;
+    });
+
+    SpliceKit_log(@"[Breakpoint] HIT %@ on thread %@ — paused, waiting for continue/step",
+                  key, [NSThread currentThread].name ?: @"(unnamed)");
+
+    // Broadcast the hit event to MCP clients
+    SpliceKit_broadcastEvent(@{
+        @"type": @"breakpoint.hit",
+        @"data": state
+    });
+
+    // BLOCK here until the client sends continue or step
+    // The JSON-RPC server runs on a different thread so it can still process commands
+    dispatch_semaphore_wait(sBreakpointSemaphore, DISPATCH_TIME_FOREVER);
+
+    // Execution resumes here after continue/step
+    dispatch_sync(sBreakpointQueue, ^{
+        sBreakpointPaused = NO;
+        [sBreakpointHitState removeAllObjects];
+    });
+
+    SpliceKit_log(@"[Breakpoint] RESUMED %@", key);
+}
+
+// debug.breakpoint
+// {"method":"debug.breakpoint","params":{"action":"add","className":"FFAnchoredTimelineModule","selector":"blade:","condition":"optional_keyPath"}}
+// {"method":"debug.breakpoint","params":{"action":"add","className":"FFAnchoredTimelineModule","selector":"blade:","hitCount":3}}
+// {"method":"debug.breakpoint","params":{"action":"remove","className":"FFAnchoredTimelineModule","selector":"blade:"}}
+// {"method":"debug.breakpoint","params":{"action":"removeAll"}}
+// {"method":"debug.breakpoint","params":{"action":"list"}}
+// {"method":"debug.breakpoint","params":{"action":"continue"}}
+// {"method":"debug.breakpoint","params":{"action":"step"}}
+// {"method":"debug.breakpoint","params":{"action":"inspect"}}  -- get current paused state
+// {"method":"debug.breakpoint","params":{"action":"inspectSelf","keyPath":"sequence.displayName"}}
+// {"method":"debug.breakpoint","params":{"action":"disable","className":"...","selector":"..."}}
+// {"method":"debug.breakpoint","params":{"action":"enable","className":"...","selector":"..."}}
+static NSDictionary *SpliceKit_handleDebugBreakpoint(NSDictionary *params) {
+    SpliceKit_ensureBreakpointStorage();
+
+    NSString *act = params[@"action"] ?: @"add";
+
+    // === Continue: resume paused execution ===
+    if ([act isEqualToString:@"continue"]) {
+        __block BOOL wasPaused;
+        dispatch_sync(sBreakpointQueue, ^{
+            wasPaused = sBreakpointPaused;
+            sBreakpointStepActive = NO;
+            sBreakpointStepClass = nil;
+        });
+        if (!wasPaused) {
+            return @{@"error": @"Not paused at a breakpoint"};
+        }
+        dispatch_semaphore_signal(sBreakpointSemaphore);
+        return @{@"status": @"ok", @"message": @"Execution resumed"};
+    }
+
+    // === Step: resume but auto-break on next call to same class ===
+    if ([act isEqualToString:@"step"]) {
+        __block BOOL wasPaused;
+        __block NSString *hitClass;
+        dispatch_sync(sBreakpointQueue, ^{
+            wasPaused = sBreakpointPaused;
+            hitClass = sBreakpointHitState[@"selfClass"];
+        });
+        if (!wasPaused) {
+            return @{@"error": @"Not paused at a breakpoint"};
+        }
+        // Enable step mode: any breakpoint on the same class will fire
+        dispatch_sync(sBreakpointQueue, ^{
+            sBreakpointStepActive = YES;
+            sBreakpointStepClass = [hitClass copy];
+        });
+        dispatch_semaphore_signal(sBreakpointSemaphore);
+        return @{@"status": @"ok", @"message": [NSString stringWithFormat:
+            @"Stepping — will break on next call to %@", hitClass]};
+    }
+
+    // === Inspect: get the current paused state ===
+    if ([act isEqualToString:@"inspect"]) {
+        __block NSDictionary *state;
+        __block BOOL paused;
+        dispatch_sync(sBreakpointQueue, ^{
+            state = [sBreakpointHitState copy];
+            paused = sBreakpointPaused;
+        });
+        if (!paused) {
+            return @{@"paused": @NO, @"message": @"Not paused at a breakpoint"};
+        }
+        NSMutableDictionary *result = [NSMutableDictionary dictionaryWithDictionary:state];
+        result[@"paused"] = @YES;
+        return result;
+    }
+
+    // === InspectSelf: evaluate a keyPath on the paused self object ===
+    if ([act isEqualToString:@"inspectSelf"]) {
+        __block BOOL paused;
+        __block NSString *selfHandle;
+        dispatch_sync(sBreakpointQueue, ^{
+            paused = sBreakpointPaused;
+            selfHandle = sBreakpointHitState[@"selfHandle"];
+        });
+        if (!paused) return @{@"error": @"Not paused at a breakpoint"};
+        if (!selfHandle) return @{@"error": @"No self object captured"};
+
+        NSString *keyPath = params[@"keyPath"];
+        if (!keyPath) return @{@"error": @"keyPath parameter required"};
+
+        id self_obj = SpliceKit_resolveHandle(selfHandle);
+        if (!self_obj) return @{@"error": @"Self handle expired"};
+
+        @try {
+            id value = [self_obj valueForKeyPath:keyPath];
+            NSString *desc = value ? [value description] : @"nil";
+            if (desc.length > 2000) desc = [desc substringToIndex:2000];
+            NSMutableDictionary *result = [NSMutableDictionary dictionary];
+            result[@"keyPath"] = keyPath;
+            result[@"value"] = desc;
+            result[@"class"] = value ? NSStringFromClass([value class]) : @"nil";
+            BOOL store = [params[@"storeResult"] boolValue];
+            if (store && value) {
+                result[@"handle"] = SpliceKit_storeHandle(value);
+            }
+            return result;
+        } @catch (NSException *e) {
+            return @{@"error": [NSString stringWithFormat:@"KVC failed: %@", e.reason]};
+        }
+    }
+
+    // === List: show all breakpoints ===
+    if ([act isEqualToString:@"list"]) {
+        __block BOOL paused;
+        dispatch_sync(sBreakpointQueue, ^{ paused = sBreakpointPaused; });
+
+        NSMutableArray *bps = [NSMutableArray array];
+        for (NSString *key in sBreakpoints) {
+            NSMutableDictionary *info = [sBreakpoints[key] mutableCopy];
+            info[@"key"] = key;
+            [bps addObject:info];
+        }
+        return @{@"breakpoints": bps, @"count": @(bps.count), @"paused": @(paused)};
+    }
+
+    // === RemoveAll ===
+    if ([act isEqualToString:@"removeAll"]) {
+        NSMutableArray *removed = [NSMutableArray array];
+        for (NSString *key in [sBreakpoints allKeys]) {
+            NSDictionary *info = sBreakpoints[key];
+            if ([info[@"installed"] boolValue]) {
+                Class cls = NSClassFromString(info[@"className"]);
+                SEL sel = NSSelectorFromString(info[@"selector"]);
+                if (cls && sel) SpliceKit_unswizzleMethod(cls, sel);
+            }
+            [removed addObject:key];
+        }
+        [sBreakpoints removeAllObjects];
+        // If currently paused, resume so we don't leave a thread stuck
+        __block BOOL wasPaused;
+        dispatch_sync(sBreakpointQueue, ^{
+            wasPaused = sBreakpointPaused;
+            sBreakpointStepActive = NO;
+        });
+        if (wasPaused) dispatch_semaphore_signal(sBreakpointSemaphore);
+        return @{@"status": @"ok", @"removed": removed, @"count": @(removed.count)};
+    }
+
+    // === Need className + selector for add/remove/disable/enable ===
+    NSString *className = params[@"className"];
+    NSString *selectorName = params[@"selector"];
+    if (!className || !selectorName) {
+        return @{@"error": @"className and selector parameters required"};
+    }
+    NSString *key = [NSString stringWithFormat:@"%@.%@", className, selectorName];
+
+    // === Remove ===
+    if ([act isEqualToString:@"remove"]) {
+        NSDictionary *info = sBreakpoints[key];
+        if (!info) return @{@"error": [NSString stringWithFormat:@"No breakpoint at %@", key]};
+        if ([info[@"installed"] boolValue]) {
+            Class cls = NSClassFromString(className);
+            SEL sel = NSSelectorFromString(selectorName);
+            if (cls && sel) SpliceKit_unswizzleMethod(cls, sel);
+        }
+        [sBreakpoints removeObjectForKey:key];
+        return @{@"status": @"ok", @"removed": key};
+    }
+
+    // === Disable (keep registered but don't fire) ===
+    if ([act isEqualToString:@"disable"]) {
+        NSMutableDictionary *info = [sBreakpoints[key] mutableCopy];
+        if (!info) return @{@"error": [NSString stringWithFormat:@"No breakpoint at %@", key]};
+        info[@"enabled"] = @NO;
+        sBreakpoints[key] = info;
+        return @{@"status": @"ok", @"disabled": key};
+    }
+
+    // === Enable ===
+    if ([act isEqualToString:@"enable"]) {
+        NSMutableDictionary *info = [sBreakpoints[key] mutableCopy];
+        if (!info) return @{@"error": [NSString stringWithFormat:@"No breakpoint at %@", key]};
+        info[@"enabled"] = @YES;
+        sBreakpoints[key] = info;
+        return @{@"status": @"ok", @"enabled": key};
+    }
+
+    // === Add ===
+    Class cls = NSClassFromString(className);
+    if (!cls) return @{@"error": [NSString stringWithFormat:@"Class not found: %@", className]};
+    SEL sel = NSSelectorFromString(selectorName);
+    BOOL isClassMethod = [params[@"classMethod"] boolValue];
+    Method method = isClassMethod ? class_getClassMethod(cls, sel) : class_getInstanceMethod(cls, sel);
+    if (!method) return @{@"error": [NSString stringWithFormat:@"Method not found: %@[%@ %@]",
+                          isClassMethod ? @"+" : @"-", className, selectorName]};
+
+    // Check if already set
+    if (sBreakpoints[key]) {
+        return @{@"status": @"ok", @"message": @"Breakpoint already set", @"key": key};
+    }
+
+    const char *typeEncoding = method_getTypeEncoding(method);
+    NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:typeEncoding];
+    NSUInteger argCount = [sig numberOfArguments]; // includes self + _cmd
+
+    NSString *condition = params[@"condition"];
+    NSNumber *hitCount = params[@"hitCount"];
+    BOOL oneShot = [params[@"oneShot"] boolValue];
+
+    // Store breakpoint config
+    NSMutableDictionary *bpConfig = [NSMutableDictionary dictionary];
+    bpConfig[@"className"] = className;
+    bpConfig[@"selector"] = selectorName;
+    bpConfig[@"enabled"] = @YES;
+    bpConfig[@"argCount"] = @(argCount);
+    bpConfig[@"typeEncoding"] = [NSString stringWithUTF8String:typeEncoding ?: ""];
+    bpConfig[@"timestamp"] = [NSDate date].description;
+    if (condition) bpConfig[@"condition"] = condition;
+    if (hitCount) bpConfig[@"hitCount"] = hitCount;
+    if (oneShot) bpConfig[@"oneShot"] = @YES;
+
+    // Create the trampoline
+    IMP originalIMP = method_getImplementation(method);
+
+    // We support methods with 0 or 1 object args (after self + _cmd).
+    // This covers most IBAction-style methods (sender:) and no-arg methods.
+    if (argCount <= 3) {
+        IMP trampoline = imp_implementationWithBlock(^(id _self, id firstArg) {
+            // Check if breakpoint is still enabled
+            NSDictionary *currentConfig = sBreakpoints[key];
+            if (!currentConfig || ![currentConfig[@"enabled"] boolValue]) {
+                // Disabled — call original directly
+                if (argCount <= 2) {
+                    ((void (*)(id, SEL))originalIMP)(_self, sel);
+                } else {
+                    ((void (*)(id, SEL, id))originalIMP)(_self, sel, firstArg);
+                }
+                return;
+            }
+
+            // Check step mode
+            __block BOOL shouldBreak = YES;
+            if (!sBreakpointPaused) {
+                dispatch_sync(sBreakpointQueue, ^{
+                    if (sBreakpointStepActive) {
+                        // Only break if same class as the step target
+                        if (sBreakpointStepClass &&
+                            ![NSStringFromClass([_self class]) isEqualToString:sBreakpointStepClass]) {
+                            shouldBreak = NO;
+                        }
+                    }
+                });
+            }
+
+            if (!shouldBreak) {
+                if (argCount <= 2) {
+                    ((void (*)(id, SEL))originalIMP)(_self, sel);
+                } else {
+                    ((void (*)(id, SEL, id))originalIMP)(_self, sel, firstArg);
+                }
+                return;
+            }
+
+            // HIT — pause execution
+            NSArray *stack = [NSThread callStackSymbols];
+            SpliceKit_breakpointHit(key, _self, sel, (argCount > 2 ? firstArg : nil),
+                                     stack, currentConfig);
+
+            // One-shot: remove after first hit
+            if ([currentConfig[@"oneShot"] boolValue]) {
+                SpliceKit_unswizzleMethod(cls, sel);
+                [sBreakpoints removeObjectForKey:key];
+            }
+
+            // Now call the original implementation
+            if (argCount <= 2) {
+                ((void (*)(id, SEL))originalIMP)(_self, sel);
+            } else {
+                ((void (*)(id, SEL, id))originalIMP)(_self, sel, firstArg);
+            }
+        });
+
+        IMP orig = SpliceKit_swizzleMethod(cls, sel, trampoline);
+        if (!orig) {
+            return @{@"error": @"Swizzle failed"};
+        }
+        bpConfig[@"installed"] = @YES;
+        bpConfig[@"mode"] = @"swizzle";
+    } else {
+        // Multi-arg methods: install a no-arg trampoline that captures self + stack
+        // but can't intercept the arguments
+        IMP trampoline = imp_implementationWithBlock(^(id _self) {
+            NSDictionary *currentConfig = sBreakpoints[key];
+            if (!currentConfig || ![currentConfig[@"enabled"] boolValue]) {
+                // Can't forward properly with unknown args, so just log
+                SpliceKit_log(@"[Breakpoint] %@ called but breakpoint disabled, skipping", key);
+                return;
+            }
+            NSArray *stack = [NSThread callStackSymbols];
+            SpliceKit_breakpointHit(key, _self, sel, nil, stack, currentConfig);
+
+            if ([currentConfig[@"oneShot"] boolValue]) {
+                SpliceKit_unswizzleMethod(cls, sel);
+                [sBreakpoints removeObjectForKey:key];
+            }
+            // NOTE: We can't forward to original here because we don't have the args.
+            // The method will NOT execute its original behavior.
+            // For multi-arg methods, use debug.traceMethod instead.
+        });
+
+        // Don't actually swizzle multi-arg methods — it would break them
+        bpConfig[@"installed"] = @NO;
+        bpConfig[@"mode"] = @"trace_only";
+        bpConfig[@"warning"] = @"Multi-arg methods (4+ args including self/_cmd) cannot be "
+                                "safely breakpointed because the original implementation cannot "
+                                "be forwarded without the correct arguments. Use debug.traceMethod "
+                                "for multi-arg methods, or use debug.breakpoint on a simpler method "
+                                "in the same call chain.";
+        SpliceKit_log(@"[Breakpoint] %@ has %lu args — registered as trace_only (not swizzled)",
+                      key, (unsigned long)argCount);
+    }
+
+    sBreakpoints[key] = bpConfig;
+    return @{@"status": @"ok", @"breakpoint": key, @"mode": bpConfig[@"mode"],
+             @"argCount": @(argCount),
+             @"warning": bpConfig[@"warning"] ?: [NSNull null]};
+}
+
 #pragma mark - Request Dispatcher
 //
 // Central routing for all JSON-RPC methods. Each method name maps to a handler function.
@@ -14895,6 +15353,8 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleDebugLoadPlugin(params);
     } else if ([method isEqualToString:@"debug.observeNotification"]) {
         result = SpliceKit_handleDebugObserveNotification(params);
+    } else if ([method isEqualToString:@"debug.breakpoint"]) {
+        result = SpliceKit_handleDebugBreakpoint(params);
     }
     else {
         return @{@"error": @{@"code": @(-32601), @"message":

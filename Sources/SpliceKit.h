@@ -48,6 +48,7 @@ NSArray *SpliceKit_allLoadedClasses(void);
 // (dispatch_sync deadlocks in that situation because the main queue stalls).
 void SpliceKit_executeOnMainThread(dispatch_block_t block);
 void SpliceKit_executeOnMainThreadAsync(dispatch_block_t block);
+BOOL SpliceKit_isMainThreadInRPCDispatch(void);
 
 #pragma mark - Swizzling
 

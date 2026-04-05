@@ -52,13 +52,29 @@ BOOL SpliceKit_sendMsgBool(id target, SEL selector) {
 // sidesteps this by scheduling directly on the run loop instead of the GCD queue.
 //
 
+// Reentrancy counter: incremented while the main thread is executing a block
+// dispatched from our RPC handler via executeOnMainThread. If a breakpoint
+// fires while this is > 0, pausing would deadlock (an RPC thread is blocked
+// on a semaphore waiting for this block to finish). We use a counter instead
+// of a flag because multiple RPC calls can nest on the main thread.
+// Timer/notification callbacks fire with depth == 0, so breakpoints work on them.
+static _Atomic int sMainThreadRPCDispatchDepth = 0;
+
+BOOL SpliceKit_isMainThreadInRPCDispatch(void) {
+    return [NSThread isMainThread] && sMainThreadRPCDispatchDepth > 0;
+}
+
 void SpliceKit_executeOnMainThread(dispatch_block_t block) {
     if ([NSThread isMainThread]) {
+        sMainThreadRPCDispatchDepth++;
         block();
+        sMainThreadRPCDispatchDepth--;
     } else {
         dispatch_semaphore_t sem = dispatch_semaphore_create(0);
         CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
+            sMainThreadRPCDispatchDepth++;
             block();
+            sMainThreadRPCDispatchDepth--;
             dispatch_semaphore_signal(sem);
         });
         CFRunLoopWakeUp(CFRunLoopGetMain());
