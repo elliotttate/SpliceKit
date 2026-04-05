@@ -490,6 +490,6 @@ class PatcherModel: ObservableObject {
     }
 
     private nonisolated func completeStepAsync(_ step: PatchStep) async {
-        await MainActor.run { self.completedSteps.insert(step) }
+        await MainActor.run { _ = self.completedSteps.insert(step) }
     }
 }
