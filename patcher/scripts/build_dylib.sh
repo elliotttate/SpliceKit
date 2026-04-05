@@ -30,13 +30,16 @@ swiftc -O -suppress-warnings \
     -o "$BUILD_OUT/silence-detector" \
     "$REPO_ROOT/tools/silence-detector.swift"
 
-# Build parakeet-transcriber (non-fatal — first build downloads deps)
+# Build parakeet-transcriber (non-fatal — depends on FluidAudio which may not build)
 PARAKEET_DIR="$REPO_ROOT/tools/parakeet-transcriber"
 if [ -f "$PARAKEET_DIR/Package.swift" ]; then
-    echo "Building parakeet-transcriber..."
-    cd "$PARAKEET_DIR" && swift build -c release 2>&1 && \
-        cp "$PARAKEET_DIR/.build/release/parakeet-transcriber" "$BUILD_OUT/parakeet-transcriber" || \
-        echo "warning: parakeet-transcriber build failed (transcription will use Apple Speech fallback)"
+    echo "Building parakeet-transcriber (optional)..."
+    if cd "$PARAKEET_DIR" && swift build -c release > /dev/null 2>&1; then
+        cp "$PARAKEET_DIR/.build/release/parakeet-transcriber" "$BUILD_OUT/parakeet-transcriber"
+        echo "Built parakeet-transcriber"
+    else
+        echo "note: parakeet-transcriber skipped (FluidAudio dependency issue — Apple Speech fallback will be used)"
+    fi
 fi
 
 echo "Build complete."

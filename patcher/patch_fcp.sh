@@ -303,7 +303,7 @@ step "Step 4: Injecting dylib into FCP binary"
 BINARY="$MODDED_APP/Contents/MacOS/Final Cut Pro"
 
 # Check if already injected
-if otool -L "$BINARY" 2>/dev/null | grep -q SpliceKit; then
+if otool -L "$BINARY" 2>/dev/null | grep -q '@rpath/SpliceKit'; then
     log "Already injected (skipping)"
 else
     # Build insert_dylib if needed

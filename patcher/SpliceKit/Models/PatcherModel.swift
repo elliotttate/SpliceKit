@@ -134,9 +134,9 @@ class PatcherModel: ObservableObject {
     func checkStatus() {
         let binary = moddedApp + "/Contents/MacOS/Final Cut Pro"
         if FileManager.default.fileExists(atPath: binary) {
-            // Check if SpliceKit is injected
-            let result = shell("otool -L '\(binary)' 2>/dev/null | grep SpliceKit")
-            if result.contains("SpliceKit") {
+            // Check if SpliceKit is injected (grep for @rpath to avoid matching the directory path)
+            let result = shell("otool -L '\(binary)' 2>/dev/null | grep '@rpath/SpliceKit'")
+            if !result.isEmpty {
                 status = .patched
 
                 // Check if running
@@ -415,7 +415,7 @@ class PatcherModel: ObservableObject {
         // Step 5: Inject LC_LOAD_DYLIB
         await setStepAsync(.injectDylib)
         let binary = moddedApp + "/Contents/MacOS/Final Cut Pro"
-        let alreadyInjected = shell("otool -L '\(binary)' 2>/dev/null | grep SpliceKit")
+        let alreadyInjected = shell("otool -L '\(binary)' 2>/dev/null | grep '@rpath/SpliceKit'")
         if alreadyInjected.isEmpty {
             let insertDylib = "/tmp/splicekit_insert_dylib"
             if !FileManager.default.fileExists(atPath: insertDylib) {
