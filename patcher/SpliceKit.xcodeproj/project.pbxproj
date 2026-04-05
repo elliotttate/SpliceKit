@@ -34,6 +34,52 @@
 		};
 /* End PBXCopyFilesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		DD0000000000000000000005 /* Build Dylib & Tools */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(PROJECT_DIR)/../Sources/SpliceKit.m",
+				"$(PROJECT_DIR)/../Sources/SpliceKit.h",
+				"$(PROJECT_DIR)/../Sources/SpliceKitRuntime.m",
+				"$(PROJECT_DIR)/../Sources/SpliceKitSwizzle.m",
+				"$(PROJECT_DIR)/../Sources/SpliceKitServer.m",
+				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptPanel.m",
+				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptPanel.h",
+				"$(PROJECT_DIR)/../Sources/SpliceKitCommandPalette.m",
+				"$(PROJECT_DIR)/../Sources/SpliceKitCommandPalette.h",
+				"$(PROJECT_DIR)/../tools/silence-detector.swift",
+			);
+			name = "Build Dylib & Tools";
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/SpliceKit_prebuilt/SpliceKit",
+				"$(BUILT_PRODUCTS_DIR)/SpliceKit_prebuilt/silence-detector",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "bash \"${PROJECT_DIR}/scripts/build_dylib.sh\"\n";
+		};
+		DD0000000000000000000006 /* Bundle SpliceKit Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/SpliceKit_prebuilt/SpliceKit",
+				"$(PROJECT_DIR)/../mcp/server.py",
+			);
+			name = "Bundle SpliceKit Resources";
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/Resources/SpliceKit",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "bash \"${PROJECT_DIR}/scripts/bundle_resources.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXFileReference section */
 		22D74E1E2F81FBD900A9252B /* Credits.rtf */ = {isa = PBXFileReference; lastKnownFileType = text.rtf; path = Credits.rtf; sourceTree = "<group>"; };
 		AA0000000000000000000001 /* SpliceKitApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpliceKitApp.swift; sourceTree = "<group>"; };
@@ -134,10 +180,12 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 110000000000000000000002 /* Build configuration list for PBXNativeTarget "SpliceKit" */;
 			buildPhases = (
+				DD0000000000000000000005 /* Build Dylib & Tools */,
 				DD0000000000000000000001 /* Sources */,
 				DD0000000000000000000002 /* Frameworks */,
 				DD0000000000000000000003 /* Resources */,
 				DD0000000000000000000004 /* Embed Frameworks */,
+				DD0000000000000000000006 /* Bundle SpliceKit Resources */,
 			);
 			buildRules = (
 			);
@@ -238,7 +286,7 @@
 				DEVELOPMENT_TEAM = A5HDJTY9X5;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
@@ -295,7 +343,7 @@
 				DEVELOPMENT_TEAM = A5HDJTY9X5;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;

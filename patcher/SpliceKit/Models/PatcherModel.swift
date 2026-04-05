@@ -100,7 +100,23 @@ class PatcherModel: ObservableObject {
             }
         }
 
-        // 2. Application Support cache (will download into it during patch)
+        // 2. Development: derive repo root from source file path (compile-time, no TCC prompt)
+        #if DEBUG
+        if found.isEmpty {
+            let sourceFile = URL(fileURLWithPath: #filePath)
+            let repoRoot = sourceFile
+                .deletingLastPathComponent() // Models/
+                .deletingLastPathComponent() // SpliceKit/
+                .deletingLastPathComponent() // patcher/
+                .deletingLastPathComponent() // repo root
+                .path
+            if FileManager.default.fileExists(atPath: repoRoot + "/Sources/SpliceKit.m") {
+                found = repoRoot
+            }
+        }
+        #endif
+
+        // 3. Application Support cache (will download into it during patch)
         if found.isEmpty {
             found = NSHomeDirectory() + "/Library/Caches/SpliceKit"
         }
@@ -270,73 +286,87 @@ class PatcherModel: ObservableObject {
 
         // Step 3: Build dylib
         await setStepAsync(.buildDylib)
-        await logAsync("Compiling SpliceKit dylib...")
         let buildDir = NSTemporaryDirectory() + "SpliceKit_build"
         shell("mkdir -p '\(buildDir)'")
-        let sources = ["SpliceKit.m", "SpliceKitRuntime.m", "SpliceKitSwizzle.m", "SpliceKitServer.m", "SpliceKitTranscriptPanel.m", "SpliceKitCommandPalette.m"]
-            .map { "'\(repoDir)/Sources/\($0)'" }.joined(separator: " ")
-        let buildResult = shell("""
-            clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
-            -framework Foundation -framework AppKit -framework AVFoundation \
-            -fobjc-arc -fmodules -Wno-deprecated-declarations \
-            -undefined dynamic_lookup -dynamiclib \
-            -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
-            -I '\(repoDir)/Sources' \
-            \(sources) -o '\(buildDir)/SpliceKit' 2>&1
-            """)
-        guard FileManager.default.fileExists(atPath: buildDir + "/SpliceKit") else {
-            throw PatchError.msg("Build failed:\n\(buildResult)")
-        }
-        await logAsync("Built universal dylib (arm64 + x86_64)")
 
-        // Build silence-detector tool
-        let silenceSwift = repoDir + "/tools/silence-detector.swift"
-        let silenceBin = buildDir + "/silence-detector"
-        if FileManager.default.fileExists(atPath: silenceSwift) {
-            _ = shell("swiftc -O -suppress-warnings -o '\(silenceBin)' '\(silenceSwift)' 2>&1")
-            if FileManager.default.fileExists(atPath: silenceBin) {
-                await logAsync("Built silence-detector tool")
-            } else {
-                await logAsync("Warning: silence-detector build failed (silence removal will be unavailable)")
-            }
+        // Check for pre-built dylib in app bundle (Xcode builds bundle it automatically)
+        let bundledDylib = (Bundle.main.resourcePath ?? "") + "/SpliceKit"
+        if FileManager.default.fileExists(atPath: bundledDylib) {
+            await logAsync("Using pre-built SpliceKit dylib from app bundle")
+            shell("cp '\(bundledDylib)' '\(buildDir)/SpliceKit'")
         } else {
-            // Try to use pre-built binary from Resources
-            let prebuilt = repoDir + "/tools/silence-detector"
-            if FileManager.default.fileExists(atPath: prebuilt) {
-                shell("cp '\(prebuilt)' '\(silenceBin)'")
-                await logAsync("Using pre-built silence-detector")
+            // Fallback: compile from source
+            await logAsync("Compiling SpliceKit dylib...")
+            let sources = ["SpliceKit.m", "SpliceKitRuntime.m", "SpliceKitSwizzle.m", "SpliceKitServer.m", "SpliceKitTranscriptPanel.m", "SpliceKitCommandPalette.m"]
+                .map { "'\(repoDir)/Sources/\($0)'" }.joined(separator: " ")
+            let buildResult = shell("""
+                clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
+                -framework Foundation -framework AppKit -framework AVFoundation \
+                -fobjc-arc -fmodules -Wno-deprecated-declarations \
+                -undefined dynamic_lookup -dynamiclib \
+                -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
+                -I '\(repoDir)/Sources' \
+                \(sources) -o '\(buildDir)/SpliceKit' 2>&1
+                """)
+            guard FileManager.default.fileExists(atPath: buildDir + "/SpliceKit") else {
+                throw PatchError.msg("Build failed:\n\(buildResult)")
+            }
+            await logAsync("Built universal dylib (arm64 + x86_64)")
+        }
+
+        // Silence-detector: prefer pre-built from bundle
+        let silenceBin = buildDir + "/silence-detector"
+        let bundledSilence = (Bundle.main.resourcePath ?? "") + "/tools/silence-detector"
+        if FileManager.default.fileExists(atPath: bundledSilence) {
+            shell("cp '\(bundledSilence)' '\(silenceBin)'")
+            await logAsync("Using pre-built silence-detector from app bundle")
+        } else {
+            let silenceSwift = repoDir + "/tools/silence-detector.swift"
+            if FileManager.default.fileExists(atPath: silenceSwift) {
+                _ = shell("swiftc -O -suppress-warnings -o '\(silenceBin)' '\(silenceSwift)' 2>&1")
+                if FileManager.default.fileExists(atPath: silenceBin) {
+                    await logAsync("Built silence-detector tool")
+                } else {
+                    await logAsync("Warning: silence-detector build failed (silence removal will be unavailable)")
+                }
             }
         }
 
-        // Build parakeet-transcriber tool (Swift Package with FluidAudio dependency)
-        let parakeetSrcDir = repoDir + "/tools/parakeet-transcriber"
+        // Parakeet-transcriber: prefer pre-built from bundle
         let parakeetBin = buildDir + "/parakeet-transcriber"
-        if FileManager.default.fileExists(atPath: parakeetSrcDir + "/Package.swift") {
-            await logAsync("Building Parakeet transcriber (may take a moment on first run)...")
-            let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/SpliceKit/tools/parakeet-transcriber"
-            let sourcePath = URL(fileURLWithPath: parakeetSrcDir).standardizedFileURL.path
-            let cachePath = URL(fileURLWithPath: parakeetCacheDir).standardizedFileURL.path
-            let parakeetPkgDir: String
-            if sourcePath == cachePath {
-                parakeetPkgDir = parakeetSrcDir
-            } else {
-                await logAsync("Caching Parakeet transcriber sources...")
-                shell("""
-                    rm -rf '\(parakeetCacheDir)' && \
-                    mkdir -p '\((parakeetCacheDir as NSString).deletingLastPathComponent)' && \
-                    ditto '\(parakeetSrcDir)' '\(parakeetCacheDir)' && \
-                    rm -rf '\(parakeetCacheDir)/.build' '\(parakeetCacheDir)/.swiftpm' 2>&1
-                    """)
-                parakeetPkgDir = parakeetCacheDir
-            }
-            let parakeetResult = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
-            let parakeetBuilt = parakeetPkgDir + "/.build/release/parakeet-transcriber"
-            if FileManager.default.fileExists(atPath: parakeetBuilt) {
-                shell("cp '\(parakeetBuilt)' '\(parakeetBin)'")
-                await logAsync("Built Parakeet transcriber")
-            } else {
-                await logAsync("Warning: Parakeet transcriber build failed (transcription will use Apple Speech instead)")
-                await logAsync(String(parakeetResult.suffix(200)))
+        let bundledParakeet = (Bundle.main.resourcePath ?? "") + "/tools/parakeet-transcriber"
+        if FileManager.default.fileExists(atPath: bundledParakeet) {
+            shell("cp '\(bundledParakeet)' '\(parakeetBin)'")
+            await logAsync("Using pre-built Parakeet transcriber from app bundle")
+        } else {
+            let parakeetSrcDir = repoDir + "/tools/parakeet-transcriber"
+            if FileManager.default.fileExists(atPath: parakeetSrcDir + "/Package.swift") {
+                await logAsync("Building Parakeet transcriber (may take a moment on first run)...")
+                let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/SpliceKit/tools/parakeet-transcriber"
+                let sourcePath = URL(fileURLWithPath: parakeetSrcDir).standardizedFileURL.path
+                let cachePath = URL(fileURLWithPath: parakeetCacheDir).standardizedFileURL.path
+                let parakeetPkgDir: String
+                if sourcePath == cachePath {
+                    parakeetPkgDir = parakeetSrcDir
+                } else {
+                    await logAsync("Caching Parakeet transcriber sources...")
+                    shell("""
+                        rm -rf '\(parakeetCacheDir)' && \
+                        mkdir -p '\((parakeetCacheDir as NSString).deletingLastPathComponent)' && \
+                        ditto '\(parakeetSrcDir)' '\(parakeetCacheDir)' && \
+                        rm -rf '\(parakeetCacheDir)/.build' '\(parakeetCacheDir)/.swiftpm' 2>&1
+                        """)
+                    parakeetPkgDir = parakeetCacheDir
+                }
+                let parakeetResult = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
+                let parakeetBuilt = parakeetPkgDir + "/.build/release/parakeet-transcriber"
+                if FileManager.default.fileExists(atPath: parakeetBuilt) {
+                    shell("cp '\(parakeetBuilt)' '\(parakeetBin)'")
+                    await logAsync("Built Parakeet transcriber")
+                } else {
+                    await logAsync("Warning: Parakeet transcriber build failed (transcription will use Apple Speech instead)")
+                    await logAsync(String(parakeetResult.suffix(200)))
+                }
             }
         }
 
