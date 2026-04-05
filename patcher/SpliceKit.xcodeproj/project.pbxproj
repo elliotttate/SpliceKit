@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 22D74E1E2F81FBD900A9252B /* Credits.rtf */; };
 		BB0000000000000000000001 /* SpliceKitApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* SpliceKitApp.swift */; };
 		BB0000000000000000000002 /* PatcherModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000002 /* PatcherModel.swift */; };
 		BB0000000000000000000003 /* WizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000003 /* WizardView.swift */; };
@@ -34,6 +35,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		22D74E1E2F81FBD900A9252B /* Credits.rtf */ = {isa = PBXFileReference; lastKnownFileType = text.rtf; path = Credits.rtf; sourceTree = "<group>"; };
 		AA0000000000000000000001 /* SpliceKitApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpliceKitApp.swift; sourceTree = "<group>"; };
 		AA0000000000000000000002 /* PatcherModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatcherModel.swift; sourceTree = "<group>"; };
 		AA0000000000000000000003 /* WizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WizardView.swift; sourceTree = "<group>"; };
@@ -71,6 +73,7 @@
 		CC0000000000000000000002 /* SpliceKit */ = {
 			isa = PBXGroup;
 			children = (
+				22D74E1E2F81FBD900A9252B /* Credits.rtf */,
 				AA0000000000000000000001 /* SpliceKitApp.swift */,
 				CC0000000000000000000003 /* Models */,
 				CC0000000000000000000004 /* Views */,
@@ -163,6 +166,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				BB0000000000000000000008 /* Assets.xcassets in Resources */,
+				22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

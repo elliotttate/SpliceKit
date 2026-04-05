@@ -4,23 +4,23 @@ MIN_VERSION = -mmacosx-version-min=14.0
 FRAMEWORKS = -framework Foundation -framework AppKit -framework AVFoundation
 OBJC_FLAGS = -fobjc-arc -fmodules
 LINKER_FLAGS = -undefined dynamic_lookup -dynamiclib
-INSTALL_NAME = -install_name @rpath/FCPBridge.framework/Versions/A/FCPBridge
+INSTALL_NAME = -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit
 
-SOURCES = Sources/FCPBridge.m \
-          Sources/FCPBridgeRuntime.m \
-          Sources/FCPBridgeSwizzle.m \
-          Sources/FCPBridgeServer.m \
-          Sources/FCPTranscriptPanel.m \
-          Sources/FCPCommandPalette.m
+SOURCES = Sources/SpliceKit.m \
+          Sources/SpliceKitRuntime.m \
+          Sources/SpliceKitSwizzle.m \
+          Sources/SpliceKitServer.m \
+          Sources/SpliceKitTranscriptPanel.m \
+          Sources/SpliceKitCommandPalette.m
 
 BUILD_DIR = build
-OUTPUT = $(BUILD_DIR)/FCPBridge
+OUTPUT = $(BUILD_DIR)/SpliceKit
 
 # Modded app paths — auto-detect standard or Creator Studio edition
 MODDED_APP_STANDARD = $(HOME)/Library/Application Support/SpliceKit/Final Cut Pro.app
 MODDED_APP_CREATOR = $(HOME)/Library/Application Support/SpliceKit/Final Cut Pro Creator Studio.app
 MODDED_APP = $(shell if [ -d "$(MODDED_APP_STANDARD)" ]; then echo "$(MODDED_APP_STANDARD)"; elif [ -d "$(MODDED_APP_CREATOR)" ]; then echo "$(MODDED_APP_CREATOR)"; else echo "$(MODDED_APP_STANDARD)"; fi)
-FW_DIR = $(MODDED_APP)/Contents/Frameworks/FCPBridge.framework
+FW_DIR = $(MODDED_APP)/Contents/Frameworks/SpliceKit.framework
 ENTITLEMENTS = entitlements.plist
 
 SILENCE_DETECTOR = $(BUILD_DIR)/silence-detector
@@ -36,7 +36,7 @@ $(SILENCE_DETECTOR): tools/silence-detector.swift
 	swiftc -O -suppress-warnings -o $(SILENCE_DETECTOR) tools/silence-detector.swift
 	@echo "Built: $(SILENCE_DETECTOR)"
 
-$(OUTPUT): $(SOURCES) Sources/FCPBridge.h
+$(OUTPUT): $(SOURCES) Sources/SpliceKit.h
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(ARCHS) $(MIN_VERSION) $(FRAMEWORKS) $(OBJC_FLAGS) $(LINKER_FLAGS) \
 		$(INSTALL_NAME) -I Sources \
@@ -50,14 +50,14 @@ clean:
 deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 	@echo "=== Deploying SpliceKit to modded FCP ==="
 	@mkdir -p "$(FW_DIR)/Versions/A/Resources"
-	cp $(OUTPUT) "$(FW_DIR)/Versions/A/FCPBridge"
+	cp $(OUTPUT) "$(FW_DIR)/Versions/A/SpliceKit"
 	@# Create framework symlinks (must use cd for relative paths)
 	@cd "$(FW_DIR)/Versions" && ln -sf A Current
-	@cd "$(FW_DIR)" && ln -sf Versions/Current/FCPBridge FCPBridge
+	@cd "$(FW_DIR)" && ln -sf Versions/Current/SpliceKit SpliceKit
 	@cd "$(FW_DIR)" && ln -sf Versions/Current/Resources Resources
 	@# Create Info.plist if missing
 	@test -f "$(FW_DIR)/Versions/A/Resources/Info.plist" || \
-		printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.custom.FCPBridge</string><key>CFBundleName</key><string>FCPBridge</string><key>CFBundleVersion</key><string>1.0.0</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleExecutable</key><string>FCPBridge</string></dict></plist>' \
+		printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string><key>CFBundleName</key><string>SpliceKit</string><key>CFBundleVersion</key><string>1.0.0</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleExecutable</key><string>SpliceKit</string></dict></plist>' \
 		> "$(FW_DIR)/Versions/A/Resources/Info.plist"
 	@# Add speech recognition usage description for transcript feature
 	@/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'SpliceKit uses speech recognition to transcribe timeline audio for text-based editing.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
@@ -70,7 +70,7 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 
 launch: deploy
 	@echo "=== Launching modded FCP with SpliceKit ==="
-	DYLD_INSERT_LIBRARIES="$(FW_DIR)/Versions/A/FCPBridge" \
+	DYLD_INSERT_LIBRARIES="$(FW_DIR)/Versions/A/SpliceKit" \
 		"$(MODDED_APP)/Contents/MacOS/Final Cut Pro" &
 	@echo "FCP launched. Check Console.app for [SpliceKit] messages."
-	@echo "Connect: echo '{\"jsonrpc\":\"2.0\",\"method\":\"system.version\",\"id\":1}' | nc -U /tmp/fcpbridge.sock"
+	@echo "Connect: echo '{\"jsonrpc\":\"2.0\",\"method\":\"system.version\",\"id\":1}' | nc -U /tmp/splicekit.sock"

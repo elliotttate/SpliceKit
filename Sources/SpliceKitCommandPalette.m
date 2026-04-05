@@ -1,22 +1,22 @@
 //
-//  FCPCommandPalette.m
+//  SpliceKitCommandPalette.m
 //  Command palette — Cmd+Shift+P to quickly find and execute FCP actions,
 //  with Apple on-device LLM (FoundationModels) for natural language commands.
 //
 
-#import "FCPCommandPalette.h"
-#import "FCPBridge.h"
+#import "SpliceKitCommandPalette.h"
+#import "SpliceKit.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-// Forward-declare the server-side action dispatchers (defined in FCPBridgeServer.m)
-extern NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params);
-extern NSDictionary *FCPBridge_handlePlayback(NSDictionary *params);
+// Forward-declare the server-side action dispatchers (defined in SpliceKitServer.m)
+extern NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params);
+extern NSDictionary *SpliceKit_handlePlayback(NSDictionary *params);
 
-#pragma mark - FCPCommand
+#pragma mark - SpliceKitCommand
 
-@implementation FCPCommand
+@implementation SpliceKitCommand
 - (NSString *)description {
     return [NSString stringWithFormat:@"<%@ %@/%@>", self.name, self.type, self.action];
 }
@@ -67,30 +67,30 @@ static CGFloat FCPFuzzyScore(NSString *query, NSString *target) {
 
 #pragma mark - Search Field (forwards arrow keys to table)
 
-@interface FCPCommandSearchField : NSTextField
+@interface SpliceKitCommandSearchField : NSTextField
 @property (nonatomic, weak) NSTableView *targetTableView;
 @end
 
-@implementation FCPCommandSearchField
+@implementation SpliceKitCommandSearchField
 
 - (BOOL)performKeyEquivalent:(NSEvent *)event {
     // Forward up/down arrows to the table view (skip separator rows)
     if (event.type == NSEventTypeKeyDown) {
         unsigned short keyCode = event.keyCode;
         if (keyCode == 126 || keyCode == 125) { // Up or Down
-            FCPCommandPalette *palette = [FCPCommandPalette sharedPalette];
+            SpliceKitCommandPalette *palette = [SpliceKitCommandPalette sharedPalette];
             NSInteger row = self.targetTableView.selectedRow;
             NSInteger maxRow = self.targetTableView.numberOfRows - 1;
             if (keyCode == 126 && row > 0) { // Up
                 NSInteger newRow = row - 1;
-                FCPCommand *cmd = [palette commandForDisplayRow:newRow];
+                SpliceKitCommand *cmd = [palette commandForDisplayRow:newRow];
                 if (cmd && cmd.isSeparatorRow && newRow > 0) newRow--;
                 [self.targetTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:newRow]
                                   byExtendingSelection:NO];
                 [self.targetTableView scrollRowToVisible:newRow];
             } else if (keyCode == 125 && row < maxRow) { // Down
                 NSInteger newRow = row + 1;
-                FCPCommand *cmd = [palette commandForDisplayRow:newRow];
+                SpliceKitCommand *cmd = [palette commandForDisplayRow:newRow];
                 if (cmd && cmd.isSeparatorRow && newRow < maxRow) newRow++;
                 [self.targetTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:newRow]
                                   byExtendingSelection:NO];
@@ -106,7 +106,7 @@ static CGFloat FCPFuzzyScore(NSString *query, NSString *target) {
 
 #pragma mark - Command Row View
 
-@interface FCPCommandRowView : NSTableCellView
+@interface SpliceKitCommandRowView : NSTableCellView
 @property (nonatomic, strong) NSTextField *starLabel;
 @property (nonatomic, strong) NSTextField *nameLabel;
 @property (nonatomic, strong) NSTextField *detailLabel;
@@ -114,7 +114,7 @@ static CGFloat FCPFuzzyScore(NSString *query, NSString *target) {
 @property (nonatomic, strong) NSTextField *shortcutLabel;
 @end
 
-@implementation FCPCommandRowView
+@implementation SpliceKitCommandRowView
 
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
@@ -183,7 +183,7 @@ static CGFloat FCPFuzzyScore(NSString *query, NSString *target) {
     return self;
 }
 
-- (void)configureWithCommand:(FCPCommand *)cmd isFavorited:(BOOL)favorited {
+- (void)configureWithCommand:(SpliceKitCommand *)cmd isFavorited:(BOOL)favorited {
     self.nameLabel.stringValue = cmd.name ?: @"";
     self.detailLabel.stringValue = cmd.detail ?: @"";
     self.categoryLabel.stringValue = cmd.categoryName ?: @"";
@@ -254,12 +254,12 @@ static CGFloat FCPFuzzyScore(NSString *query, NSString *target) {
 }
 @end
 
-#pragma mark - FCPCommandPalette
+#pragma mark - SpliceKitCommandPalette
 
-static NSString * const kCommandRowID = @"FCPCommandRow";
+static NSString * const kCommandRowID = @"SpliceKitCommandRow";
 static NSString * const kAIRowID = @"FCPAIRow";
 
-@interface FCPCommandPalette () <NSTableViewDelegate, NSTableViewDataSource,
+@interface SpliceKitCommandPalette () <NSTableViewDelegate, NSTableViewDataSource,
                                   NSTextFieldDelegate, NSWindowDelegate, NSMenuDelegate>
 @property (nonatomic, strong) NSPanel *panel;
 @property (nonatomic, strong) NSTextField *searchField;
@@ -268,9 +268,9 @@ static NSString * const kAIRowID = @"FCPAIRow";
 @property (nonatomic, strong) NSVisualEffectView *backgroundView;
 @property (nonatomic, strong) NSTextField *statusLabel;
 
-@property (nonatomic, strong) NSArray<FCPCommand *> *allCommands;
-@property (nonatomic, strong) NSArray<FCPCommand *> *masterCommands; // original full list
-@property (nonatomic, strong) NSArray<FCPCommand *> *filteredCommands;
+@property (nonatomic, strong) NSArray<SpliceKitCommand *> *allCommands;
+@property (nonatomic, strong) NSArray<SpliceKitCommand *> *masterCommands; // original full list
+@property (nonatomic, strong) NSArray<SpliceKitCommand *> *filteredCommands;
 @property (nonatomic, assign) BOOL aiLoading;
 @property (nonatomic, strong) NSString *aiQuery;
 @property (nonatomic, strong) NSString *aiCompletedQuery; // query that already has results
@@ -283,16 +283,16 @@ static NSString * const kAIRowID = @"FCPAIRow";
 
 // Favorites
 @property (nonatomic, strong) NSMutableSet<NSString *> *favoriteKeys; // "type::action" for O(1) lookup
-@property (nonatomic, strong) NSArray<FCPCommand *> *rawBrowseCommands; // pre-injection list
+@property (nonatomic, strong) NSArray<SpliceKitCommand *> *rawBrowseCommands; // pre-injection list
 @end
 
-static NSString * const kFCPBridgeFavoritesKey = @"FCPBridgeCommandPaletteFavorites";
+static NSString * const kSpliceKitFavoritesKey = @"SpliceKitCommandPaletteFavorites";
 static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 
-@implementation FCPCommandPalette
+@implementation SpliceKitCommandPalette
 
 + (instancetype)sharedPalette {
-    static FCPCommandPalette *instance = nil;
+    static SpliceKitCommandPalette *instance = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
     return instance;
@@ -311,13 +311,13 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 #pragma mark - Command Registry
 
 - (void)registerCommands {
-    NSMutableArray<FCPCommand *> *cmds = [NSMutableArray array];
+    NSMutableArray<SpliceKitCommand *> *cmds = [NSMutableArray array];
 
     // Helper to create commands
-    void (^add)(NSString *, NSString *, NSString *, FCPCommandCategory, NSString *, NSString *, NSString *, NSArray *) =
-        ^(NSString *name, NSString *action, NSString *type, FCPCommandCategory cat,
+    void (^add)(NSString *, NSString *, NSString *, SpliceKitCommandCategory, NSString *, NSString *, NSString *, NSArray *) =
+        ^(NSString *name, NSString *action, NSString *type, SpliceKitCommandCategory cat,
           NSString *catName, NSString *shortcut, NSString *detail, NSArray *keywords) {
-        FCPCommand *cmd = [[FCPCommand alloc] init];
+        SpliceKitCommand *cmd = [[SpliceKitCommand alloc] init];
         cmd.name = name;
         cmd.action = action;
         cmd.type = type;
@@ -330,406 +330,406 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     };
 
     // --- Editing ---
-    add(@"Blade", @"blade", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Cmd+B", @"Split clip at playhead", @[@"cut", @"split", @"razor"]);
-    add(@"Blade All", @"bladeAll", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Split all clips at playhead", @[@"cut all", @"split all"]);
-    add(@"Delete", @"delete", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Delete", @"Remove selected clip (ripple)", @[@"remove", @"ripple delete"]);
-    add(@"Cut", @"cut", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Cmd+X", @"Cut selected to clipboard", @[]);
-    add(@"Copy", @"copy", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Cmd+C", @"Copy selected to clipboard", @[]);
-    add(@"Paste", @"paste", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Cmd+V", @"Paste from clipboard", @[]);
-    add(@"Undo", @"undo", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Cmd+Z", @"Undo last action", @[@"revert"]);
-    add(@"Redo", @"redo", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Cmd+Shift+Z", @"Redo last undone action", @[]);
-    add(@"Select All", @"selectAll", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Cmd+A", @"Select all clips", @[]);
-    add(@"Deselect All", @"deselectAll", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Clear selection", @[@"unselect"]);
-    add(@"Select Clip at Playhead", @"selectClipAtPlayhead", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Select the clip under playhead", @[@"select current"]);
-    add(@"Select to Playhead", @"selectToPlayhead", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Extend selection to playhead", @[]);
-    add(@"Trim to Playhead", @"trimToPlayhead", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Opt+]", @"Trim clip end to playhead position", @[@"shorten"]);
-    add(@"Extend Edit to Playhead", @"extendEditToPlayhead", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Extend edit point to playhead", @[]);
-    add(@"Insert Gap", @"insertGap", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Insert gap at playhead", @[@"space", @"blank"]);
-    add(@"Insert Placeholder", @"insertPlaceholder", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Insert placeholder storyline", @[]);
-    add(@"Solo", @"solo", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Solo selected clips", @[@"isolate"]);
-    add(@"Disable", @"disable", @"timeline", FCPCommandCategoryEditing, @"Editing", @"V", @"Disable/enable selected clips", @[@"mute", @"toggle"]);
-    add(@"Create Compound Clip", @"createCompoundClip", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Nest selected clips into compound", @[@"nest", @"group"]);
+    add(@"Blade", @"blade", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Cmd+B", @"Split clip at playhead", @[@"cut", @"split", @"razor"]);
+    add(@"Blade All", @"bladeAll", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Split all clips at playhead", @[@"cut all", @"split all"]);
+    add(@"Delete", @"delete", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Delete", @"Remove selected clip (ripple)", @[@"remove", @"ripple delete"]);
+    add(@"Cut", @"cut", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Cmd+X", @"Cut selected to clipboard", @[]);
+    add(@"Copy", @"copy", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Cmd+C", @"Copy selected to clipboard", @[]);
+    add(@"Paste", @"paste", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Cmd+V", @"Paste from clipboard", @[]);
+    add(@"Undo", @"undo", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Cmd+Z", @"Undo last action", @[@"revert"]);
+    add(@"Redo", @"redo", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Cmd+Shift+Z", @"Redo last undone action", @[]);
+    add(@"Select All", @"selectAll", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Cmd+A", @"Select all clips", @[]);
+    add(@"Deselect All", @"deselectAll", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Clear selection", @[@"unselect"]);
+    add(@"Select Clip at Playhead", @"selectClipAtPlayhead", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Select the clip under playhead", @[@"select current"]);
+    add(@"Select to Playhead", @"selectToPlayhead", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Extend selection to playhead", @[]);
+    add(@"Trim to Playhead", @"trimToPlayhead", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Opt+]", @"Trim clip end to playhead position", @[@"shorten"]);
+    add(@"Extend Edit to Playhead", @"extendEditToPlayhead", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Extend edit point to playhead", @[]);
+    add(@"Insert Gap", @"insertGap", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Insert gap at playhead", @[@"space", @"blank"]);
+    add(@"Insert Placeholder", @"insertPlaceholder", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Insert placeholder storyline", @[]);
+    add(@"Solo", @"solo", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Solo selected clips", @[@"isolate"]);
+    add(@"Disable", @"disable", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"V", @"Disable/enable selected clips", @[@"mute", @"toggle"]);
+    add(@"Create Compound Clip", @"createCompoundClip", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Nest selected clips into compound", @[@"nest", @"group"]);
 
     // --- Navigation ---
-    add(@"Next Edit Point", @"nextEdit", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"Down", @"Move to next edit point", @[@"next cut"]);
-    add(@"Previous Edit Point", @"previousEdit", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"Up", @"Move to previous edit point", @[@"prev cut"]);
+    add(@"Next Edit Point", @"nextEdit", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"Down", @"Move to next edit point", @[@"next cut"]);
+    add(@"Previous Edit Point", @"previousEdit", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"Up", @"Move to previous edit point", @[@"prev cut"]);
 
     // --- Playback ---
-    add(@"Play / Pause", @"playPause", @"playback", FCPCommandCategoryPlayback, @"Playback", @"Space", @"Toggle playback", @[@"stop", @"start"]);
-    add(@"Go to Start", @"goToStart", @"playback", FCPCommandCategoryPlayback, @"Playback", @"Home", @"Jump to beginning of timeline", @[@"beginning", @"rewind"]);
-    add(@"Go to End", @"goToEnd", @"playback", FCPCommandCategoryPlayback, @"Playback", @"End", @"Jump to end of timeline", @[]);
-    add(@"Next Frame", @"nextFrame", @"playback", FCPCommandCategoryPlayback, @"Playback", @"Right", @"Step forward one frame", @[@"forward"]);
-    add(@"Previous Frame", @"prevFrame", @"playback", FCPCommandCategoryPlayback, @"Playback", @"Left", @"Step backward one frame", @[@"backward", @"back"]);
-    add(@"Forward 10 Frames", @"nextFrame10", @"playback", FCPCommandCategoryPlayback, @"Playback", @"Shift+Right", @"Jump forward 10 frames", @[]);
-    add(@"Back 10 Frames", @"prevFrame10", @"playback", FCPCommandCategoryPlayback, @"Playback", @"Shift+Left", @"Jump backward 10 frames", @[]);
+    add(@"Play / Pause", @"playPause", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"Space", @"Toggle playback", @[@"stop", @"start"]);
+    add(@"Go to Start", @"goToStart", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"Home", @"Jump to beginning of timeline", @[@"beginning", @"rewind"]);
+    add(@"Go to End", @"goToEnd", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"End", @"Jump to end of timeline", @[]);
+    add(@"Next Frame", @"nextFrame", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"Right", @"Step forward one frame", @[@"forward"]);
+    add(@"Previous Frame", @"prevFrame", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"Left", @"Step backward one frame", @[@"backward", @"back"]);
+    add(@"Forward 10 Frames", @"nextFrame10", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"Shift+Right", @"Jump forward 10 frames", @[]);
+    add(@"Back 10 Frames", @"prevFrame10", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"Shift+Left", @"Jump backward 10 frames", @[]);
 
     // --- Color Correction ---
-    add(@"Add Color Board", @"addColorBoard", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Add Color Board effect to selected clip", @[@"color correction", @"grade"]);
-    add(@"Add Color Wheels", @"addColorWheels", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Add Color Wheels effect", @[@"color correction"]);
-    add(@"Add Color Curves", @"addColorCurves", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Add Color Curves effect", @[@"rgb curves"]);
-    add(@"Add Color Adjustment", @"addColorAdjustment", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Add Color Adjustment controls", @[@"brightness", @"contrast", @"saturation"]);
-    add(@"Add Hue/Saturation", @"addHueSaturation", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Add Hue/Saturation curves", @[@"hsl"]);
-    add(@"Enhance Light and Color", @"addEnhanceLightAndColor", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Auto-enhance lighting and color", @[@"auto color", @"magic"]);
+    add(@"Add Color Board", @"addColorBoard", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Add Color Board effect to selected clip", @[@"color correction", @"grade"]);
+    add(@"Add Color Wheels", @"addColorWheels", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Add Color Wheels effect", @[@"color correction"]);
+    add(@"Add Color Curves", @"addColorCurves", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Add Color Curves effect", @[@"rgb curves"]);
+    add(@"Add Color Adjustment", @"addColorAdjustment", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Add Color Adjustment controls", @[@"brightness", @"contrast", @"saturation"]);
+    add(@"Add Hue/Saturation", @"addHueSaturation", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Add Hue/Saturation curves", @[@"hsl"]);
+    add(@"Enhance Light and Color", @"addEnhanceLightAndColor", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Auto-enhance lighting and color", @[@"auto color", @"magic"]);
 
     // --- Speed / Retiming ---
-    add(@"Normal Speed (100%)", @"retimeNormal", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Reset to normal speed", @[@"retime", @"1x"]);
-    add(@"Fast 2x", @"retimeFast2x", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Double speed", @[@"200%", @"speed up"]);
-    add(@"Fast 4x", @"retimeFast4x", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"4x speed", @[@"400%"]);
-    add(@"Fast 8x", @"retimeFast8x", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"8x speed", @[@"800%"]);
-    add(@"Fast 20x", @"retimeFast20x", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"20x speed", @[@"2000%"]);
-    add(@"Slow 50%", @"retimeSlow50", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Half speed", @[@"slow motion", @"slow mo"]);
-    add(@"Slow 25%", @"retimeSlow25", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Quarter speed", @[@"slow motion"]);
-    add(@"Slow 10%", @"retimeSlow10", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"1/10 speed", @[@"super slow"]);
-    add(@"Reverse", @"retimeReverse", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Reverse playback direction", @[@"backwards"]);
-    add(@"Hold Frame", @"retimeHold", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Hold current frame", @[@"freeze"]);
-    add(@"Freeze Frame", @"freezeFrame", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Create a freeze frame", @[@"still"]);
-    add(@"Blade Speed", @"retimeBladeSpeed", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Split speed segment", @[]);
+    add(@"Normal Speed (100%)", @"retimeNormal", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Reset to normal speed", @[@"retime", @"1x"]);
+    add(@"Fast 2x", @"retimeFast2x", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Double speed", @[@"200%", @"speed up"]);
+    add(@"Fast 4x", @"retimeFast4x", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"4x speed", @[@"400%"]);
+    add(@"Fast 8x", @"retimeFast8x", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"8x speed", @[@"800%"]);
+    add(@"Fast 20x", @"retimeFast20x", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"20x speed", @[@"2000%"]);
+    add(@"Slow 50%", @"retimeSlow50", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Half speed", @[@"slow motion", @"slow mo"]);
+    add(@"Slow 25%", @"retimeSlow25", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Quarter speed", @[@"slow motion"]);
+    add(@"Slow 10%", @"retimeSlow10", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"1/10 speed", @[@"super slow"]);
+    add(@"Reverse", @"retimeReverse", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Reverse playback direction", @[@"backwards"]);
+    add(@"Hold Frame", @"retimeHold", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Hold current frame", @[@"freeze"]);
+    add(@"Freeze Frame", @"freezeFrame", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Create a freeze frame", @[@"still"]);
+    add(@"Blade Speed", @"retimeBladeSpeed", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Split speed segment", @[]);
 
     // --- Markers ---
-    add(@"Add Marker", @"addMarker", @"timeline", FCPCommandCategoryMarkers, @"Markers", @"M", @"Add standard marker at playhead", @[@"mark"]);
-    add(@"Add To-Do Marker", @"addTodoMarker", @"timeline", FCPCommandCategoryMarkers, @"Markers", nil, @"Add to-do marker", @[@"task"]);
-    add(@"Add Chapter Marker", @"addChapterMarker", @"timeline", FCPCommandCategoryMarkers, @"Markers", nil, @"Add chapter marker for export", @[@"chapter"]);
-    add(@"Delete Marker", @"deleteMarker", @"timeline", FCPCommandCategoryMarkers, @"Markers", nil, @"Remove marker at playhead", @[]);
-    add(@"Delete All Markers", @"deleteMarkersInSelection", @"timeline", FCPCommandCategoryMarkers, @"Markers", nil, @"Remove all markers in selection (select all first)", @[@"remove all markers", @"clear markers"]);
-    add(@"Next Marker", @"nextMarker", @"timeline", FCPCommandCategoryMarkers, @"Markers", nil, @"Go to next marker", @[]);
-    add(@"Previous Marker", @"previousMarker", @"timeline", FCPCommandCategoryMarkers, @"Markers", nil, @"Go to previous marker", @[]);
+    add(@"Add Marker", @"addMarker", @"timeline", SpliceKitCommandCategoryMarkers, @"Markers", @"M", @"Add standard marker at playhead", @[@"mark"]);
+    add(@"Add To-Do Marker", @"addTodoMarker", @"timeline", SpliceKitCommandCategoryMarkers, @"Markers", nil, @"Add to-do marker", @[@"task"]);
+    add(@"Add Chapter Marker", @"addChapterMarker", @"timeline", SpliceKitCommandCategoryMarkers, @"Markers", nil, @"Add chapter marker for export", @[@"chapter"]);
+    add(@"Delete Marker", @"deleteMarker", @"timeline", SpliceKitCommandCategoryMarkers, @"Markers", nil, @"Remove marker at playhead", @[]);
+    add(@"Delete All Markers", @"deleteMarkersInSelection", @"timeline", SpliceKitCommandCategoryMarkers, @"Markers", nil, @"Remove all markers in selection (select all first)", @[@"remove all markers", @"clear markers"]);
+    add(@"Next Marker", @"nextMarker", @"timeline", SpliceKitCommandCategoryMarkers, @"Markers", nil, @"Go to next marker", @[]);
+    add(@"Previous Marker", @"previousMarker", @"timeline", SpliceKitCommandCategoryMarkers, @"Markers", nil, @"Go to previous marker", @[]);
 
     // --- Transitions ---
-    add(@"Add Default Transition", @"addTransition", @"timeline", FCPCommandCategoryEffects, @"Transitions", @"Cmd+T", @"Add default transition (Cross Dissolve)", @[@"cross dissolve", @"fade"]);
-    add(@"Browse Transitions...", @"browseTransitions", @"transition_browse", FCPCommandCategoryEffects, @"Transitions", nil, @"Search and apply a specific transition by name", @[@"find transition", @"list transitions"]);
-    add(@"Browse Effects...", @"browseEffects", @"effect_browse", FCPCommandCategoryEffects, @"Effects", nil, @"Search and apply an effect by name", @[@"find effect", @"filter", @"plugin"]);
-    add(@"Browse Generators...", @"browseGenerators", @"generator_browse", FCPCommandCategoryEffects, @"Generators", nil, @"Search and apply a generator", @[@"background", @"solid"]);
-    add(@"Browse Titles...", @"browseTitles", @"title_browse", FCPCommandCategoryTitles, @"Titles", nil, @"Search and apply a title template", @[@"text", @"lower third"]);
-    add(@"Browse Favorites...", @"browseFavorites", @"favorites_browse", FCPCommandCategoryEffects, @"Favorites", nil, @"View all favorited effects, transitions, and generators", @[@"starred", @"pinned", @"bookmarks"]);
+    add(@"Add Default Transition", @"addTransition", @"timeline", SpliceKitCommandCategoryEffects, @"Transitions", @"Cmd+T", @"Add default transition (Cross Dissolve)", @[@"cross dissolve", @"fade"]);
+    add(@"Browse Transitions...", @"browseTransitions", @"transition_browse", SpliceKitCommandCategoryEffects, @"Transitions", nil, @"Search and apply a specific transition by name", @[@"find transition", @"list transitions"]);
+    add(@"Browse Effects...", @"browseEffects", @"effect_browse", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Search and apply an effect by name", @[@"find effect", @"filter", @"plugin"]);
+    add(@"Browse Generators...", @"browseGenerators", @"generator_browse", SpliceKitCommandCategoryEffects, @"Generators", nil, @"Search and apply a generator", @[@"background", @"solid"]);
+    add(@"Browse Titles...", @"browseTitles", @"title_browse", SpliceKitCommandCategoryTitles, @"Titles", nil, @"Search and apply a title template", @[@"text", @"lower third"]);
+    add(@"Browse Favorites...", @"browseFavorites", @"favorites_browse", SpliceKitCommandCategoryEffects, @"Favorites", nil, @"View all favorited effects, transitions, and generators", @[@"starred", @"pinned", @"bookmarks"]);
 
     // --- Titles ---
-    add(@"Add Basic Title", @"addBasicTitle", @"timeline", FCPCommandCategoryTitles, @"Titles", nil, @"Insert basic title at playhead", @[@"text"]);
-    add(@"Add Lower Third", @"addBasicLowerThird", @"timeline", FCPCommandCategoryTitles, @"Titles", nil, @"Insert lower third title", @[@"name plate", @"super"]);
+    add(@"Add Basic Title", @"addBasicTitle", @"timeline", SpliceKitCommandCategoryTitles, @"Titles", nil, @"Insert basic title at playhead", @[@"text"]);
+    add(@"Add Lower Third", @"addBasicLowerThird", @"timeline", SpliceKitCommandCategoryTitles, @"Titles", nil, @"Insert lower third title", @[@"name plate", @"super"]);
 
     // --- Volume ---
-    add(@"Volume Up", @"adjustVolumeUp", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Increase clip volume", @[@"louder"]);
-    add(@"Volume Down", @"adjustVolumeDown", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Decrease clip volume", @[@"quieter", @"softer"]);
+    add(@"Volume Up", @"adjustVolumeUp", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Increase clip volume", @[@"louder"]);
+    add(@"Volume Down", @"adjustVolumeDown", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Decrease clip volume", @[@"quieter", @"softer"]);
 
     // --- Keyframes ---
-    add(@"Add Keyframe", @"addKeyframe", @"timeline", FCPCommandCategoryKeyframes, @"Keyframes", nil, @"Add keyframe at playhead", @[@"animation"]);
-    add(@"Delete Keyframes", @"deleteKeyframes", @"timeline", FCPCommandCategoryKeyframes, @"Keyframes", nil, @"Remove keyframes from selection", @[]);
-    add(@"Next Keyframe", @"nextKeyframe", @"timeline", FCPCommandCategoryKeyframes, @"Keyframes", nil, @"Go to next keyframe", @[]);
-    add(@"Previous Keyframe", @"previousKeyframe", @"timeline", FCPCommandCategoryKeyframes, @"Keyframes", nil, @"Go to previous keyframe", @[]);
+    add(@"Add Keyframe", @"addKeyframe", @"timeline", SpliceKitCommandCategoryKeyframes, @"Keyframes", nil, @"Add keyframe at playhead", @[@"animation"]);
+    add(@"Delete Keyframes", @"deleteKeyframes", @"timeline", SpliceKitCommandCategoryKeyframes, @"Keyframes", nil, @"Remove keyframes from selection", @[]);
+    add(@"Next Keyframe", @"nextKeyframe", @"timeline", SpliceKitCommandCategoryKeyframes, @"Keyframes", nil, @"Go to next keyframe", @[]);
+    add(@"Previous Keyframe", @"previousKeyframe", @"timeline", SpliceKitCommandCategoryKeyframes, @"Keyframes", nil, @"Go to previous keyframe", @[]);
 
     // --- Export ---
-    add(@"Export FCPXML", @"exportXML", @"timeline", FCPCommandCategoryExport, @"Export", nil, @"Export timeline as FCPXML", @[@"xml"]);
-    add(@"Share Selection", @"shareSelection", @"timeline", FCPCommandCategoryExport, @"Export", nil, @"Share/export selected range", @[@"render"]);
-    add(@"Batch Export", @"batchExport", @"batch_export", FCPCommandCategoryExport, @"Export", nil, @"Export each clip individually using default share destination", @[@"batch", @"export all", @"individual"]);
-    add(@"Auto Reframe", @"autoReframe", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Auto-reframe for different aspect ratios", @[@"crop", @"aspect"]);
-    add(@"Stabilize Subject", @"stabilize_subject", @"subject_stabilize", FCPCommandCategoryEffects, @"Effects", nil, @"Lock camera onto a subject — keeps it fixed while background moves", @[@"lock on", @"track", @"stabilize", @"pin", @"follow", @"steady"]);
+    add(@"Export FCPXML", @"exportXML", @"timeline", SpliceKitCommandCategoryExport, @"Export", nil, @"Export timeline as FCPXML", @[@"xml"]);
+    add(@"Share Selection", @"shareSelection", @"timeline", SpliceKitCommandCategoryExport, @"Export", nil, @"Share/export selected range", @[@"render"]);
+    add(@"Batch Export", @"batchExport", @"batch_export", SpliceKitCommandCategoryExport, @"Export", nil, @"Export each clip individually using default share destination", @[@"batch", @"export all", @"individual"]);
+    add(@"Auto Reframe", @"autoReframe", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Auto-reframe for different aspect ratios", @[@"crop", @"aspect"]);
+    add(@"Stabilize Subject", @"stabilize_subject", @"subject_stabilize", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Lock camera onto a subject — keeps it fixed while background moves", @[@"lock on", @"track", @"stabilize", @"pin", @"follow", @"steady"]);
 
     // --- Generators ---
-    add(@"Add Generator", @"addVideoGenerator", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Add a video generator", @[@"background"]);
+    add(@"Add Generator", @"addVideoGenerator", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Add a video generator", @[@"background"]);
 
     // ===================================================================
     // Extended commands (~100 additional everyday editing actions)
     // ===================================================================
 
     // --- Timeline View ---
-    add(@"Zoom to Fit", @"zoomToFit", @"timeline", FCPCommandCategoryEditing, @"View", @"Shift+Z", @"Fit entire timeline in view", @[@"fit", @"overview"]);
-    add(@"Zoom In", @"zoomIn", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+=", @"Zoom into timeline", @[@"magnify", @"closer"]);
-    add(@"Zoom Out", @"zoomOut", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+-", @"Zoom out of timeline", @[@"wider"]);
-    add(@"Toggle Snapping", @"toggleSnapping", @"timeline", FCPCommandCategoryEditing, @"View", @"N", @"Enable/disable magnetic snapping", @[@"snap", @"magnet"]);
-    add(@"Toggle Skimming", @"toggleSkimming", @"timeline", FCPCommandCategoryEditing, @"View", @"S", @"Enable/disable skimming preview", @[@"skim", @"hover"]);
-    add(@"Toggle Timeline Index", @"toggleTimelineIndex", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+Shift+2", @"Show/hide the timeline index panel", @[@"index", @"sidebar", @"clips list"]);
-    add(@"Toggle Inspector", @"toggleInspector", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+4", @"Show/hide the inspector panel", @[@"properties", @"parameters"]);
-    add(@"Toggle Event Viewer", @"toggleEventViewer", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show/hide the event viewer", @[@"dual viewer", @"source"]);
-    add(@"Toggle Timeline", @"toggleTimeline", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show/hide the timeline panel", @[]);
+    add(@"Zoom to Fit", @"zoomToFit", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Shift+Z", @"Fit entire timeline in view", @[@"fit", @"overview"]);
+    add(@"Zoom In", @"zoomIn", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Cmd+=", @"Zoom into timeline", @[@"magnify", @"closer"]);
+    add(@"Zoom Out", @"zoomOut", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Cmd+-", @"Zoom out of timeline", @[@"wider"]);
+    add(@"Toggle Snapping", @"toggleSnapping", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"N", @"Enable/disable magnetic snapping", @[@"snap", @"magnet"]);
+    add(@"Toggle Skimming", @"toggleSkimming", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"S", @"Enable/disable skimming preview", @[@"skim", @"hover"]);
+    add(@"Toggle Timeline Index", @"toggleTimelineIndex", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Cmd+Shift+2", @"Show/hide the timeline index panel", @[@"index", @"sidebar", @"clips list"]);
+    add(@"Toggle Inspector", @"toggleInspector", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Cmd+4", @"Show/hide the inspector panel", @[@"properties", @"parameters"]);
+    add(@"Toggle Event Viewer", @"toggleEventViewer", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Show/hide the event viewer", @[@"dual viewer", @"source"]);
+    add(@"Toggle Timeline", @"toggleTimeline", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Show/hide the timeline panel", @[]);
 
     // --- Clip Operations ---
-    add(@"Detach Audio", @"detachAudio", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Separate audio from selected clip", @[@"split audio", @"unlink"]);
-    add(@"Break Apart Clip Items", @"breakApartClipItems", @"timeline", FCPCommandCategoryEditing, @"Clips", @"Cmd+Shift+G", @"Break compound or multicam into individual clips", @[@"ungroup", @"flatten", @"decompose"]);
-    add(@"Lift from Storyline", @"liftFromPrimaryStoryline", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Lift selected clip from primary storyline", @[@"extract"]);
-    add(@"Overwrite to Primary", @"overwriteToPrimaryStoryline", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Overwrite clip onto primary storyline", @[@"stamp"]);
-    add(@"Connect to Primary", @"connectClipToPrimaryStoryline", @"timeline", FCPCommandCategoryEditing, @"Clips", @"Q", @"Connect selected clip to primary storyline", @[@"attach"]);
-    add(@"Insert at Playhead", @"insertClipAtPlayhead", @"timeline", FCPCommandCategoryEditing, @"Clips", @"W", @"Insert clip at playhead position", @[@"splice"]);
-    add(@"Append to Storyline", @"appendToStoryline", @"timeline", FCPCommandCategoryEditing, @"Clips", @"E", @"Append clip to end of storyline", @[@"add to end"]);
-    add(@"Replace with Gap", @"replaceWithGap", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Replace selected clip with gap (no ripple)", @[@"lift", @"remove in place"]);
-    add(@"Create Storyline", @"createStoryline", @"timeline", FCPCommandCategoryEditing, @"Clips", @"Cmd+G", @"Group connected clips into a storyline", @[@"group", @"storyline"]);
-    add(@"Synchronize Clips", @"synchronizeClips", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Sync clips by audio waveform or timecode", @[@"sync", @"multicam"]);
-    add(@"Create Audition", @"createAudition", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Create audition from selected clips", @[@"audition", @"alternatives"]);
-    add(@"Expand Audio / Video", @"expandAudioVideo", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Expand audio and video into separate lanes", @[@"split components"]);
-    add(@"Expand Audio Components", @"expandAudioComponents", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Expand audio into individual channel components", @[@"channels", @"mono"]);
-    add(@"Collapse to Clip", @"collapseToClip", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Collapse expanded audio/video back to single clip", @[@"collapse"]);
-    add(@"Reference New Parent Clip", @"referenceNewParentClip", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Re-link clip to a new source", @[@"relink", @"reconnect"]);
+    add(@"Detach Audio", @"detachAudio", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Separate audio from selected clip", @[@"split audio", @"unlink"]);
+    add(@"Break Apart Clip Items", @"breakApartClipItems", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", @"Cmd+Shift+G", @"Break compound or multicam into individual clips", @[@"ungroup", @"flatten", @"decompose"]);
+    add(@"Lift from Storyline", @"liftFromPrimaryStoryline", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Lift selected clip from primary storyline", @[@"extract"]);
+    add(@"Overwrite to Primary", @"overwriteToPrimaryStoryline", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Overwrite clip onto primary storyline", @[@"stamp"]);
+    add(@"Connect to Primary", @"connectClipToPrimaryStoryline", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", @"Q", @"Connect selected clip to primary storyline", @[@"attach"]);
+    add(@"Insert at Playhead", @"insertClipAtPlayhead", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", @"W", @"Insert clip at playhead position", @[@"splice"]);
+    add(@"Append to Storyline", @"appendToStoryline", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", @"E", @"Append clip to end of storyline", @[@"add to end"]);
+    add(@"Replace with Gap", @"replaceWithGap", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Replace selected clip with gap (no ripple)", @[@"lift", @"remove in place"]);
+    add(@"Create Storyline", @"createStoryline", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", @"Cmd+G", @"Group connected clips into a storyline", @[@"group", @"storyline"]);
+    add(@"Synchronize Clips", @"synchronizeClips", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Sync clips by audio waveform or timecode", @[@"sync", @"multicam"]);
+    add(@"Create Audition", @"createAudition", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Create audition from selected clips", @[@"audition", @"alternatives"]);
+    add(@"Expand Audio / Video", @"expandAudioVideo", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Expand audio and video into separate lanes", @[@"split components"]);
+    add(@"Expand Audio Components", @"expandAudioComponents", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Expand audio into individual channel components", @[@"channels", @"mono"]);
+    add(@"Collapse to Clip", @"collapseToClip", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Collapse expanded audio/video back to single clip", @[@"collapse"]);
+    add(@"Reference New Parent Clip", @"referenceNewParentClip", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Re-link clip to a new source", @[@"relink", @"reconnect"]);
 
     // --- Selection & Navigation ---
-    add(@"Nudge Left", @"nudgeLeft", @"timeline", FCPCommandCategoryEditing, @"Navigation", @",", @"Move selected clip left by one frame", @[@"shift left", @"move left"]);
-    add(@"Nudge Right", @"nudgeRight", @"timeline", FCPCommandCategoryEditing, @"Navigation", @".", @"Move selected clip right by one frame", @[@"shift right", @"move right"]);
-    add(@"Nudge Left 10 Frames", @"nudgeLeftBig", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"Shift+,", @"Move selected clip left by 10 frames", @[@"shift left big"]);
-    add(@"Nudge Right 10 Frames", @"nudgeRightBig", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"Shift+.", @"Move selected clip right by 10 frames", @[@"shift right big"]);
-    add(@"Nudge Up", @"nudgeUp", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"Opt+Cmd+Up", @"Move selected clip to lane above", @[@"lane up"]);
-    add(@"Nudge Down", @"nudgeDown", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"Opt+Cmd+Down", @"Move selected clip to lane below", @[@"lane down"]);
-    add(@"Go to Range Start", @"goToRangeStart", @"playback", FCPCommandCategoryPlayback, @"Navigation", @"Shift+I", @"Jump playhead to start of range selection", @[@"in point"]);
-    add(@"Go to Range End", @"goToRangeEnd", @"playback", FCPCommandCategoryPlayback, @"Navigation", @"Shift+O", @"Jump playhead to end of range selection", @[@"out point"]);
-    add(@"Set Range Start", @"setRangeStart", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"I", @"Set start point of range selection", @[@"in point", @"mark in"]);
-    add(@"Set Range End", @"setRangeEnd", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"O", @"Set end point of range selection", @[@"out point", @"mark out"]);
-    add(@"Clear Range", @"clearRange", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"Opt+X", @"Remove range selection", @[@"deselect range"]);
+    add(@"Nudge Left", @"nudgeLeft", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @",", @"Move selected clip left by one frame", @[@"shift left", @"move left"]);
+    add(@"Nudge Right", @"nudgeRight", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @".", @"Move selected clip right by one frame", @[@"shift right", @"move right"]);
+    add(@"Nudge Left 10 Frames", @"nudgeLeftBig", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"Shift+,", @"Move selected clip left by 10 frames", @[@"shift left big"]);
+    add(@"Nudge Right 10 Frames", @"nudgeRightBig", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"Shift+.", @"Move selected clip right by 10 frames", @[@"shift right big"]);
+    add(@"Nudge Up", @"nudgeUp", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"Opt+Cmd+Up", @"Move selected clip to lane above", @[@"lane up"]);
+    add(@"Nudge Down", @"nudgeDown", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"Opt+Cmd+Down", @"Move selected clip to lane below", @[@"lane down"]);
+    add(@"Go to Range Start", @"goToRangeStart", @"playback", SpliceKitCommandCategoryPlayback, @"Navigation", @"Shift+I", @"Jump playhead to start of range selection", @[@"in point"]);
+    add(@"Go to Range End", @"goToRangeEnd", @"playback", SpliceKitCommandCategoryPlayback, @"Navigation", @"Shift+O", @"Jump playhead to end of range selection", @[@"out point"]);
+    add(@"Set Range Start", @"setRangeStart", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"I", @"Set start point of range selection", @[@"in point", @"mark in"]);
+    add(@"Set Range End", @"setRangeEnd", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"O", @"Set end point of range selection", @[@"out point", @"mark out"]);
+    add(@"Clear Range", @"clearRange", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"Opt+X", @"Remove range selection", @[@"deselect range"]);
 
     // --- Audio ---
-    add(@"Remove Silences", @"removeSilences", @"silence_options", FCPCommandCategoryEffects, @"Audio", nil, @"Detect and remove silent segments from timeline", @[@"silence", @"quiet", @"dead air", @"gap", @"pause", @"mute"]);
-    add(@"Audio Fade In", @"addAudioFadeIn", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Add audio fade-in to selected clip", @[@"ramp up"]);
-    add(@"Audio Fade Out", @"addAudioFadeOut", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Add audio fade-out to selected clip", @[@"ramp down"]);
-    add(@"Expand Audio Components", @"expandAudioComponents", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Show individual audio channels", @[@"channels"]);
-    add(@"Audio Enhancements", @"showAudioEnhancements", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Open audio enhancement controls", @[@"eq", @"noise removal", @"loudness"]);
-    add(@"Audio Match", @"matchAudio", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Match audio levels between clips", @[@"normalize"]);
+    add(@"Remove Silences", @"removeSilences", @"silence_options", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Detect and remove silent segments from timeline", @[@"silence", @"quiet", @"dead air", @"gap", @"pause", @"mute"]);
+    add(@"Audio Fade In", @"addAudioFadeIn", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Add audio fade-in to selected clip", @[@"ramp up"]);
+    add(@"Audio Fade Out", @"addAudioFadeOut", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Add audio fade-out to selected clip", @[@"ramp down"]);
+    add(@"Expand Audio Components", @"expandAudioComponents", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Show individual audio channels", @[@"channels"]);
+    add(@"Audio Enhancements", @"showAudioEnhancements", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Open audio enhancement controls", @[@"eq", @"noise removal", @"loudness"]);
+    add(@"Audio Match", @"matchAudio", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Match audio levels between clips", @[@"normalize"]);
 
     // --- Effects & Color ---
-    add(@"Remove Effects", @"removeEffects", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Remove all effects from selected clip", @[@"clear effects", @"strip"]);
-    add(@"Copy Effects", @"copyEffects", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Copy effects from selected clip", @[@"copy grade"]);
-    add(@"Paste Effects", @"pasteEffects", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Paste effects onto selected clip", @[@"apply grade"]);
-    add(@"Paste Attributes", @"pasteAttributes", @"timeline", FCPCommandCategoryEffects, @"Effects", @"Cmd+Shift+V", @"Choose which attributes to paste", @[@"selective paste"]);
-    add(@"Match Color", @"matchColor", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Match color grading between clips", @[@"color match"]);
-    add(@"Balance Color", @"balanceColor", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Auto-balance color of selected clip", @[@"auto color", @"white balance"]);
-    add(@"Show Color Inspector", @"showColorInspector", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Open color correction inspector", @[@"color grading", @"color panel"]);
-    add(@"Reset Effect Parameters", @"resetAllParameters", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Reset all parameters to default values", @[@"defaults", @"clear"]);
+    add(@"Remove Effects", @"removeEffects", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Remove all effects from selected clip", @[@"clear effects", @"strip"]);
+    add(@"Copy Effects", @"copyEffects", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Copy effects from selected clip", @[@"copy grade"]);
+    add(@"Paste Effects", @"pasteEffects", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Paste effects onto selected clip", @[@"apply grade"]);
+    add(@"Paste Attributes", @"pasteAttributes", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", @"Cmd+Shift+V", @"Choose which attributes to paste", @[@"selective paste"]);
+    add(@"Match Color", @"matchColor", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Match color grading between clips", @[@"color match"]);
+    add(@"Balance Color", @"balanceColor", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Auto-balance color of selected clip", @[@"auto color", @"white balance"]);
+    add(@"Show Color Inspector", @"showColorInspector", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Open color correction inspector", @[@"color grading", @"color panel"]);
+    add(@"Reset Effect Parameters", @"resetAllParameters", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Reset all parameters to default values", @[@"defaults", @"clear"]);
 
     // --- Rendering ---
-    add(@"Render Selection", @"renderSelection", @"timeline", FCPCommandCategoryExport, @"Render", @"Ctrl+R", @"Render selected portion of timeline", @[@"process"]);
-    add(@"Render All", @"renderAll", @"timeline", FCPCommandCategoryExport, @"Render", nil, @"Render entire timeline", @[@"process all"]);
-    add(@"Delete Render Files", @"deleteRenderFiles", @"timeline", FCPCommandCategoryExport, @"Render", nil, @"Delete generated render files to free space", @[@"clean", @"clear cache"]);
+    add(@"Render Selection", @"renderSelection", @"timeline", SpliceKitCommandCategoryExport, @"Render", @"Ctrl+R", @"Render selected portion of timeline", @[@"process"]);
+    add(@"Render All", @"renderAll", @"timeline", SpliceKitCommandCategoryExport, @"Render", nil, @"Render entire timeline", @[@"process all"]);
+    add(@"Delete Render Files", @"deleteRenderFiles", @"timeline", SpliceKitCommandCategoryExport, @"Render", nil, @"Delete generated render files to free space", @[@"clean", @"clear cache"]);
 
     // --- Stabilization & Analysis ---
-    add(@"Analyze and Fix", @"analyzeAndFix", @"timeline", FCPCommandCategoryEffects, @"Analysis", nil, @"Analyze clip for problems and fix automatically", @[@"stabilize", @"rolling shutter", @"repair"]);
-    add(@"Detect Scene Changes", @"sceneDetect", @"scene_options", FCPCommandCategoryEditing, @"Analysis", nil, @"Find cuts/scene changes and mark or blade them", @[@"shot boundary", @"find cuts", @"scene detection", @"auto marker", @"mark cuts", @"auto cut", @"split at cuts"]);
+    add(@"Analyze and Fix", @"analyzeAndFix", @"timeline", SpliceKitCommandCategoryEffects, @"Analysis", nil, @"Analyze clip for problems and fix automatically", @[@"stabilize", @"rolling shutter", @"repair"]);
+    add(@"Detect Scene Changes", @"sceneDetect", @"scene_options", SpliceKitCommandCategoryEditing, @"Analysis", nil, @"Find cuts/scene changes and mark or blade them", @[@"shot boundary", @"find cuts", @"scene detection", @"auto marker", @"mark cuts", @"auto cut", @"split at cuts"]);
 
     // --- Trim & Precision Editing ---
-    add(@"Roll Edit Left", @"rollEditLeft", @"timeline", FCPCommandCategoryEditing, @"Trim", nil, @"Roll the edit point one frame left", @[@"trim"]);
-    add(@"Roll Edit Right", @"rollEditRight", @"timeline", FCPCommandCategoryEditing, @"Trim", nil, @"Roll the edit point one frame right", @[@"trim"]);
-    add(@"Slip Left", @"slipLeft", @"timeline", FCPCommandCategoryEditing, @"Trim", nil, @"Slip clip content one frame left", @[@"slide content"]);
-    add(@"Slip Right", @"slipRight", @"timeline", FCPCommandCategoryEditing, @"Trim", nil, @"Slip clip content one frame right", @[@"slide content"]);
-    add(@"Ripple Trim Start to Playhead", @"rippleTrimStartToPlayhead", @"timeline", FCPCommandCategoryEditing, @"Trim", nil, @"Ripple-trim clip start to playhead", @[@"top"]);
-    add(@"Ripple Trim End to Playhead", @"rippleTrimEndToPlayhead", @"timeline", FCPCommandCategoryEditing, @"Trim", nil, @"Ripple-trim clip end to playhead", @[@"tail"]);
+    add(@"Roll Edit Left", @"rollEditLeft", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", nil, @"Roll the edit point one frame left", @[@"trim"]);
+    add(@"Roll Edit Right", @"rollEditRight", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", nil, @"Roll the edit point one frame right", @[@"trim"]);
+    add(@"Slip Left", @"slipLeft", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", nil, @"Slip clip content one frame left", @[@"slide content"]);
+    add(@"Slip Right", @"slipRight", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", nil, @"Slip clip content one frame right", @[@"slide content"]);
+    add(@"Ripple Trim Start to Playhead", @"rippleTrimStartToPlayhead", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", nil, @"Ripple-trim clip start to playhead", @[@"top"]);
+    add(@"Ripple Trim End to Playhead", @"rippleTrimEndToPlayhead", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", nil, @"Ripple-trim clip end to playhead", @[@"tail"]);
 
     // --- Multicam ---
-    add(@"Switch Angle 1", @"switchAngle01", @"timeline", FCPCommandCategoryEditing, @"Multicam", nil, @"Switch to camera angle 1", @[@"cam 1"]);
-    add(@"Switch Angle 2", @"switchAngle02", @"timeline", FCPCommandCategoryEditing, @"Multicam", nil, @"Switch to camera angle 2", @[@"cam 2"]);
-    add(@"Switch Angle 3", @"switchAngle03", @"timeline", FCPCommandCategoryEditing, @"Multicam", nil, @"Switch to camera angle 3", @[@"cam 3"]);
-    add(@"Switch Angle 4", @"switchAngle04", @"timeline", FCPCommandCategoryEditing, @"Multicam", nil, @"Switch to camera angle 4", @[@"cam 4"]);
-    add(@"Cut and Switch Angle 1", @"cutAndSwitchAngle01", @"timeline", FCPCommandCategoryEditing, @"Multicam", nil, @"Blade and switch to angle 1", @[@"cut cam 1"]);
-    add(@"Cut and Switch Angle 2", @"cutAndSwitchAngle02", @"timeline", FCPCommandCategoryEditing, @"Multicam", nil, @"Blade and switch to angle 2", @[@"cut cam 2"]);
-    add(@"Cut and Switch Angle 3", @"cutAndSwitchAngle03", @"timeline", FCPCommandCategoryEditing, @"Multicam", nil, @"Blade and switch to angle 3", @[@"cut cam 3"]);
-    add(@"Cut and Switch Angle 4", @"cutAndSwitchAngle04", @"timeline", FCPCommandCategoryEditing, @"Multicam", nil, @"Blade and switch to angle 4", @[@"cut cam 4"]);
-    add(@"Create Multicam Clip", @"createMulticamClip", @"timeline", FCPCommandCategoryEditing, @"Multicam", nil, @"Create multicam clip from selected", @[@"multicamera"]);
+    add(@"Switch Angle 1", @"switchAngle01", @"timeline", SpliceKitCommandCategoryEditing, @"Multicam", nil, @"Switch to camera angle 1", @[@"cam 1"]);
+    add(@"Switch Angle 2", @"switchAngle02", @"timeline", SpliceKitCommandCategoryEditing, @"Multicam", nil, @"Switch to camera angle 2", @[@"cam 2"]);
+    add(@"Switch Angle 3", @"switchAngle03", @"timeline", SpliceKitCommandCategoryEditing, @"Multicam", nil, @"Switch to camera angle 3", @[@"cam 3"]);
+    add(@"Switch Angle 4", @"switchAngle04", @"timeline", SpliceKitCommandCategoryEditing, @"Multicam", nil, @"Switch to camera angle 4", @[@"cam 4"]);
+    add(@"Cut and Switch Angle 1", @"cutAndSwitchAngle01", @"timeline", SpliceKitCommandCategoryEditing, @"Multicam", nil, @"Blade and switch to angle 1", @[@"cut cam 1"]);
+    add(@"Cut and Switch Angle 2", @"cutAndSwitchAngle02", @"timeline", SpliceKitCommandCategoryEditing, @"Multicam", nil, @"Blade and switch to angle 2", @[@"cut cam 2"]);
+    add(@"Cut and Switch Angle 3", @"cutAndSwitchAngle03", @"timeline", SpliceKitCommandCategoryEditing, @"Multicam", nil, @"Blade and switch to angle 3", @[@"cut cam 3"]);
+    add(@"Cut and Switch Angle 4", @"cutAndSwitchAngle04", @"timeline", SpliceKitCommandCategoryEditing, @"Multicam", nil, @"Blade and switch to angle 4", @[@"cut cam 4"]);
+    add(@"Create Multicam Clip", @"createMulticamClip", @"timeline", SpliceKitCommandCategoryEditing, @"Multicam", nil, @"Create multicam clip from selected", @[@"multicamera"]);
 
     // --- Playback Modes ---
-    add(@"Play Around Current", @"playAroundCurrent", @"playback", FCPCommandCategoryPlayback, @"Playback", @"Shift+?", @"Play around the current playhead position", @[@"review"]);
-    add(@"Play Selection", @"playSelection", @"playback", FCPCommandCategoryPlayback, @"Playback", @"/", @"Play the selected range", @[@"preview range"]);
-    add(@"Play Full Screen", @"playFullScreen", @"playback", FCPCommandCategoryPlayback, @"Playback", @"Cmd+Shift+F", @"Play timeline in full screen mode", @[@"cinema", @"presentation"]);
-    add(@"Loop Playback", @"toggleLoopPlayback", @"playback", FCPCommandCategoryPlayback, @"Playback", @"Cmd+L", @"Toggle loop playback on/off", @[@"repeat"]);
-    add(@"Play Reverse", @"playReverse", @"playback", FCPCommandCategoryPlayback, @"Playback", @"J", @"Play in reverse", @[@"backwards", @"rewind"]);
-    add(@"Play Forward 2x", @"playForward2x", @"playback", FCPCommandCategoryPlayback, @"Playback", @"L L", @"Play forward at double speed", @[@"fast forward"]);
+    add(@"Play Around Current", @"playAroundCurrent", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"Shift+?", @"Play around the current playhead position", @[@"review"]);
+    add(@"Play Selection", @"playSelection", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"/", @"Play the selected range", @[@"preview range"]);
+    add(@"Play Full Screen", @"playFullScreen", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"Cmd+Shift+F", @"Play timeline in full screen mode", @[@"cinema", @"presentation"]);
+    add(@"Loop Playback", @"toggleLoopPlayback", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"Cmd+L", @"Toggle loop playback on/off", @[@"repeat"]);
+    add(@"Play Reverse", @"playReverse", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"J", @"Play in reverse", @[@"backwards", @"rewind"]);
+    add(@"Play Forward 2x", @"playForward2x", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"L L", @"Play forward at double speed", @[@"fast forward"]);
 
     // --- Project & Library ---
-    add(@"New Project", @"newProject", @"timeline", FCPCommandCategoryExport, @"Project", @"Cmd+N", @"Create a new project in the current event", @[@"new timeline"]);
-    add(@"New Event", @"newEvent", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Create a new event in the library", @[]);
-    add(@"Import Media", @"importMedia", @"timeline", FCPCommandCategoryExport, @"Project", @"Cmd+I", @"Open the import media dialog", @[@"add files", @"ingest"]);
-    add(@"Show Project Properties", @"showProjectProperties", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"View resolution, frame rate, and codec settings", @[@"settings", @"format"]);
-    add(@"Consolidate Library Media", @"consolidateMedia", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Copy external media into the library", @[@"collect", @"gather"]);
+    add(@"New Project", @"newProject", @"timeline", SpliceKitCommandCategoryExport, @"Project", @"Cmd+N", @"Create a new project in the current event", @[@"new timeline"]);
+    add(@"New Event", @"newEvent", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Create a new event in the library", @[]);
+    add(@"Import Media", @"importMedia", @"timeline", SpliceKitCommandCategoryExport, @"Project", @"Cmd+I", @"Open the import media dialog", @[@"add files", @"ingest"]);
+    add(@"Show Project Properties", @"showProjectProperties", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"View resolution, frame rate, and codec settings", @[@"settings", @"format"]);
+    add(@"Consolidate Library Media", @"consolidateMedia", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Copy external media into the library", @[@"collect", @"gather"]);
 
     // --- Organization & Rating ---
-    add(@"Favorite", @"rateAsFavorite", @"timeline", FCPCommandCategoryEditing, @"Rating", @"F", @"Mark selected clip as favorite", @[@"like", @"star", @"keep"]);
-    add(@"Reject", @"rateAsReject", @"timeline", FCPCommandCategoryEditing, @"Rating", @"Delete", @"Mark selected clip as rejected", @[@"dislike", @"bad"]);
-    add(@"Remove Rating", @"removeRating", @"timeline", FCPCommandCategoryEditing, @"Rating", @"U", @"Clear favorite/reject rating", @[@"unrate"]);
-    add(@"Remove All Ratings", @"removeAllRatings", @"timeline", FCPCommandCategoryEditing, @"Rating", nil, @"Clear all ratings in selection", @[@"reset ratings"]);
+    add(@"Favorite", @"rateAsFavorite", @"timeline", SpliceKitCommandCategoryEditing, @"Rating", @"F", @"Mark selected clip as favorite", @[@"like", @"star", @"keep"]);
+    add(@"Reject", @"rateAsReject", @"timeline", SpliceKitCommandCategoryEditing, @"Rating", @"Delete", @"Mark selected clip as rejected", @[@"dislike", @"bad"]);
+    add(@"Remove Rating", @"removeRating", @"timeline", SpliceKitCommandCategoryEditing, @"Rating", @"U", @"Clear favorite/reject rating", @[@"unrate"]);
+    add(@"Remove All Ratings", @"removeAllRatings", @"timeline", SpliceKitCommandCategoryEditing, @"Rating", nil, @"Clear all ratings in selection", @[@"reset ratings"]);
 
     // --- Roles ---
-    add(@"Show Role Editor", @"showRoleEditor", @"timeline", FCPCommandCategoryEditing, @"Roles", nil, @"Open the role assignment editor", @[@"roles", @"subroles"]);
-    add(@"Assign Default Video Role", @"assignDefaultVideoRole", @"timeline", FCPCommandCategoryEditing, @"Roles", nil, @"Assign default video role to clip", @[@"video role"]);
-    add(@"Assign Default Audio Role", @"assignDefaultAudioRole", @"timeline", FCPCommandCategoryEditing, @"Roles", nil, @"Assign default audio role to clip", @[@"audio role"]);
+    add(@"Show Role Editor", @"showRoleEditor", @"timeline", SpliceKitCommandCategoryEditing, @"Roles", nil, @"Open the role assignment editor", @[@"roles", @"subroles"]);
+    add(@"Assign Default Video Role", @"assignDefaultVideoRole", @"timeline", SpliceKitCommandCategoryEditing, @"Roles", nil, @"Assign default video role to clip", @[@"video role"]);
+    add(@"Assign Default Audio Role", @"assignDefaultAudioRole", @"timeline", SpliceKitCommandCategoryEditing, @"Roles", nil, @"Assign default audio role to clip", @[@"audio role"]);
 
     // --- Captions & Subtitles ---
-    add(@"Add Caption", @"addCaption", @"timeline", FCPCommandCategoryTitles, @"Captions", nil, @"Add caption at playhead position", @[@"subtitle", @"text"]);
-    add(@"Duplicate Caption", @"duplicateCaption", @"timeline", FCPCommandCategoryTitles, @"Captions", nil, @"Duplicate the selected caption", @[@"copy caption"]);
-    add(@"Import Captions", @"importCaptions", @"timeline", FCPCommandCategoryTitles, @"Captions", nil, @"Import captions from SRT/ITT file", @[@"subtitles", @"srt"]);
+    add(@"Add Caption", @"addCaption", @"timeline", SpliceKitCommandCategoryTitles, @"Captions", nil, @"Add caption at playhead position", @[@"subtitle", @"text"]);
+    add(@"Duplicate Caption", @"duplicateCaption", @"timeline", SpliceKitCommandCategoryTitles, @"Captions", nil, @"Duplicate the selected caption", @[@"copy caption"]);
+    add(@"Import Captions", @"importCaptions", @"timeline", SpliceKitCommandCategoryTitles, @"Captions", nil, @"Import captions from SRT/ITT file", @[@"subtitles", @"srt"]);
 
     // --- Transform & Spatial ---
-    add(@"Transform", @"showTransformControls", @"timeline", FCPCommandCategoryEffects, @"Transform", nil, @"Show on-screen transform controls", @[@"position", @"scale", @"rotate"]);
-    add(@"Crop", @"showCropControls", @"timeline", FCPCommandCategoryEffects, @"Transform", @"Shift+C", @"Show crop controls on viewer", @[@"trim edges", @"ken burns"]);
-    add(@"Distort", @"showDistortControls", @"timeline", FCPCommandCategoryEffects, @"Transform", nil, @"Show corner-pin distort controls", @[@"perspective", @"corner pin"]);
+    add(@"Transform", @"showTransformControls", @"timeline", SpliceKitCommandCategoryEffects, @"Transform", nil, @"Show on-screen transform controls", @[@"position", @"scale", @"rotate"]);
+    add(@"Crop", @"showCropControls", @"timeline", SpliceKitCommandCategoryEffects, @"Transform", @"Shift+C", @"Show crop controls on viewer", @[@"trim edges", @"ken burns"]);
+    add(@"Distort", @"showDistortControls", @"timeline", SpliceKitCommandCategoryEffects, @"Transform", nil, @"Show corner-pin distort controls", @[@"perspective", @"corner pin"]);
 
     // --- Clip Appearance ---
-    add(@"Increase Clip Height", @"increaseClipHeight", @"timeline", FCPCommandCategoryEditing, @"Appearance", @"Cmd+Shift+=", @"Make timeline clips taller", @[@"bigger", @"larger waveform"]);
-    add(@"Decrease Clip Height", @"decreaseClipHeight", @"timeline", FCPCommandCategoryEditing, @"Appearance", @"Cmd+Shift+-", @"Make timeline clips shorter", @[@"smaller", @"compact"]);
-    add(@"Show Clip Names", @"showClipNames", @"timeline", FCPCommandCategoryEditing, @"Appearance", nil, @"Toggle clip name display on timeline", @[@"labels"]);
-    add(@"Show Audio Waveforms", @"toggleClipAppearanceAudioWaveformsAction", @"timeline", FCPCommandCategoryEditing, @"Appearance", nil, @"Toggle audio waveform display", @[@"waveform"]);
+    add(@"Increase Clip Height", @"increaseClipHeight", @"timeline", SpliceKitCommandCategoryEditing, @"Appearance", @"Cmd+Shift+=", @"Make timeline clips taller", @[@"bigger", @"larger waveform"]);
+    add(@"Decrease Clip Height", @"decreaseClipHeight", @"timeline", SpliceKitCommandCategoryEditing, @"Appearance", @"Cmd+Shift+-", @"Make timeline clips shorter", @[@"smaller", @"compact"]);
+    add(@"Show Clip Names", @"showClipNames", @"timeline", SpliceKitCommandCategoryEditing, @"Appearance", nil, @"Toggle clip name display on timeline", @[@"labels"]);
+    add(@"Show Audio Waveforms", @"toggleClipAppearanceAudioWaveformsAction", @"timeline", SpliceKitCommandCategoryEditing, @"Appearance", nil, @"Toggle audio waveform display", @[@"waveform"]);
 
     // --- Compound & Nesting ---
-    add(@"Open in Timeline", @"openInTimeline", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Open compound/multicam clip in its own timeline", @[@"dive in", @"enter"]);
-    add(@"Back to Parent", @"backToParent", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Return to the parent timeline", @[@"go back", @"exit compound"]);
+    add(@"Open in Timeline", @"openInTimeline", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Open compound/multicam clip in its own timeline", @[@"dive in", @"enter"]);
+    add(@"Back to Parent", @"backToParent", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Return to the parent timeline", @[@"go back", @"exit compound"]);
 
     // --- Snapping & Guides ---
-    add(@"Snapping On", @"toggleSnappingUp", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Force snapping on", @[@"snap on"]);
-    add(@"Snapping Off", @"toggleSnappingDown", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Force snapping off", @[@"snap off"]);
-    add(@"Skimming On", @"toggleSkimmingUp", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Force skimming on", @[@"skim on"]);
-    add(@"Skimming Off", @"toggleSkimmingDown", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Force skimming off", @[@"skim off"]);
+    add(@"Snapping On", @"toggleSnappingUp", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Force snapping on", @[@"snap on"]);
+    add(@"Snapping Off", @"toggleSnappingDown", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Force snapping off", @[@"snap off"]);
+    add(@"Skimming On", @"toggleSkimmingUp", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Force skimming on", @[@"skim on"]);
+    add(@"Skimming Off", @"toggleSkimmingDown", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Force skimming off", @[@"skim off"]);
 
     // --- Transcript ---
-    add(@"Open Transcript Editor", @"openTranscript", @"transcript", FCPCommandCategoryTranscript, @"Transcript", @"Ctrl+Opt+T", @"Open transcript-based editing panel", @[@"speech", @"captions"]);
-    add(@"Close Transcript Editor", @"closeTranscript", @"transcript", FCPCommandCategoryTranscript, @"Transcript", nil, @"Close the transcript panel", @[]);
+    add(@"Open Transcript Editor", @"openTranscript", @"transcript", SpliceKitCommandCategoryTranscript, @"Transcript", @"Ctrl+Opt+T", @"Open transcript-based editing panel", @[@"speech", @"captions"]);
+    add(@"Close Transcript Editor", @"closeTranscript", @"transcript", SpliceKitCommandCategoryTranscript, @"Transcript", nil, @"Close the transcript panel", @[]);
 
     // ===================================================================
     // NEW: Comprehensive MCP actions added to command palette
     // ===================================================================
 
     // --- Edit Modes ---
-    add(@"Paste as Connected Clip", @"pasteAsConnected", @"timeline", FCPCommandCategoryEditing, @"Editing", @"Ctrl+V", @"Paste clipboard as connected clip", @[@"paste anchored"]);
-    add(@"Copy Timecode", @"copyTimecode", @"timeline", FCPCommandCategoryEditing, @"Editing", nil, @"Copy current timecode to clipboard", @[@"timecode"]);
-    add(@"Connect Edit (Audio Only)", @"connectEditAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Connect only audio to primary storyline", @[@"audio only"]);
-    add(@"Connect Edit (Video Only)", @"connectEditVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Connect only video to primary storyline", @[@"video only"]);
-    add(@"Insert Edit (Audio Only)", @"insertEditAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Insert only audio", @[@"audio only insert"]);
-    add(@"Insert Edit (Video Only)", @"insertEditVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Insert only video", @[@"video only insert"]);
-    add(@"Append Edit (Audio Only)", @"appendEditAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Append only audio", @[@"audio only append"]);
-    add(@"Append Edit (Video Only)", @"appendEditVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Append only video", @[@"video only append"]);
-    add(@"Overwrite Edit (Audio Only)", @"overwriteEditAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Overwrite only audio", @[@"audio only overwrite"]);
-    add(@"Overwrite Edit (Video Only)", @"overwriteEditVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Overwrite only video", @[@"video only overwrite"]);
-    add(@"AV Edit Mode: Audio", @"avEditModeAudio", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Switch to audio-only editing mode", @[@"audio mode"]);
-    add(@"AV Edit Mode: Video", @"avEditModeVideo", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Switch to video-only editing mode", @[@"video mode"]);
-    add(@"AV Edit Mode: Both", @"avEditModeBoth", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Switch to audio+video editing mode", @[@"av mode", @"both"]);
-    add(@"Replace from Start", @"replaceFromStart", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Replace clip from start", @[@"replace edit"]);
-    add(@"Replace from End", @"replaceFromEnd", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Replace clip from end", @[@"replace edit backtimed"]);
-    add(@"Replace Whole Clip", @"replaceWhole", @"timeline", FCPCommandCategoryEditing, @"Edit Modes", nil, @"Replace entire clip", @[@"swap"]);
+    add(@"Paste as Connected Clip", @"pasteAsConnected", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", @"Ctrl+V", @"Paste clipboard as connected clip", @[@"paste anchored"]);
+    add(@"Copy Timecode", @"copyTimecode", @"timeline", SpliceKitCommandCategoryEditing, @"Editing", nil, @"Copy current timecode to clipboard", @[@"timecode"]);
+    add(@"Connect Edit (Audio Only)", @"connectEditAudio", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Connect only audio to primary storyline", @[@"audio only"]);
+    add(@"Connect Edit (Video Only)", @"connectEditVideo", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Connect only video to primary storyline", @[@"video only"]);
+    add(@"Insert Edit (Audio Only)", @"insertEditAudio", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Insert only audio", @[@"audio only insert"]);
+    add(@"Insert Edit (Video Only)", @"insertEditVideo", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Insert only video", @[@"video only insert"]);
+    add(@"Append Edit (Audio Only)", @"appendEditAudio", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Append only audio", @[@"audio only append"]);
+    add(@"Append Edit (Video Only)", @"appendEditVideo", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Append only video", @[@"video only append"]);
+    add(@"Overwrite Edit (Audio Only)", @"overwriteEditAudio", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Overwrite only audio", @[@"audio only overwrite"]);
+    add(@"Overwrite Edit (Video Only)", @"overwriteEditVideo", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Overwrite only video", @[@"video only overwrite"]);
+    add(@"AV Edit Mode: Audio", @"avEditModeAudio", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Switch to audio-only editing mode", @[@"audio mode"]);
+    add(@"AV Edit Mode: Video", @"avEditModeVideo", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Switch to video-only editing mode", @[@"video mode"]);
+    add(@"AV Edit Mode: Both", @"avEditModeBoth", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Switch to audio+video editing mode", @[@"av mode", @"both"]);
+    add(@"Replace from Start", @"replaceFromStart", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Replace clip from start", @[@"replace edit"]);
+    add(@"Replace from End", @"replaceFromEnd", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Replace clip from end", @[@"replace edit backtimed"]);
+    add(@"Replace Whole Clip", @"replaceWhole", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Replace entire clip", @[@"swap"]);
 
     // --- Trim Extras ---
-    add(@"Trim Start", @"trimStart", @"timeline", FCPCommandCategoryEditing, @"Trim", @"Opt+[", @"Trim clip start to playhead", @[@"head trim"]);
-    add(@"Trim End", @"trimEnd", @"timeline", FCPCommandCategoryEditing, @"Trim", @"Opt+]", @"Trim clip end to playhead", @[@"tail trim"]);
-    add(@"Join Through Edit", @"joinClips", @"timeline", FCPCommandCategoryEditing, @"Trim", nil, @"Join clips at edit point (remove through edit)", @[@"heal", @"join edit"]);
-    add(@"Set Clip Range", @"setClipRange", @"timeline", FCPCommandCategoryEditing, @"Navigation", @"X", @"Set range to clip boundaries", @[@"select clip range"]);
-    add(@"Collapse to Connected Storyline", @"collapseToConnectedStoryline", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Collapse selection to connected storyline", @[@"collapse connected"]);
+    add(@"Trim Start", @"trimStart", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", @"Opt+[", @"Trim clip start to playhead", @[@"head trim"]);
+    add(@"Trim End", @"trimEnd", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", @"Opt+]", @"Trim clip end to playhead", @[@"tail trim"]);
+    add(@"Join Through Edit", @"joinClips", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", nil, @"Join clips at edit point (remove through edit)", @[@"heal", @"join edit"]);
+    add(@"Set Clip Range", @"setClipRange", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", @"X", @"Set range to clip boundaries", @[@"select clip range"]);
+    add(@"Collapse to Connected Storyline", @"collapseToConnectedStoryline", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Collapse selection to connected storyline", @[@"collapse connected"]);
 
     // --- Speed Extras ---
-    add(@"Custom Speed", @"retimeCustomSpeed", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Set custom speed percentage", @[@"retime custom"]);
-    add(@"Instant Replay 50%", @"retimeInstantReplayHalf", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Instant replay at half speed", @[@"replay"]);
-    add(@"Instant Replay 25%", @"retimeInstantReplayQuarter", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Instant replay at quarter speed", @[@"slow replay"]);
-    add(@"Reset Speed", @"retimeReset", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Remove all retiming from clip", @[@"clear retime"]);
-    add(@"Speed Ramp to Zero", @"retimeSpeedRampToZero", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Ramp speed down to freeze", @[@"speed ramp", @"slow down"]);
-    add(@"Speed Ramp from Zero", @"retimeSpeedRampFromZero", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Ramp speed up from freeze", @[@"speed ramp", @"speed up"]);
-    add(@"Optical Flow", @"retimeOpticalFlow", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Set retime quality to Optical Flow", @[@"high quality retime"]);
-    add(@"Frame Blending", @"retimeFrameBlending", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Set retime quality to Frame Blending", @[@"smooth transition"]);
-    add(@"Floor Frame (Nearest)", @"retimeFloorFrame", @"timeline", FCPCommandCategorySpeed, @"Speed", nil, @"Set retime quality to nearest frame", @[@"floor frame"]);
+    add(@"Custom Speed", @"retimeCustomSpeed", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Set custom speed percentage", @[@"retime custom"]);
+    add(@"Instant Replay 50%", @"retimeInstantReplayHalf", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Instant replay at half speed", @[@"replay"]);
+    add(@"Instant Replay 25%", @"retimeInstantReplayQuarter", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Instant replay at quarter speed", @[@"slow replay"]);
+    add(@"Reset Speed", @"retimeReset", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Remove all retiming from clip", @[@"clear retime"]);
+    add(@"Speed Ramp to Zero", @"retimeSpeedRampToZero", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Ramp speed down to freeze", @[@"speed ramp", @"slow down"]);
+    add(@"Speed Ramp from Zero", @"retimeSpeedRampFromZero", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Ramp speed up from freeze", @[@"speed ramp", @"speed up"]);
+    add(@"Optical Flow", @"retimeOpticalFlow", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Set retime quality to Optical Flow", @[@"high quality retime"]);
+    add(@"Frame Blending", @"retimeFrameBlending", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Set retime quality to Frame Blending", @[@"smooth transition"]);
+    add(@"Floor Frame (Nearest)", @"retimeFloorFrame", @"timeline", SpliceKitCommandCategorySpeed, @"Speed", nil, @"Set retime quality to nearest frame", @[@"floor frame"]);
 
     // --- Audio Extras ---
-    add(@"Add Channel EQ", @"addChannelEQ", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Add Channel EQ effect", @[@"equalizer"]);
-    add(@"Enhance Audio", @"enhanceAudio", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Apply audio enhancement", @[@"audio fix"]);
-    add(@"Align Audio to Video", @"alignAudioToVideo", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Synchronize audio to video", @[@"sync audio"]);
-    add(@"Mute Volume", @"volumeMute", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Set volume to -infinity (mute)", @[@"silence", @"mute"]);
-    add(@"Apply Audio Fades", @"applyAudioFades", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Apply fade in/out to audio", @[@"crossfade"]);
-    add(@"Add Default Audio Effect", @"addDefaultAudioEffect", @"timeline", FCPCommandCategoryEffects, @"Audio", nil, @"Add default audio effect", @[@"audio plugin"]);
-    add(@"Add Default Video Effect", @"addDefaultVideoEffect", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Add default video effect to selected clip", @[@"video plugin"]);
+    add(@"Add Channel EQ", @"addChannelEQ", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Add Channel EQ effect", @[@"equalizer"]);
+    add(@"Enhance Audio", @"enhanceAudio", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Apply audio enhancement", @[@"audio fix"]);
+    add(@"Align Audio to Video", @"alignAudioToVideo", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Synchronize audio to video", @[@"sync audio"]);
+    add(@"Mute Volume", @"volumeMute", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Set volume to -infinity (mute)", @[@"silence", @"mute"]);
+    add(@"Apply Audio Fades", @"applyAudioFades", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Apply fade in/out to audio", @[@"crossfade"]);
+    add(@"Add Default Audio Effect", @"addDefaultAudioEffect", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Add default audio effect", @[@"audio plugin"]);
+    add(@"Add Default Video Effect", @"addDefaultVideoEffect", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Add default video effect to selected clip", @[@"video plugin"]);
 
     // --- Color Extras ---
-    add(@"Next Color Effect", @"nextColorEffect", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Go to next color correction", @[@"next grade"]);
-    add(@"Previous Color Effect", @"previousColorEffect", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Go to previous color correction", @[@"prev grade"]);
-    add(@"Reset Color Board", @"resetColorBoard", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Reset color board pucks to center", @[@"clear color"]);
-    add(@"Toggle All Color Off", @"toggleAllColorOff", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Disable/enable all color corrections", @[@"bypass color"]);
-    add(@"Add Magnetic Mask", @"addMagneticMask", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Add AI magnetic mask to clip", @[@"object mask", @"isolation"]);
-    add(@"Smart Conform", @"smartConform", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Auto-reframe clip for project resolution", @[@"auto crop", @"reframe"]);
+    add(@"Next Color Effect", @"nextColorEffect", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Go to next color correction", @[@"next grade"]);
+    add(@"Previous Color Effect", @"previousColorEffect", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Go to previous color correction", @[@"prev grade"]);
+    add(@"Reset Color Board", @"resetColorBoard", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Reset color board pucks to center", @[@"clear color"]);
+    add(@"Toggle All Color Off", @"toggleAllColorOff", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Disable/enable all color corrections", @[@"bypass color"]);
+    add(@"Add Magnetic Mask", @"addMagneticMask", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Add AI magnetic mask to clip", @[@"object mask", @"isolation"]);
+    add(@"Smart Conform", @"smartConform", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Auto-reframe clip for project resolution", @[@"auto crop", @"reframe"]);
 
     // --- Show/Hide Editors ---
-    add(@"Show Video Animation", @"showVideoAnimation", @"timeline", FCPCommandCategoryEditing, @"View", @"Ctrl+V", @"Show/hide video animation editor", @[@"keyframe editor"]);
-    add(@"Show Audio Animation", @"showAudioAnimation", @"timeline", FCPCommandCategoryEditing, @"View", @"Ctrl+A", @"Show/hide audio animation editor", @[@"audio keyframes"]);
-    add(@"Solo Animation", @"soloAnimation", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Collapse animation to single lane", @[@"collapse animation"]);
-    add(@"Show Tracking Editor", @"showTrackingEditor", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show object tracking editor", @[@"tracker"]);
-    add(@"Show Cinematic Editor", @"showCinematicEditor", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show cinematic mode editor", @[@"depth", @"focus"]);
-    add(@"Show Magnetic Mask Editor", @"showMagneticMaskEditor", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show magnetic mask editor", @[@"mask editor"]);
-    add(@"Enable Beat Detection", @"enableBeatDetection", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Detect beats in audio", @[@"rhythm", @"music"]);
-    add(@"Toggle Precision Editor", @"togglePrecisionEditor", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show/hide precision trim editor", @[@"detailed trim"]);
-    add(@"Show Audio Lanes", @"showAudioLanes", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show audio lanes in timeline", @[@"audio tracks"]);
-    add(@"Expand Subroles", @"expandSubroles", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Expand subrole lanes in timeline", @[@"role lanes"]);
-    add(@"Show Duplicate Ranges", @"showDuplicateRanges", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Highlight duplicate clip ranges", @[@"duplicates"]);
-    add(@"Show Keyword Editor", @"showKeywordEditor", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+K", @"Open keyword editor panel", @[@"tags"]);
+    add(@"Show Video Animation", @"showVideoAnimation", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Ctrl+V", @"Show/hide video animation editor", @[@"keyframe editor"]);
+    add(@"Show Audio Animation", @"showAudioAnimation", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Ctrl+A", @"Show/hide audio animation editor", @[@"audio keyframes"]);
+    add(@"Solo Animation", @"soloAnimation", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Collapse animation to single lane", @[@"collapse animation"]);
+    add(@"Show Tracking Editor", @"showTrackingEditor", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Show object tracking editor", @[@"tracker"]);
+    add(@"Show Cinematic Editor", @"showCinematicEditor", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Show cinematic mode editor", @[@"depth", @"focus"]);
+    add(@"Show Magnetic Mask Editor", @"showMagneticMaskEditor", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Show magnetic mask editor", @[@"mask editor"]);
+    add(@"Enable Beat Detection", @"enableBeatDetection", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Detect beats in audio", @[@"rhythm", @"music"]);
+    add(@"Toggle Precision Editor", @"togglePrecisionEditor", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Show/hide precision trim editor", @[@"detailed trim"]);
+    add(@"Show Audio Lanes", @"showAudioLanes", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Show audio lanes in timeline", @[@"audio tracks"]);
+    add(@"Expand Subroles", @"expandSubroles", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Expand subrole lanes in timeline", @[@"role lanes"]);
+    add(@"Show Duplicate Ranges", @"showDuplicateRanges", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Highlight duplicate clip ranges", @[@"duplicates"]);
+    add(@"Show Keyword Editor", @"showKeywordEditor", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Cmd+K", @"Open keyword editor panel", @[@"tags"]);
 
     // --- View Extras ---
-    add(@"Vertical Zoom to Fit", @"verticalZoomToFit", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Fit timeline vertically", @[@"vertical fit"]);
-    add(@"Zoom to Samples", @"zoomToSamples", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Zoom to audio sample level", @[@"waveform zoom"]);
-    add(@"Toggle Clip Skimming", @"toggleClipSkimming", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Enable/disable clip skimming", @[@"item skim"]);
-    add(@"Toggle Audio Skimming", @"toggleAudioSkimming", @"timeline", FCPCommandCategoryEditing, @"View", @"Opt+S", @"Enable/disable audio preview during skimming", @[@"audio skim", @"scrub audio"]);
-    add(@"Toggle Inspector Height", @"toggleInspectorHeight", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Toggle inspector panel height", @[@"tall inspector"]);
-    add(@"Beat Detection Grid", @"beatDetectionGrid", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Toggle beat detection grid overlay", @[@"beat grid"]);
-    add(@"Timeline Scrolling", @"timelineScrolling", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Toggle timeline auto-scrolling mode", @[@"scroll mode"]);
-    add(@"Enter Full Screen", @"enterFullScreen", @"timeline", FCPCommandCategoryEditing, @"View", @"Ctrl+Cmd+F", @"Enter full screen mode", @[@"maximize"]);
-    add(@"Timeline History Back", @"timelineHistoryBack", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+[", @"Go back in timeline navigation history", @[@"back"]);
-    add(@"Timeline History Forward", @"timelineHistoryForward", @"timeline", FCPCommandCategoryEditing, @"View", @"Cmd+]", @"Go forward in timeline navigation history", @[@"forward"]);
+    add(@"Vertical Zoom to Fit", @"verticalZoomToFit", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Fit timeline vertically", @[@"vertical fit"]);
+    add(@"Zoom to Samples", @"zoomToSamples", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Zoom to audio sample level", @[@"waveform zoom"]);
+    add(@"Toggle Clip Skimming", @"toggleClipSkimming", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Enable/disable clip skimming", @[@"item skim"]);
+    add(@"Toggle Audio Skimming", @"toggleAudioSkimming", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Opt+S", @"Enable/disable audio preview during skimming", @[@"audio skim", @"scrub audio"]);
+    add(@"Toggle Inspector Height", @"toggleInspectorHeight", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Toggle inspector panel height", @[@"tall inspector"]);
+    add(@"Beat Detection Grid", @"beatDetectionGrid", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Toggle beat detection grid overlay", @[@"beat grid"]);
+    add(@"Timeline Scrolling", @"timelineScrolling", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Toggle timeline auto-scrolling mode", @[@"scroll mode"]);
+    add(@"Enter Full Screen", @"enterFullScreen", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Ctrl+Cmd+F", @"Enter full screen mode", @[@"maximize"]);
+    add(@"Timeline History Back", @"timelineHistoryBack", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Cmd+[", @"Go back in timeline navigation history", @[@"back"]);
+    add(@"Timeline History Forward", @"timelineHistoryForward", @"timeline", SpliceKitCommandCategoryEditing, @"View", @"Cmd+]", @"Go forward in timeline navigation history", @[@"forward"]);
 
     // --- Navigation Go-To ---
-    add(@"Go to Inspector", @"goToInspector", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Focus the inspector panel", @[@"focus inspector"]);
-    add(@"Go to Timeline", @"goToTimeline", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Focus the timeline", @[@"focus timeline"]);
-    add(@"Go to Viewer", @"goToViewer", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Focus the viewer", @[@"focus viewer"]);
-    add(@"Go to Color Board", @"goToColorBoard", @"timeline", FCPCommandCategoryColor, @"Color", nil, @"Jump to color board panel", @[@"open color"]);
+    add(@"Go to Inspector", @"goToInspector", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", nil, @"Focus the inspector panel", @[@"focus inspector"]);
+    add(@"Go to Timeline", @"goToTimeline", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", nil, @"Focus the timeline", @[@"focus timeline"]);
+    add(@"Go to Viewer", @"goToViewer", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", nil, @"Focus the viewer", @[@"focus viewer"]);
+    add(@"Go to Color Board", @"goToColorBoard", @"timeline", SpliceKitCommandCategoryColor, @"Color", nil, @"Jump to color board panel", @[@"open color"]);
 
     // --- Keywords ---
-    add(@"Apply Keyword Group 1", @"addKeywordGroup1", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+1", @"Apply keyword shortcut 1", @[@"tag 1"]);
-    add(@"Apply Keyword Group 2", @"addKeywordGroup2", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+2", @"Apply keyword shortcut 2", @[@"tag 2"]);
-    add(@"Apply Keyword Group 3", @"addKeywordGroup3", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+3", @"Apply keyword shortcut 3", @[@"tag 3"]);
-    add(@"Apply Keyword Group 4", @"addKeywordGroup4", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+4", @"Apply keyword shortcut 4", @[@"tag 4"]);
-    add(@"Apply Keyword Group 5", @"addKeywordGroup5", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+5", @"Apply keyword shortcut 5", @[@"tag 5"]);
-    add(@"Apply Keyword Group 6", @"addKeywordGroup6", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+6", @"Apply keyword shortcut 6", @[@"tag 6"]);
-    add(@"Apply Keyword Group 7", @"addKeywordGroup7", @"timeline", FCPCommandCategoryEditing, @"Keywords", @"Ctrl+7", @"Apply keyword shortcut 7", @[@"tag 7"]);
-    add(@"Remove All Keywords", @"removeAllKeywords", @"timeline", FCPCommandCategoryEditing, @"Keywords", nil, @"Remove all keywords from selection", @[@"clear tags"]);
-    add(@"Remove Analysis Keywords", @"removeAnalysisKeywords", @"timeline", FCPCommandCategoryEditing, @"Keywords", nil, @"Remove auto-analysis keywords", @[@"clear analysis"]);
+    add(@"Apply Keyword Group 1", @"addKeywordGroup1", @"timeline", SpliceKitCommandCategoryEditing, @"Keywords", @"Ctrl+1", @"Apply keyword shortcut 1", @[@"tag 1"]);
+    add(@"Apply Keyword Group 2", @"addKeywordGroup2", @"timeline", SpliceKitCommandCategoryEditing, @"Keywords", @"Ctrl+2", @"Apply keyword shortcut 2", @[@"tag 2"]);
+    add(@"Apply Keyword Group 3", @"addKeywordGroup3", @"timeline", SpliceKitCommandCategoryEditing, @"Keywords", @"Ctrl+3", @"Apply keyword shortcut 3", @[@"tag 3"]);
+    add(@"Apply Keyword Group 4", @"addKeywordGroup4", @"timeline", SpliceKitCommandCategoryEditing, @"Keywords", @"Ctrl+4", @"Apply keyword shortcut 4", @[@"tag 4"]);
+    add(@"Apply Keyword Group 5", @"addKeywordGroup5", @"timeline", SpliceKitCommandCategoryEditing, @"Keywords", @"Ctrl+5", @"Apply keyword shortcut 5", @[@"tag 5"]);
+    add(@"Apply Keyword Group 6", @"addKeywordGroup6", @"timeline", SpliceKitCommandCategoryEditing, @"Keywords", @"Ctrl+6", @"Apply keyword shortcut 6", @[@"tag 6"]);
+    add(@"Apply Keyword Group 7", @"addKeywordGroup7", @"timeline", SpliceKitCommandCategoryEditing, @"Keywords", @"Ctrl+7", @"Apply keyword shortcut 7", @[@"tag 7"]);
+    add(@"Remove All Keywords", @"removeAllKeywords", @"timeline", SpliceKitCommandCategoryEditing, @"Keywords", nil, @"Remove all keywords from selection", @[@"clear tags"]);
+    add(@"Remove Analysis Keywords", @"removeAnalysisKeywords", @"timeline", SpliceKitCommandCategoryEditing, @"Keywords", nil, @"Remove auto-analysis keywords", @[@"clear analysis"]);
 
     // --- Clip Extras ---
-    add(@"Enable/Disable Clip", @"enableDisable", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Toggle clip enabled/disabled", @[@"toggle clip"]);
-    add(@"Make Clips Unique", @"makeClipsUnique", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Make referenced clips independent copies", @[@"independent"]);
-    add(@"Rename Clip", @"renameClip", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Rename the selected clip", @[@"name"]);
-    add(@"Add to Soloed Clips", @"addToSoloedClips", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Add clip to solo group", @[@"solo group"]);
-    add(@"Transcode Media", @"transcodeMedia", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Transcode clip to optimized or proxy media", @[@"optimize", @"proxy"]);
-    add(@"Paste All Attributes", @"pasteAllAttributes", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Paste all attributes from clipboard", @[@"paste everything"]);
-    add(@"Remove Attributes", @"removeAttributes", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Remove specific attributes from clip", @[@"strip attributes"]);
-    add(@"Toggle Selected Effects Off", @"toggleSelectedEffectsOff", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Disable/enable selected effects", @[@"bypass effects"]);
-    add(@"Toggle Duplicate Detection", @"toggleDuplicateDetection", @"timeline", FCPCommandCategoryEditing, @"View", nil, @"Show/hide duplicate clip indicators", @[@"dupes"]);
+    add(@"Enable/Disable Clip", @"enableDisable", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Toggle clip enabled/disabled", @[@"toggle clip"]);
+    add(@"Make Clips Unique", @"makeClipsUnique", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Make referenced clips independent copies", @[@"independent"]);
+    add(@"Rename Clip", @"renameClip", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Rename the selected clip", @[@"name"]);
+    add(@"Add to Soloed Clips", @"addToSoloedClips", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Add clip to solo group", @[@"solo group"]);
+    add(@"Transcode Media", @"transcodeMedia", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Transcode clip to optimized or proxy media", @[@"optimize", @"proxy"]);
+    add(@"Paste All Attributes", @"pasteAllAttributes", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Paste all attributes from clipboard", @[@"paste everything"]);
+    add(@"Remove Attributes", @"removeAttributes", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Remove specific attributes from clip", @[@"strip attributes"]);
+    add(@"Toggle Selected Effects Off", @"toggleSelectedEffectsOff", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Disable/enable selected effects", @[@"bypass effects"]);
+    add(@"Toggle Duplicate Detection", @"toggleDuplicateDetection", @"timeline", SpliceKitCommandCategoryEditing, @"View", nil, @"Show/hide duplicate clip indicators", @[@"dupes"]);
 
     // --- Audition Extras ---
-    add(@"Finalize Audition", @"finalizeAudition", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Finalize audition with current pick", @[@"commit audition"]);
-    add(@"Next Audition Pick", @"nextAuditionPick", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Preview next audition variant", @[@"next alternative"]);
-    add(@"Previous Audition Pick", @"previousAuditionPick", @"timeline", FCPCommandCategoryEditing, @"Clips", nil, @"Preview previous audition variant", @[@"prev alternative"]);
+    add(@"Finalize Audition", @"finalizeAudition", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Finalize audition with current pick", @[@"commit audition"]);
+    add(@"Next Audition Pick", @"nextAuditionPick", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Preview next audition variant", @[@"next alternative"]);
+    add(@"Previous Audition Pick", @"previousAuditionPick", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", nil, @"Preview previous audition variant", @[@"prev alternative"]);
 
     // --- Captions Extras ---
-    add(@"Split Caption", @"splitCaption", @"timeline", FCPCommandCategoryTitles, @"Captions", nil, @"Split caption at playhead", @[@"break caption"]);
-    add(@"Resolve Caption Overlaps", @"resolveOverlaps", @"timeline", FCPCommandCategoryTitles, @"Captions", nil, @"Fix overlapping captions", @[@"fix captions"]);
+    add(@"Split Caption", @"splitCaption", @"timeline", SpliceKitCommandCategoryTitles, @"Captions", nil, @"Split caption at playhead", @[@"break caption"]);
+    add(@"Resolve Caption Overlaps", @"resolveOverlaps", @"timeline", SpliceKitCommandCategoryTitles, @"Captions", nil, @"Fix overlapping captions", @[@"fix captions"]);
 
     // --- Project Extras ---
-    add(@"Duplicate Project", @"duplicateProject", @"timeline", FCPCommandCategoryExport, @"Project", @"Cmd+D", @"Duplicate the current project", @[@"copy project"]);
-    add(@"Snapshot Project", @"snapshotProject", @"timeline", FCPCommandCategoryExport, @"Project", @"Opt+Cmd+D", @"Save a timestamped snapshot of the project", @[@"backup", @"save version"]);
-    add(@"Project Properties", @"projectProperties", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Show project settings (resolution, frame rate)", @[@"project settings"]);
-    add(@"Library Properties", @"libraryProperties", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Show library storage and settings", @[@"library info"]);
-    add(@"Close Library", @"closeLibrary", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Close the current library", @[@"close lib"]);
-    add(@"Merge Events", @"mergeEvents", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Merge selected events", @[@"combine events"]);
-    add(@"Delete Generated Files", @"deleteGeneratedFiles", @"timeline", FCPCommandCategoryExport, @"Project", nil, @"Delete render, proxy, and analysis files", @[@"free space", @"clean up"]);
+    add(@"Duplicate Project", @"duplicateProject", @"timeline", SpliceKitCommandCategoryExport, @"Project", @"Cmd+D", @"Duplicate the current project", @[@"copy project"]);
+    add(@"Snapshot Project", @"snapshotProject", @"timeline", SpliceKitCommandCategoryExport, @"Project", @"Opt+Cmd+D", @"Save a timestamped snapshot of the project", @[@"backup", @"save version"]);
+    add(@"Project Properties", @"projectProperties", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Show project settings (resolution, frame rate)", @[@"project settings"]);
+    add(@"Library Properties", @"libraryProperties", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Show library storage and settings", @[@"library info"]);
+    add(@"Close Library", @"closeLibrary", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Close the current library", @[@"close lib"]);
+    add(@"Merge Events", @"mergeEvents", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Merge selected events", @[@"combine events"]);
+    add(@"Delete Generated Files", @"deleteGeneratedFiles", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Delete render, proxy, and analysis files", @[@"free space", @"clean up"]);
 
     // --- Find ---
-    add(@"Find", @"find", @"timeline", FCPCommandCategoryEditing, @"Find", @"Cmd+F", @"Open find panel", @[@"search"]);
-    add(@"Find and Replace Title Text", @"findAndReplaceTitle", @"timeline", FCPCommandCategoryEditing, @"Find", nil, @"Find and replace text in titles", @[@"replace text"]);
+    add(@"Find", @"find", @"timeline", SpliceKitCommandCategoryEditing, @"Find", @"Cmd+F", @"Open find panel", @[@"search"]);
+    add(@"Find and Replace Title Text", @"findAndReplaceTitle", @"timeline", SpliceKitCommandCategoryEditing, @"Find", nil, @"Find and replace text in titles", @[@"replace text"]);
 
     // --- Reveal ---
-    add(@"Reveal Source in Browser", @"revealInBrowser", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Show source clip in browser", @[@"find source"]);
-    add(@"Reveal Project in Browser", @"revealProjectInBrowser", @"timeline", FCPCommandCategoryEditing, @"Navigation", nil, @"Show project in browser", @[@"find project"]);
-    add(@"Reveal in Finder", @"revealInFinder", @"timeline", FCPCommandCategoryExport, @"Project", @"Opt+Cmd+R", @"Show file in macOS Finder", @[@"show in finder"]);
-    add(@"Move to Trash", @"moveToTrash", @"timeline", FCPCommandCategoryEditing, @"Clips", @"Cmd+Delete", @"Move selected to trash", @[@"delete permanently"]);
+    add(@"Reveal Source in Browser", @"revealInBrowser", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", nil, @"Show source clip in browser", @[@"find source"]);
+    add(@"Reveal Project in Browser", @"revealProjectInBrowser", @"timeline", SpliceKitCommandCategoryEditing, @"Navigation", nil, @"Show project in browser", @[@"find project"]);
+    add(@"Reveal in Finder", @"revealInFinder", @"timeline", SpliceKitCommandCategoryExport, @"Project", @"Opt+Cmd+R", @"Show file in macOS Finder", @[@"show in finder"]);
+    add(@"Move to Trash", @"moveToTrash", @"timeline", SpliceKitCommandCategoryEditing, @"Clips", @"Cmd+Delete", @"Move selected to trash", @[@"delete permanently"]);
 
     // --- Playback Extras ---
-    add(@"Play from Start", @"playFromStart", @"playback", FCPCommandCategoryPlayback, @"Playback", nil, @"Play from the beginning of timeline", @[@"play beginning"]);
-    add(@"Fast Forward", @"fastForward", @"playback", FCPCommandCategoryPlayback, @"Playback", @"L", @"Fast forward playback", @[@"speed up"]);
-    add(@"Rewind", @"rewind", @"playback", FCPCommandCategoryPlayback, @"Playback", @"J", @"Rewind playback", @[@"reverse play"]);
-    add(@"Stop Playing", @"stopPlaying", @"playback", FCPCommandCategoryPlayback, @"Playback", @"K", @"Stop playback", @[@"pause"]);
+    add(@"Play from Start", @"playFromStart", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", nil, @"Play from the beginning of timeline", @[@"play beginning"]);
+    add(@"Fast Forward", @"fastForward", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"L", @"Fast forward playback", @[@"speed up"]);
+    add(@"Rewind", @"rewind", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"J", @"Rewind playback", @[@"reverse play"]);
+    add(@"Stop Playing", @"stopPlaying", @"playback", SpliceKitCommandCategoryPlayback, @"Playback", @"K", @"Stop playback", @[@"pause"]);
 
     // --- Window & Workspace ---
-    add(@"Record Voiceover", @"recordVoiceover", @"timeline", FCPCommandCategoryEditing, @"Window", nil, @"Open voiceover recording panel", @[@"voice", @"microphone", @"narration"]);
-    add(@"Background Tasks", @"backgroundTasks", @"timeline", FCPCommandCategoryEditing, @"Window", @"Cmd+9", @"Show background tasks window", @[@"rendering", @"progress"]);
-    add(@"Edit Roles", @"editRoles", @"timeline", FCPCommandCategoryEditing, @"Roles", nil, @"Open role editor dialog", @[@"manage roles"]);
-    add(@"Hide Clip", @"hideClip", @"timeline", FCPCommandCategoryEditing, @"Rating", nil, @"Hide selected clip in browser", @[@"reject hide"]);
-    add(@"Show Preferences", @"showPreferences", @"timeline", FCPCommandCategoryOptions, @"Options", @"Cmd+,", @"Open FCP preferences", @[@"settings"]);
-    add(@"Add Adjustment Clip", @"addAdjustmentClip", @"timeline", FCPCommandCategoryEffects, @"Effects", nil, @"Add adjustment layer above timeline", @[@"adjustment layer"]);
+    add(@"Record Voiceover", @"recordVoiceover", @"timeline", SpliceKitCommandCategoryEditing, @"Window", nil, @"Open voiceover recording panel", @[@"voice", @"microphone", @"narration"]);
+    add(@"Background Tasks", @"backgroundTasks", @"timeline", SpliceKitCommandCategoryEditing, @"Window", @"Cmd+9", @"Show background tasks window", @[@"rendering", @"progress"]);
+    add(@"Edit Roles", @"editRoles", @"timeline", SpliceKitCommandCategoryEditing, @"Roles", nil, @"Open role editor dialog", @[@"manage roles"]);
+    add(@"Hide Clip", @"hideClip", @"timeline", SpliceKitCommandCategoryEditing, @"Rating", nil, @"Hide selected clip in browser", @[@"reject hide"]);
+    add(@"Show Preferences", @"showPreferences", @"timeline", SpliceKitCommandCategoryOptions, @"Options", @"Cmd+,", @"Open FCP preferences", @[@"settings"]);
+    add(@"Add Adjustment Clip", @"addAdjustmentClip", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Add adjustment layer above timeline", @[@"adjustment layer"]);
 
     // --- Options ---
-    add(@"FCPBridge Options", @"bridgeOptions", @"bridge_options", FCPCommandCategoryOptions, @"Options", nil, @"Open FCPBridge options panel", @[@"settings", @"preferences", @"config"]);
-    add(@"Toggle Effect Drag as Adjustment Clip", @"toggleEffectDragAsAdjustmentClip", @"bridge_toggle", FCPCommandCategoryOptions, @"Options", nil, @"Enable/disable dragging an effect to empty timeline space to create an adjustment clip", @[@"effect drag", @"adjustment layer", @"drop effect", @"effect browser"]);
-    add(@"Toggle Viewer Pinch-to-Zoom", @"toggleViewerPinchZoom", @"bridge_toggle", FCPCommandCategoryOptions, @"Options", nil, @"Enable/disable trackpad pinch-to-zoom on the viewer", @[@"trackpad", @"zoom", @"magnify", @"gesture"]);
+    add(@"SpliceKit Options", @"bridgeOptions", @"bridge_options", SpliceKitCommandCategoryOptions, @"Options", nil, @"Open SpliceKit options panel", @[@"settings", @"preferences", @"config"]);
+    add(@"Toggle Effect Drag as Adjustment Clip", @"toggleEffectDragAsAdjustmentClip", @"bridge_toggle", SpliceKitCommandCategoryOptions, @"Options", nil, @"Enable/disable dragging an effect to empty timeline space to create an adjustment clip", @[@"effect drag", @"adjustment layer", @"drop effect", @"effect browser"]);
+    add(@"Toggle Viewer Pinch-to-Zoom", @"toggleViewerPinchZoom", @"bridge_toggle", SpliceKitCommandCategoryOptions, @"Options", nil, @"Enable/disable trackpad pinch-to-zoom on the viewer", @[@"trackpad", @"zoom", @"magnify", @"gesture"]);
 
     self.allCommands = [cmds copy];
     self.masterCommands = self.allCommands;
@@ -778,7 +778,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     self.backgroundView = bg;
 
     // Search field
-    FCPCommandSearchField *searchField = [[FCPCommandSearchField alloc] initWithFrame:NSZeroRect];
+    SpliceKitCommandSearchField *searchField = [[SpliceKitCommandSearchField alloc] initWithFrame:NSZeroRect];
     searchField.placeholderString = @"Type a command or describe what you want to do...";
     searchField.font = [NSFont systemFontOfSize:16];
     searchField.bordered = NO;
@@ -896,7 +896,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     [self updateStatusLabel];
 
     // Restore saved position, or center on active screen
-    NSString *savedFrame = [[NSUserDefaults standardUserDefaults] stringForKey:@"FCPBridgeCommandPaletteFrame"];
+    NSString *savedFrame = [[NSUserDefaults standardUserDefaults] stringForKey:@"SpliceKitCommandPaletteFrame"];
     if (savedFrame) {
         [self.panel setFrameFromString:savedFrame];
     } else {
@@ -944,7 +944,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
                     NSInteger row = weakSelf.tableView.selectedRow;
                     if (row > 0) {
                         NSInteger newRow = row - 1;
-                        FCPCommand *cmd = [weakSelf commandForDisplayRow:newRow];
+                        SpliceKitCommand *cmd = [weakSelf commandForDisplayRow:newRow];
                         if (cmd && cmd.isSeparatorRow && newRow > 0) newRow--;
                         [weakSelf.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:newRow]
                                         byExtendingSelection:NO];
@@ -957,7 +957,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
                     NSInteger max = weakSelf.tableView.numberOfRows - 1;
                     if (row < max) {
                         NSInteger newRow = row + 1;
-                        FCPCommand *cmd = [weakSelf commandForDisplayRow:newRow];
+                        SpliceKitCommand *cmd = [weakSelf commandForDisplayRow:newRow];
                         if (cmd && cmd.isSeparatorRow && newRow < max) newRow++;
                         [weakSelf.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:newRow]
                                         byExtendingSelection:NO];
@@ -981,7 +981,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 - (void)hidePalette {
     // Save position and size
     [[NSUserDefaults standardUserDefaults] setObject:[self.panel stringWithSavedFrame]
-                                              forKey:@"FCPBridgeCommandPaletteFrame"];
+                                              forKey:@"SpliceKitCommandPaletteFrame"];
     [self.panel orderOut:nil];
     if (self.localEventMonitor) {
         [NSEvent removeMonitor:self.localEventMonitor];
@@ -1005,7 +1005,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 
 - (void)windowWillClose:(NSNotification *)notification {
     [[NSUserDefaults standardUserDefaults] setObject:[self.panel stringWithSavedFrame]
-                                              forKey:@"FCPBridgeCommandPaletteFrame"];
+                                              forKey:@"SpliceKitCommandPaletteFrame"];
     if (self.localEventMonitor) {
         [NSEvent removeMonitor:self.localEventMonitor];
         self.localEventMonitor = nil;
@@ -1014,12 +1014,12 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 
 - (void)windowDidMove:(NSNotification *)notification {
     [[NSUserDefaults standardUserDefaults] setObject:[self.panel stringWithSavedFrame]
-                                              forKey:@"FCPBridgeCommandPaletteFrame"];
+                                              forKey:@"SpliceKitCommandPaletteFrame"];
 }
 
 - (void)windowDidResize:(NSNotification *)notification {
     [[NSUserDefaults standardUserDefaults] setObject:[self.panel stringWithSavedFrame]
-                                              forKey:@"FCPBridgeCommandPaletteFrame"];
+                                              forKey:@"SpliceKitCommandPaletteFrame"];
 }
 
 #pragma mark - NSControl Text Editing Delegate (arrow keys)
@@ -1029,7 +1029,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         NSInteger row = self.tableView.selectedRow;
         if (row > 0) {
             NSInteger newRow = row - 1;
-            FCPCommand *cmd = [self commandForDisplayRow:newRow];
+            SpliceKitCommand *cmd = [self commandForDisplayRow:newRow];
             if (cmd && cmd.isSeparatorRow && newRow > 0) newRow--;
             [self.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:newRow]
                         byExtendingSelection:NO];
@@ -1042,7 +1042,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         NSInteger maxRow = self.tableView.numberOfRows - 1;
         if (row < maxRow) {
             NSInteger newRow = row + 1;
-            FCPCommand *cmd = [self commandForDisplayRow:newRow];
+            SpliceKitCommand *cmd = [self commandForDisplayRow:newRow];
             if (cmd && cmd.isSeparatorRow && newRow < maxRow) newRow++;
             [self.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:newRow]
                         byExtendingSelection:NO];
@@ -1067,11 +1067,11 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 
 #pragma mark - Search / Filter
 
-- (NSArray<FCPCommand *> *)searchCommands:(NSString *)query {
+- (NSArray<SpliceKitCommand *> *)searchCommands:(NSString *)query {
     if (query.length == 0) return self.allCommands;
 
-    NSMutableArray<FCPCommand *> *results = [NSMutableArray array];
-    for (FCPCommand *cmd in self.allCommands) {
+    NSMutableArray<SpliceKitCommand *> *results = [NSMutableArray array];
+    for (SpliceKitCommand *cmd in self.allCommands) {
         // Score against name
         CGFloat nameScore = FCPFuzzyScore(query, cmd.name);
         // Score against keywords
@@ -1092,7 +1092,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         }
     }
 
-    [results sortUsingComparator:^NSComparisonResult(FCPCommand *a, FCPCommand *b) {
+    [results sortUsingComparator:^NSComparisonResult(SpliceKitCommand *a, SpliceKitCommand *b) {
         if (a.score > b.score) return NSOrderedAscending;
         if (a.score < b.score) return NSOrderedDescending;
         return [a.name compare:b.name];
@@ -1194,7 +1194,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         return cell;
     }
 
-    FCPCommand *cmd = [self commandForDisplayRow:row];
+    SpliceKitCommand *cmd = [self commandForDisplayRow:row];
     if (!cmd) return nil;
 
     // Separator row
@@ -1207,9 +1207,9 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         return cell;
     }
 
-    FCPCommandRowView *cell = [tableView makeViewWithIdentifier:kCommandRowID owner:nil];
+    SpliceKitCommandRowView *cell = [tableView makeViewWithIdentifier:kCommandRowID owner:nil];
     if (!cell) {
-        cell = [[FCPCommandRowView alloc] initWithFrame:NSMakeRect(0, 0, 500, 40)];
+        cell = [[SpliceKitCommandRowView alloc] initWithFrame:NSMakeRect(0, 0, 500, 40)];
         cell.identifier = kCommandRowID;
     }
 
@@ -1218,13 +1218,13 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 }
 
 - (CGFloat)tableView:(NSTableView *)tableView heightOfRow:(NSInteger)row {
-    FCPCommand *cmd = [self commandForDisplayRow:row];
+    SpliceKitCommand *cmd = [self commandForDisplayRow:row];
     if (cmd && cmd.isSeparatorRow) return 20;
     return 40;
 }
 
 - (BOOL)tableView:(NSTableView *)tableView shouldSelectRow:(NSInteger)row {
-    FCPCommand *cmd = [self commandForDisplayRow:row];
+    SpliceKitCommand *cmd = [self commandForDisplayRow:row];
     if (cmd && cmd.isSeparatorRow) return NO;
     return YES;
 }
@@ -1244,7 +1244,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         return;
     }
 
-    FCPCommand *cmd = [self commandForDisplayRow:row];
+    SpliceKitCommand *cmd = [self commandForDisplayRow:row];
     if (!cmd || cmd.isSeparatorRow) return;
 
     // Don't hide palette for browse commands — they repopulate it
@@ -1276,12 +1276,12 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     __block NSDictionary *result = nil;
 
     if ([type isEqualToString:@"timeline"]) {
-        result = FCPBridge_handleTimelineAction(@{@"action": action});
+        result = SpliceKit_handleTimelineAction(@{@"action": action});
     } else if ([type isEqualToString:@"playback"]) {
-        result = FCPBridge_handlePlayback(@{@"action": action});
+        result = SpliceKit_handlePlayback(@{@"action": action});
     } else if ([type isEqualToString:@"transcript"]) {
-        FCPBridge_executeOnMainThread(^{
-            Class panelClass = objc_getClass("FCPTranscriptPanel");
+        SpliceKit_executeOnMainThread(^{
+            Class panelClass = objc_getClass("SpliceKitTranscriptPanel");
             if (!panelClass) return;
             id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
             if ([action isEqualToString:@"openTranscript"]) {
@@ -1296,27 +1296,27 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         [self enterTransitionBrowseMode];
         result = @{@"action": action, @"status": @"ok"};
     } else if ([type isEqualToString:@"transition_apply"]) {
-        extern NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params);
-        result = FCPBridge_handleTransitionsApply(@{@"effectID": action});
+        extern NSDictionary *SpliceKit_handleTransitionsApply(NSDictionary *params);
+        result = SpliceKit_handleTransitionsApply(@{@"effectID": action});
     } else if ([type isEqualToString:@"title_apply"] || [type isEqualToString:@"generator_apply"]) {
-        extern NSDictionary *FCPBridge_handleTitleInsert(NSDictionary *params);
-        result = FCPBridge_handleTitleInsert(@{@"effectID": action});
+        extern NSDictionary *SpliceKit_handleTitleInsert(NSDictionary *params);
+        result = SpliceKit_handleTitleInsert(@{@"effectID": action});
     } else if ([type isEqualToString:@"effect_apply"]) {
-        extern NSDictionary *FCPBridge_handleEffectsApply(NSDictionary *params);
-        result = FCPBridge_handleEffectsApply(@{@"effectID": action});
+        extern NSDictionary *SpliceKit_handleEffectsApply(NSDictionary *params);
+        result = SpliceKit_handleEffectsApply(@{@"effectID": action});
     } else if ([type isEqualToString:@"effect_apply_by_name"]) {
-        extern NSDictionary *FCPBridge_handleEffectsApply(NSDictionary *params);
-        result = FCPBridge_handleEffectsApply(@{@"name": action});
+        extern NSDictionary *SpliceKit_handleEffectsApply(NSDictionary *params);
+        result = SpliceKit_handleEffectsApply(@{@"name": action});
     } else if ([type isEqualToString:@"subject_stabilize"]) {
         // Run on background thread — tracking takes time
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            extern NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params);
-            NSDictionary *r = FCPBridge_handleSubjectStabilize(@{});
+            extern NSDictionary *SpliceKit_handleSubjectStabilize(NSDictionary *params);
+            NSDictionary *r = SpliceKit_handleSubjectStabilize(@{});
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (r[@"error"]) {
-                    FCPBridge_log(@"[Stabilize] Error: %@", r[@"error"]);
+                    SpliceKit_log(@"[Stabilize] Error: %@", r[@"error"]);
                 } else {
-                    FCPBridge_log(@"[Stabilize] Complete: %@ keyframes applied", r[@"keyframesApplied"]);
+                    SpliceKit_log(@"[Stabilize] Complete: %@ keyframes applied", r[@"keyframesApplied"]);
                 }
             });
         });
@@ -1328,20 +1328,20 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         [self showSceneDetectionOptionsPanel];
         result = @{@"action": action, @"status": @"started"};
     } else if ([type isEqualToString:@"batch_export"]) {
-        extern NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params);
-        result = FCPBridge_handleBatchExport(@{@"scope": @"all"});
+        extern NSDictionary *SpliceKit_handleBatchExport(NSDictionary *params);
+        result = SpliceKit_handleBatchExport(@{@"scope": @"all"});
     } else if ([type isEqualToString:@"bridge_options"]) {
         [self showBridgeOptionsPanel];
         result = @{@"action": action, @"status": @"ok"};
     } else if ([type isEqualToString:@"bridge_toggle"]) {
         if ([action isEqualToString:@"toggleEffectDragAsAdjustmentClip"]) {
-            BOOL newState = !FCPBridge_isEffectDragAsAdjustmentClipEnabled();
-            FCPBridge_setEffectDragAsAdjustmentClipEnabled(newState);
+            BOOL newState = !SpliceKit_isEffectDragAsAdjustmentClipEnabled();
+            SpliceKit_setEffectDragAsAdjustmentClipEnabled(newState);
             result = @{@"action": action, @"status": @"ok",
                        @"effectDragAsAdjustmentClip": @(newState)};
         } else if ([action isEqualToString:@"toggleViewerPinchZoom"]) {
-            BOOL newState = !FCPBridge_isViewerPinchZoomEnabled();
-            FCPBridge_setViewerPinchZoomEnabled(newState);
+            BOOL newState = !SpliceKit_isViewerPinchZoomEnabled();
+            SpliceKit_setViewerPinchZoomEnabled(newState);
             result = @{@"action": action, @"status": @"ok",
                        @"viewerPinchZoom": @(newState)};
         } else {
@@ -1353,7 +1353,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         result = @{@"error": [NSString stringWithFormat:@"Unknown command type: %@", type]};
     }
 
-    FCPBridge_log(@"Command palette executed: %@ (%@) -> %@", action, type,
+    SpliceKit_log(@"Command palette executed: %@ (%@) -> %@", action, type,
                   result[@"error"] ?: @"ok");
     return result;
 }
@@ -1424,7 +1424,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 
     // 1. Inside the FCP framework bundle (deployed by patcher)
     NSString *buildDir = [[[NSBundle mainBundle] bundlePath]
-        stringByAppendingPathComponent:@"Contents/Frameworks/FCPBridge.framework/Versions/A/Resources"];
+        stringByAppendingPathComponent:@"Contents/Frameworks/SpliceKit.framework/Versions/A/Resources"];
     NSString *builtPath = [buildDir stringByAppendingPathComponent:@"silence-detector"];
     if ([fm isExecutableFileAtPath:builtPath]) return builtPath;
 
@@ -1432,9 +1432,9 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     NSString *home = NSHomeDirectory();
     NSArray *paths = @[
         [home stringByAppendingPathComponent:@"Library/Application Support/SpliceKit/tools/silence-detector"],
-        [home stringByAppendingPathComponent:@"Desktop/FCPBridge/build/silence-detector"],
-        [home stringByAppendingPathComponent:@"Documents/GitHub/FCPBridge/build/silence-detector"],
-        [home stringByAppendingPathComponent:@"FCPBridge/build/silence-detector"],
+        [home stringByAppendingPathComponent:@"Desktop/SpliceKit/build/silence-detector"],
+        [home stringByAppendingPathComponent:@"Documents/GitHub/SpliceKit/build/silence-detector"],
+        [home stringByAppendingPathComponent:@"SpliceKit/build/silence-detector"],
         [home stringByAppendingPathComponent:@"Library/Caches/SpliceKit/build/silence-detector"],
     ];
     for (NSString *p in paths) {
@@ -1560,7 +1560,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
                 dispatch_async(dispatch_get_main_queue(), ^{
                     NSAlert *a = [[NSAlert alloc] init];
                     a.messageText = @"Silence Detector Not Found";
-                    a.informativeText = @"Build it with:\n  cd ~/Desktop/FCPBridge && make tools";
+                    a.informativeText = @"Build it with:\n  cd ~/Desktop/SpliceKit && make tools";
                     a.alertStyle = NSAlertStyleWarning;
                     [a runModal];
                 });
@@ -1569,9 +1569,9 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 
             __block NSArray *items = nil;
             __block double fps = 24.0;
-            FCPBridge_executeOnMainThread(^{
-                extern NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params);
-                NSDictionary *s = FCPBridge_handleTimelineGetDetailedState(@{@"limit": @500});
+            SpliceKit_executeOnMainThread(^{
+                extern NSDictionary *SpliceKit_handleTimelineGetDetailedState(NSDictionary *params);
+                NSDictionary *s = SpliceKit_handleTimelineGetDetailedState(@{@"limit": @500});
                 if (s[@"error"]) return;
                 items = s[@"items"];
                 if (s[@"frameRate"]) fps = [s[@"frameRate"] doubleValue];
@@ -1606,8 +1606,8 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
                 NSString *handle = item[@"handle"];
                 double trim = [item[@"trimmedOffset"][@"seconds"] doubleValue];
                 if (handle) {
-                    extern id FCPBridge_resolveHandle(NSString *handleId);
-                    id obj = FCPBridge_resolveHandle(handle);
+                    extern id SpliceKit_resolveHandle(NSString *handleId);
+                    id obj = SpliceKit_resolveHandle(handle);
                     if (obj) {
                         @try {
                             id mediaObj = obj;
@@ -1679,7 +1679,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 
             __block NSInteger done = 0;
             NSInteger total = silRanges.count;
-            FCPBridge_executeOnMainThread(^{
+            SpliceKit_executeOnMainThread(^{
                 id app = [NSApplication sharedApplication];
                 SEL gs = @selector(gotoStart:), s10 = @selector(stepForward10Frames:), s1 = @selector(stepForward:);
                 for (NSDictionary *rng in silRanges) {
@@ -1688,15 +1688,15 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
                     int f = (int)round(silEnd * fps);
                     for (int j=0;j<f/10;j++) [app sendAction:s10 to:nil from:nil];
                     for (int j=0;j<f%10;j++) [app sendAction:s1 to:nil from:nil];
-                    FCPBridge_handleTimelineAction(@{@"action": @"blade"});
+                    SpliceKit_handleTimelineAction(@{@"action": @"blade"});
                     [app sendAction:gs to:nil from:nil];
                     f = (int)round(silStart * fps);
                     for (int j=0;j<f/10;j++) [app sendAction:s10 to:nil from:nil];
                     for (int j=0;j<f%10;j++) [app sendAction:s1 to:nil from:nil];
-                    FCPBridge_handleTimelineAction(@{@"action": @"blade"});
+                    SpliceKit_handleTimelineAction(@{@"action": @"blade"});
                     [NSThread sleepForTimeInterval:0.03];
-                    FCPBridge_handleTimelineAction(@{@"action": @"selectClipAtPlayhead"});
-                    FCPBridge_handleTimelineAction(@{@"action": @"delete"});
+                    SpliceKit_handleTimelineAction(@{@"action": @"selectClipAtPlayhead"});
+                    SpliceKit_handleTimelineAction(@{@"action": @"delete"});
                     done++;
                 }
             });
@@ -1819,9 +1819,9 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     NSPanel *hud = [self showProcessingHUD:@"Detecting scene changes..."];
 
     // Run on background
-    extern NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params);
+    extern NSDictionary *SpliceKit_handleDetectSceneChanges(NSDictionary *params);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSDictionary *r = FCPBridge_handleDetectSceneChanges(@{
+        NSDictionary *r = SpliceKit_handleDetectSceneChanges(@{
             @"action": action,
             @"threshold": @(threshold),
             @"sampleInterval": @(interval),
@@ -1862,7 +1862,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
 }
 
 - (void)loadFavorites {
-    NSArray *dicts = [[NSUserDefaults standardUserDefaults] arrayForKey:kFCPBridgeFavoritesKey];
+    NSArray *dicts = [[NSUserDefaults standardUserDefaults] arrayForKey:kSpliceKitFavoritesKey];
     _favoriteKeys = [NSMutableSet set];
     for (NSDictionary *d in dicts) {
         NSString *key = FCPFavoriteKey(d[@"type"], d[@"action"]);
@@ -1877,15 +1877,15 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
 }
 
 - (NSArray<NSDictionary *> *)allFavoriteDicts {
-    return [[NSUserDefaults standardUserDefaults] arrayForKey:kFCPBridgeFavoritesKey] ?: @[];
+    return [[NSUserDefaults standardUserDefaults] arrayForKey:kSpliceKitFavoritesKey] ?: @[];
 }
 
-- (BOOL)isFavorite:(FCPCommand *)cmd {
+- (BOOL)isFavorite:(SpliceKitCommand *)cmd {
     if (!cmd.type || !cmd.action) return NO;
     return [self.favoriteKeys containsObject:FCPFavoriteKey(cmd.type, cmd.action)];
 }
 
-- (void)addFavorite:(FCPCommand *)cmd {
+- (void)addFavorite:(SpliceKitCommand *)cmd {
     NSString *key = FCPFavoriteKey(cmd.type, cmd.action);
     if ([self.favoriteKeys containsObject:key]) return; // already favorited
     [self.favoriteKeys addObject:key];
@@ -1897,10 +1897,10 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         @"name": cmd.name ?: @"",
         @"categoryName": cmd.categoryName ?: @"",
     }];
-    [[NSUserDefaults standardUserDefaults] setObject:dicts forKey:kFCPBridgeFavoritesKey];
+    [[NSUserDefaults standardUserDefaults] setObject:dicts forKey:kSpliceKitFavoritesKey];
 }
 
-- (void)removeFavorite:(FCPCommand *)cmd {
+- (void)removeFavorite:(SpliceKitCommand *)cmd {
     NSString *key = FCPFavoriteKey(cmd.type, cmd.action);
     [self.favoriteKeys removeObject:key];
 
@@ -1909,10 +1909,10 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         return [FCPFavoriteKey(d[@"type"], d[@"action"]) isEqualToString:key];
     }];
     [dicts removeObjectsAtIndexes:toRemove];
-    [[NSUserDefaults standardUserDefaults] setObject:dicts forKey:kFCPBridgeFavoritesKey];
+    [[NSUserDefaults standardUserDefaults] setObject:dicts forKey:kSpliceKitFavoritesKey];
 }
 
-- (FCPCommand *)commandForDisplayRow:(NSInteger)row {
+- (SpliceKitCommand *)commandForDisplayRow:(NSInteger)row {
     NSInteger cmdIdx = row;
     if (self.aiLoading || self.aiResults.count > 0) cmdIdx -= 1;
     if (cmdIdx < 0 || cmdIdx >= (NSInteger)self.filteredCommands.count) return nil;
@@ -1932,7 +1932,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     NSInteger row = self.tableView.clickedRow;
     if (row < 0) return;
 
-    FCPCommand *cmd = [self commandForDisplayRow:row];
+    SpliceKitCommand *cmd = [self commandForDisplayRow:row];
     if (!cmd || cmd.isSeparatorRow) return;
     if (!self.inBrowseMode) return;
 
@@ -1956,7 +1956,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
 }
 
 - (void)toggleFavoriteFromMenu:(NSMenuItem *)sender {
-    FCPCommand *cmd = sender.representedObject;
+    SpliceKitCommand *cmd = sender.representedObject;
     if ([self isFavorite:cmd]) {
         [self removeFavorite:cmd];
     } else {
@@ -1968,14 +1968,14 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
 - (void)injectFavoritesIntoCurrentList {
     if (!self.rawBrowseCommands || self.rawBrowseCommands.count == 0) return;
 
-    NSMutableArray<FCPCommand *> *favoriteCmds = [NSMutableArray array];
-    NSMutableArray<FCPCommand *> *regularCmds = [NSMutableArray array];
+    NSMutableArray<SpliceKitCommand *> *favoriteCmds = [NSMutableArray array];
+    NSMutableArray<SpliceKitCommand *> *regularCmds = [NSMutableArray array];
 
-    for (FCPCommand *cmd in self.rawBrowseCommands) {
+    for (SpliceKitCommand *cmd in self.rawBrowseCommands) {
         BOOL isFav = [self isFavorite:cmd];
         if (isFav) {
             // Create a copy for the favorites section
-            FCPCommand *favCopy = [[FCPCommand alloc] init];
+            SpliceKitCommand *favCopy = [[SpliceKitCommand alloc] init];
             favCopy.name = cmd.name;
             favCopy.action = cmd.action;
             favCopy.type = cmd.type;
@@ -1997,7 +1997,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         [combined addObjectsFromArray:favoriteCmds];
 
         // Add separator
-        FCPCommand *separator = [[FCPCommand alloc] init];
+        SpliceKitCommand *separator = [[SpliceKitCommand alloc] init];
         separator.isSeparatorRow = YES;
         separator.name = @"";
         [combined addObject:separator];
@@ -2024,11 +2024,11 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     }
 }
 
-- (NSArray<FCPCommand *> *)searchCommandsInArray:(NSArray<FCPCommand *> *)commands query:(NSString *)query {
+- (NSArray<SpliceKitCommand *> *)searchCommandsInArray:(NSArray<SpliceKitCommand *> *)commands query:(NSString *)query {
     if (query.length == 0) return commands;
 
-    NSMutableArray<FCPCommand *> *results = [NSMutableArray array];
-    for (FCPCommand *cmd in commands) {
+    NSMutableArray<SpliceKitCommand *> *results = [NSMutableArray array];
+    for (SpliceKitCommand *cmd in commands) {
         if (cmd.isSeparatorRow) continue;
         CGFloat nameScore = FCPFuzzyScore(query, cmd.name);
         CGFloat keywordScore = 0;
@@ -2045,7 +2045,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
             [results addObject:cmd];
         }
     }
-    [results sortUsingComparator:^NSComparisonResult(FCPCommand *a, FCPCommand *b) {
+    [results sortUsingComparator:^NSComparisonResult(SpliceKitCommand *a, SpliceKitCommand *b) {
         if (a.score > b.score) return NSOrderedAscending;
         if (a.score < b.score) return NSOrderedDescending;
         return [a.name compare:b.name];
@@ -2068,14 +2068,14 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     }
 }
 
-#pragma mark - FCPBridge Options Panel
+#pragma mark - SpliceKit Options Panel
 
 - (void)showBridgeOptionsPanel {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSPanel *opts = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 380, 290)
             styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
             backing:NSBackingStoreBuffered defer:NO];
-        opts.title = @"FCPBridge Options";
+        opts.title = @"SpliceKit Options";
         [opts center];
 
         NSView *v = opts.contentView;
@@ -2086,7 +2086,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                                                          target:self
                                                          action:@selector(_bridgeOptionEffectDragToggled:)];
         effectDragCheck.frame = NSMakeRect(20, y, 340, 20);
-        effectDragCheck.state = FCPBridge_isEffectDragAsAdjustmentClipEnabled()
+        effectDragCheck.state = SpliceKit_isEffectDragAsAdjustmentClipEnabled()
             ? NSControlStateValueOn : NSControlStateValueOff;
         objc_setAssociatedObject(effectDragCheck, "panel", opts, OBJC_ASSOCIATION_RETAIN);
         [v addSubview:effectDragCheck];
@@ -2107,7 +2107,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                                                     target:self
                                                     action:@selector(_bridgeOptionPinchZoomToggled:)];
         pinchCheck.frame = NSMakeRect(20, y, 340, 20);
-        pinchCheck.state = FCPBridge_isViewerPinchZoomEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
+        pinchCheck.state = SpliceKit_isViewerPinchZoomEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
         objc_setAssociatedObject(pinchCheck, "panel", opts, OBJC_ASSOCIATION_RETAIN);
         [v addSubview:pinchCheck];
 
@@ -2133,12 +2133,12 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
 
 - (void)_bridgeOptionPinchZoomToggled:(NSButton *)sender {
     BOOL enabled = (sender.state == NSControlStateValueOn);
-    FCPBridge_setViewerPinchZoomEnabled(enabled);
+    SpliceKit_setViewerPinchZoomEnabled(enabled);
 }
 
 - (void)_bridgeOptionEffectDragToggled:(NSButton *)sender {
     BOOL enabled = (sender.state == NSControlStateValueOn);
-    FCPBridge_setEffectDragAsAdjustmentClipEnabled(enabled);
+    SpliceKit_setEffectDragAsAdjustmentClipEnabled(enabled);
 }
 
 - (void)enterTransitionBrowseMode {
@@ -2154,8 +2154,8 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     // Fetch transitions on background thread
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @try {
-            extern NSDictionary *FCPBridge_handleTransitionsList(NSDictionary *params);
-            NSDictionary *r = FCPBridge_handleTransitionsList(@{});
+            extern NSDictionary *SpliceKit_handleTransitionsList(NSDictionary *params);
+            NSDictionary *r = SpliceKit_handleTransitionsList(@{});
             NSArray *transitions = r[@"transitions"];
 
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -2167,13 +2167,13 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                     }
 
                     // Build command list from transitions
-                    NSMutableArray<FCPCommand *> *cmds = [NSMutableArray array];
+                    NSMutableArray<SpliceKitCommand *> *cmds = [NSMutableArray array];
                     for (NSDictionary *t in transitions) {
-                        FCPCommand *cmd = [[FCPCommand alloc] init];
+                        SpliceKitCommand *cmd = [[SpliceKitCommand alloc] init];
                         cmd.name = t[@"name"] ?: @"Unknown";
                         cmd.action = t[@"effectID"] ?: @"";
                         cmd.type = @"transition_apply";
-                        cmd.category = FCPCommandCategoryEffects;
+                        cmd.category = SpliceKitCommandCategoryEffects;
                         cmd.categoryName = t[@"category"] ?: @"Transitions";
                         cmd.shortcut = @"";
                         cmd.detail = [NSString stringWithFormat:@"Apply %@ transition", t[@"name"]];
@@ -2193,12 +2193,12 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                                     byExtendingSelection:NO];
                     }
                 } @catch (NSException *e) {
-                    FCPBridge_log(@"Exception populating transitions: %@", e.reason);
+                    SpliceKit_log(@"Exception populating transitions: %@", e.reason);
                     self.statusLabel.stringValue = [NSString stringWithFormat:@"Error: %@", e.reason];
                 }
             });
         } @catch (NSException *e) {
-            FCPBridge_log(@"Exception fetching transitions: %@", e.reason);
+            SpliceKit_log(@"Exception fetching transitions: %@", e.reason);
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.statusLabel.stringValue = [NSString stringWithFormat:@"Error: %@", e.reason];
                 self.searchField.placeholderString = @"Error loading transitions. Esc to go back.";
@@ -2227,8 +2227,8 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @try {
-            extern NSDictionary *FCPBridge_handleEffectsListAvailable(NSDictionary *params);
-            NSDictionary *r = FCPBridge_handleEffectsListAvailable(@{@"type": effectType});
+            extern NSDictionary *SpliceKit_handleEffectsListAvailable(NSDictionary *params);
+            NSDictionary *r = SpliceKit_handleEffectsListAvailable(@{@"type": effectType});
             NSArray *effects = r[@"effects"];
 
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -2239,9 +2239,9 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                         return;
                     }
 
-                    NSMutableArray<FCPCommand *> *cmds = [NSMutableArray array];
+                    NSMutableArray<SpliceKitCommand *> *cmds = [NSMutableArray array];
                     for (NSDictionary *e in effects) {
-                        FCPCommand *cmd = [[FCPCommand alloc] init];
+                        SpliceKitCommand *cmd = [[SpliceKitCommand alloc] init];
                         cmd.name = e[@"name"] ?: @"Unknown";
                         cmd.action = e[@"effectID"] ?: @"";
                         // Titles and generators are connected to the timeline via pasteboard,
@@ -2254,7 +2254,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                         } else {
                             cmd.type = @"effect_apply";
                         }
-                        cmd.category = FCPCommandCategoryEffects;
+                        cmd.category = SpliceKitCommandCategoryEffects;
                         cmd.categoryName = e[@"category"] ?: label;
                         cmd.shortcut = @"";
                         cmd.detail = [NSString stringWithFormat:@"Apply %@", e[@"name"]];
@@ -2274,12 +2274,12 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                                     byExtendingSelection:NO];
                     }
                 } @catch (NSException *e) {
-                    FCPBridge_log(@"Exception populating effects: %@", e.reason);
+                    SpliceKit_log(@"Exception populating effects: %@", e.reason);
                     self.statusLabel.stringValue = [NSString stringWithFormat:@"Error: %@", e.reason];
                 }
             });
         } @catch (NSException *e) {
-            FCPBridge_log(@"Exception fetching effects: %@", e.reason);
+            SpliceKit_log(@"Exception fetching effects: %@", e.reason);
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.statusLabel.stringValue = [NSString stringWithFormat:@"Error: %@", e.reason];
             });
@@ -2292,8 +2292,8 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     self.searchField.stringValue = @"";
     self.searchField.placeholderString = @"Search favorites...";
 
-    NSMutableArray<FCPCommand *> *cmds = [NSMutableArray array];
-    for (FCPCommand *cmd in self.masterCommands ?: self.allCommands) {
+    NSMutableArray<SpliceKitCommand *> *cmds = [NSMutableArray array];
+    for (SpliceKitCommand *cmd in self.masterCommands ?: self.allCommands) {
         if (!cmd || cmd.isSeparatorRow) continue;
         if ([self isFavorite:cmd]) {
             [cmds addObject:cmd];
@@ -2345,12 +2345,12 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
             NSDictionary *r;
             NSString *applyType;
             if ([effectType isEqualToString:@"transition"]) {
-                extern NSDictionary *FCPBridge_handleTransitionsList(NSDictionary *params);
-                r = FCPBridge_handleTransitionsList(@{@"filter": keyword});
+                extern NSDictionary *SpliceKit_handleTransitionsList(NSDictionary *params);
+                r = SpliceKit_handleTransitionsList(@{@"filter": keyword});
                 applyType = @"transition_apply";
             } else {
-                extern NSDictionary *FCPBridge_handleEffectsListAvailable(NSDictionary *params);
-                r = FCPBridge_handleEffectsListAvailable(@{@"type": effectType, @"filter": keyword});
+                extern NSDictionary *SpliceKit_handleEffectsListAvailable(NSDictionary *params);
+                r = SpliceKit_handleEffectsListAvailable(@{@"type": effectType, @"filter": keyword});
                 applyType = @"effect_apply";
             }
 
@@ -2365,13 +2365,13 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                 }
 
                 self.inBrowseMode = YES;
-                NSMutableArray<FCPCommand *> *cmds = [NSMutableArray array];
+                NSMutableArray<SpliceKitCommand *> *cmds = [NSMutableArray array];
                 for (NSDictionary *item in items) {
-                    FCPCommand *cmd = [[FCPCommand alloc] init];
+                    SpliceKitCommand *cmd = [[SpliceKitCommand alloc] init];
                     cmd.name = item[@"name"] ?: @"Unknown";
                     cmd.action = item[@"effectID"] ?: @"";
                     cmd.type = applyType;
-                    cmd.category = FCPCommandCategoryEffects;
+                    cmd.category = SpliceKitCommandCategoryEffects;
                     cmd.categoryName = item[@"category"] ?: effectType;
                     cmd.shortcut = @"";
                     cmd.detail = [NSString stringWithFormat:@"Apply %@", item[@"name"]];
@@ -2395,7 +2395,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                 }
             });
         } @catch (NSException *e) {
-            FCPBridge_log(@"Exception in showMatchingEffects: %@", e.reason);
+            SpliceKit_log(@"Exception in showMatchingEffects: %@", e.reason);
         }
     });
 }
@@ -2417,7 +2417,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
             int patternCount = [action[@"count"] intValue];
             NSArray *innerActions = action[@"actions"];
             if (patternCount > 0 && [innerActions isKindOfClass:[NSArray class]]) {
-                FCPBridge_log(@"Executing repeat_pattern x%d (%lu inner actions)",
+                SpliceKit_log(@"Executing repeat_pattern x%d (%lu inner actions)",
                               patternCount, (unsigned long)innerActions.count);
                 for (int p = 0; p < patternCount; p++) {
                     [self executeActionList:innerActions];
@@ -2430,8 +2430,8 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         if ([type isEqualToString:@"seek"]) {
             NSNumber *secs = action[@"seconds"];
             if (secs) {
-                extern NSDictionary *FCPBridge_handlePlaybackSeek(NSDictionary *params);
-                FCPBridge_handlePlaybackSeek(@{@"seconds": secs});
+                extern NSDictionary *SpliceKit_handlePlaybackSeek(NSDictionary *params);
+                SpliceKit_handlePlaybackSeek(@{@"seconds": secs});
             }
             continue;
         }
@@ -2453,9 +2453,9 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         if ([type isEqualToString:@"transition"]) {
             NSString *transitionName = action[@"name"];
             if (transitionName) {
-                extern NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params);
-                FCPBridge_handleTransitionsApply(@{@"name": transitionName});
-                FCPBridge_log(@"AI applied transition: %@", transitionName);
+                extern NSDictionary *SpliceKit_handleTransitionsApply(NSDictionary *params);
+                SpliceKit_handleTransitionsApply(@{@"name": transitionName});
+                SpliceKit_log(@"AI applied transition: %@", transitionName);
             }
             continue;
         }
@@ -2524,13 +2524,13 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
 
 - (NSDictionary *)getTimelineContext {
     // Fetch timeline state to give the LLM context about duration, fps, clip count
-    extern NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params);
+    extern NSDictionary *SpliceKit_handleTimelineGetDetailedState(NSDictionary *params);
     __block NSDictionary *state = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            state = FCPBridge_handleTimelineGetDetailedState(@{@"limit": @(5)});
+            state = SpliceKit_handleTimelineGetDetailedState(@{@"limit": @(5)});
         } @catch (NSException *e) {
-            FCPBridge_log(@"Failed to get timeline context: %@", e.reason);
+            SpliceKit_log(@"Failed to get timeline context: %@", e.reason);
         }
     });
     if (!state || state[@"error"]) return nil;
@@ -2568,7 +2568,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     NSString *swiftScript = [self buildSwiftScript:query timelineContext:timelineCtx];
 
     // Write script to temp file
-    NSString *scriptPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"fcpbridge_ai.swift"];
+    NSString *scriptPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"splicekit_ai.swift"];
     NSError *writeError = nil;
     [swiftScript writeToFile:scriptPath atomically:YES encoding:NSUTF8StringEncoding error:&writeError];
     if (writeError) {
@@ -2606,7 +2606,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
 
         if (task.terminationStatus != 0) {
             // If FoundationModels isn't available, fall back to keyword matching
-            FCPBridge_log(@"AI script failed (status %d): %@", task.terminationStatus, errorOutput);
+            SpliceKit_log(@"AI script failed (status %d): %@", task.terminationStatus, errorOutput);
             NSArray *fallback = [self keywordFallback:query];
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (fallback.count > 0) {

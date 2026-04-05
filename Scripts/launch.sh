@@ -13,7 +13,7 @@ elif [ -d "$MODDED_CREATOR" ]; then
 else
     MODDED_APP="$MODDED_STANDARD"
 fi
-DYLIB="$MODDED_APP/Contents/Frameworks/FCPBridge.framework/Versions/A/FCPBridge"
+DYLIB="$MODDED_APP/Contents/Frameworks/SpliceKit.framework/Versions/A/SpliceKit"
 
 if [ ! -f "$DYLIB" ]; then
     echo "ERROR: SpliceKit dylib not found at: $DYLIB"
@@ -22,7 +22,7 @@ if [ ! -f "$DYLIB" ]; then
 fi
 
 echo "=== Launching Final Cut Pro with SpliceKit ==="
-echo "  Socket: /tmp/fcpbridge.sock"
+echo "  Socket: /tmp/splicekit.sock"
 echo "  PID will appear in Console.app under [SpliceKit]"
 echo ""
 

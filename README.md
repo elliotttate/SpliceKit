@@ -159,7 +159,7 @@ make deploy
 # Inject LC_LOAD_DYLIB into the binary (requires insert_dylib)
 # Build insert_dylib: git clone https://github.com/tyilo/insert_dylib.git && cd insert_dylib && clang -o /usr/local/bin/insert_dylib insert_dylib/main.c -framework Foundation
 insert_dylib --inplace --all-yes \
-    "@rpath/FCPBridge.framework/Versions/A/FCPBridge" \
+    "@rpath/SpliceKit.framework/Versions/A/SpliceKit" \
     ~/Library/Application\ Support/SpliceKit/"Final Cut Pro.app"/Contents/MacOS/"Final Cut Pro"
 
 # Re-sign with custom entitlements (no sandbox, library validation disabled)
@@ -255,7 +255,7 @@ Add to your `.mcp.json`:
 
 1. **App duplication**: FCP is copied to a writable location
 2. **Re-signing**: Ad-hoc signature with entitlements that disable library validation and sandbox
-3. **Binary patching**: `insert_dylib` adds an `LC_LOAD_DYLIB` command pointing to the SpliceKit framework
+3. **Binary patching**: `insert_dylib` adds an `LC_LOAD_DYLIB` command pointing to `SpliceKit.framework`
 4. **Auto-load**: On launch, dyld loads SpliceKit before `main()` runs
 5. **Constructor**: `__attribute__((constructor))` caches class references and swizzles CloudContent
 6. **Server start**: On `NSApplicationDidFinishLaunchingNotification`, starts TCP server on port 9876
@@ -273,15 +273,15 @@ FCPBridge/
 │   │   └── Views/             # WizardView, panels, log window
 │   └── patch_fcp.sh           # Command line patcher
 ├── Sources/
-│   ├── FCPBridge.h            # Public header (internal name retained)
-│   ├── FCPBridge.m            # Constructor, class caching, crash fixes, menu/toolbar
-│   ├── FCPBridgeRuntime.m     # ObjC runtime utilities
-│   ├── FCPBridgeServer.m      # JSON-RPC TCP server (33 tool endpoints)
-│   ├── FCPBridgeSwizzle.m     # Method swizzling infrastructure
-│   ├── FCPTranscriptPanel.h   # Transcript editor header
-│   ├── FCPTranscriptPanel.m   # Speech transcription, text-based editing UI
-│   ├── FCPCommandPalette.h    # Command palette header
-│   └── FCPCommandPalette.m    # Cmd+Shift+P palette with Apple Intelligence + 100 commands
+│   ├── SpliceKit.h            # Public header
+│   ├── SpliceKit.m            # Constructor, class caching, crash fixes, menu/toolbar
+│   ├── SpliceKitRuntime.m     # ObjC runtime utilities
+│   ├── SpliceKitServer.m      # JSON-RPC TCP server (33 tool endpoints)
+│   ├── SpliceKitSwizzle.m     # Method swizzling infrastructure
+│   ├── SpliceKitTranscriptPanel.h  # Transcript editor header
+│   ├── SpliceKitTranscriptPanel.m  # Speech transcription, text-based editing UI
+│   ├── SpliceKitCommandPalette.h   # Command palette header
+│   └── SpliceKitCommandPalette.m   # Cmd+Shift+P palette with Apple Intelligence + 100 commands
 ├── tools/
 │   ├── silence-detector.swift       # Audio silence detection CLI (AVFoundation + vDSP)
 │   └── parakeet-transcriber/        # On-device speech-to-text CLI (NVIDIA Parakeet via FluidAudio)

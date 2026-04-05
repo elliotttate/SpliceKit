@@ -929,7 +929,7 @@ fcpxml.pasteImport(xml='''<?xml version="1.0" encoding="UTF-8"?>
 
 ### How the Bridge Does It (implementation detail)
 
-The `FCPBridge_handlePasteboardImportXML` function in `FCPBridgeServer.m`:
+The `SpliceKit_handlePasteboardImportXML` function in `SpliceKitServer.m`:
 
 1. **Writes FCPXML to the system pasteboard** using `IXXMLPasteboardType.generic` and `.current` UTIs
 2. **Creates `FFXMLTranslationTask`** from the pasteboard via `initForPasteboard:`
@@ -974,7 +974,7 @@ class SFXViewModel: ObservableObject {
         let fcpxml = buildFCPXML(item: item)
         
         // Send to SpliceKit — it handles import + attribute restoration
-        FCPBridgeClient.shared.pasteImport(xml: fcpxml) { result in
+        SpliceKitClient.shared.pasteImport(xml: fcpxml) { result in
             print("Import result: \(result)")
         }
     }
@@ -1025,8 +1025,8 @@ class SFXViewModel: ObservableObject {
 ```swift
 import Foundation
 
-class FCPBridgeClient {
-    static let shared = FCPBridgeClient()
+class SpliceKitClient {
+    static let shared = SpliceKitClient()
     
     private let host = "127.0.0.1"
     private let port: UInt16 = 9876
@@ -1150,10 +1150,10 @@ class SFXDragProvider: NSObject, NSPasteboardItemDataProvider {
     func restoreAttributes() {
         // Small delay to let FCP process the drop
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            FCPBridgeClient.shared.timelineAction("selectClipAtPlayhead") { _ in
-                FCPBridgeClient.shared.setInspectorProperty("volume", value: self.item.volumeDB) { _ in
+            SpliceKitClient.shared.timelineAction("selectClipAtPlayhead") { _ in
+                SpliceKitClient.shared.setInspectorProperty("volume", value: self.item.volumeDB) { _ in
                     if let opa = self.item.opacity {
-                        FCPBridgeClient.shared.setInspectorProperty("opacity", value: opa) { _ in }
+                        SpliceKitClient.shared.setInspectorProperty("opacity", value: opa) { _ in }
                     }
                 }
             }

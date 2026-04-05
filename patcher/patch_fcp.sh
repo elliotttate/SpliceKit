@@ -240,10 +240,12 @@ BUILD_DIR="$REPO_DIR/build"
 mkdir -p "$BUILD_DIR"
 
 SOURCES=(
-    "$REPO_DIR/Sources/FCPBridge.m"
-    "$REPO_DIR/Sources/FCPBridgeRuntime.m"
-    "$REPO_DIR/Sources/FCPBridgeSwizzle.m"
-    "$REPO_DIR/Sources/FCPBridgeServer.m"
+    "$REPO_DIR/Sources/SpliceKit.m"
+    "$REPO_DIR/Sources/SpliceKitRuntime.m"
+    "$REPO_DIR/Sources/SpliceKitSwizzle.m"
+    "$REPO_DIR/Sources/SpliceKitServer.m"
+    "$REPO_DIR/Sources/SpliceKitTranscriptPanel.m"
+    "$REPO_DIR/Sources/SpliceKitCommandPalette.m"
 )
 
 info "Compiling ${#SOURCES[@]} source files..."
@@ -252,27 +254,27 @@ clang -arch arm64 -arch x86_64 \
     -framework Foundation -framework AppKit \
     -fobjc-arc -fmodules \
     -undefined dynamic_lookup -dynamiclib \
-    -install_name @rpath/FCPBridge.framework/Versions/A/FCPBridge \
+    -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
     -I "$REPO_DIR/Sources" \
     "${SOURCES[@]}" \
-    -o "$BUILD_DIR/FCPBridge" 2>&1
+    -o "$BUILD_DIR/SpliceKit" 2>&1
 
-log "Built: $(file "$BUILD_DIR/FCPBridge" | grep -o 'universal.*')"
+log "Built: $(file "$BUILD_DIR/SpliceKit" | grep -o 'universal.*')"
 
 # ============================================================
 # Step 3: Create framework bundle
 # ============================================================
 step "Step 3: Installing SpliceKit framework"
 
-FW_DIR="$MODDED_APP/Contents/Frameworks/FCPBridge.framework"
+FW_DIR="$MODDED_APP/Contents/Frameworks/SpliceKit.framework"
 mkdir -p "$FW_DIR/Versions/A/Resources"
 
 # Copy dylib
-cp "$BUILD_DIR/FCPBridge" "$FW_DIR/Versions/A/FCPBridge"
+cp "$BUILD_DIR/SpliceKit" "$FW_DIR/Versions/A/SpliceKit"
 
 # Create symlinks
 cd "$FW_DIR/Versions" && ln -sf A Current
-cd "$FW_DIR" && ln -sf Versions/Current/FCPBridge FCPBridge
+cd "$FW_DIR" && ln -sf Versions/Current/SpliceKit SpliceKit
 cd "$FW_DIR" && ln -sf Versions/Current/Resources Resources
 
 # Create Info.plist
@@ -281,12 +283,12 @@ cat > "$FW_DIR/Versions/A/Resources/Info.plist" << 'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key><string>com.fcpbridge.FCPBridge</string>
-    <key>CFBundleName</key><string>FCPBridge</string>
+    <key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string>
+    <key>CFBundleName</key><string>SpliceKit</string>
     <key>CFBundleVersion</key><string>2.0.0</string>
     <key>CFBundleShortVersionString</key><string>2.0.0</string>
     <key>CFBundlePackageType</key><string>FMWK</string>
-    <key>CFBundleExecutable</key><string>FCPBridge</string>
+    <key>CFBundleExecutable</key><string>SpliceKit</string>
 </dict>
 </plist>
 PLIST
@@ -301,11 +303,11 @@ step "Step 4: Injecting dylib into FCP binary"
 BINARY="$MODDED_APP/Contents/MacOS/Final Cut Pro"
 
 # Check if already injected
-if otool -L "$BINARY" 2>/dev/null | grep -q FCPBridge; then
+if otool -L "$BINARY" 2>/dev/null | grep -q SpliceKit; then
     log "Already injected (skipping)"
 else
     # Build insert_dylib if needed
-    INSERT_DYLIB="/tmp/fcpbridge_insert_dylib"
+    INSERT_DYLIB="/tmp/splicekit_insert_dylib"
     if [[ ! -f "$INSERT_DYLIB" ]]; then
         info "Building insert_dylib tool..."
         TMPDIR_ID=$(mktemp -d)
@@ -316,7 +318,7 @@ else
     fi
 
     "$INSERT_DYLIB" --inplace --all-yes \
-        "@rpath/FCPBridge.framework/Versions/A/FCPBridge" \
+        "@rpath/SpliceKit.framework/Versions/A/SpliceKit" \
         "$BINARY" 2>/dev/null
 
     log "LC_LOAD_DYLIB injected"
@@ -345,7 +347,7 @@ ENT
 # Apple's own frameworks must keep their original signatures or internal
 # integrity checks (e.g. ProAppSupport +[PCApp isiMovie]) abort on launch.
 info "Signing SpliceKit framework..."
-codesign --force --sign - "$MODDED_APP/Contents/Frameworks/FCPBridge.framework" 2>/dev/null || true
+codesign --force --sign - "$MODDED_APP/Contents/Frameworks/SpliceKit.framework" 2>/dev/null || true
 
 # Sign main app with entitlements (disables library validation so our
 # ad-hoc-signed SpliceKit framework loads alongside Apple-signed frameworks)

@@ -1,5 +1,5 @@
 //
-//  FCPTranscriptPanel.m
+//  SpliceKitTranscriptPanel.m
 //  Text-based video editing via speech transcription
 //
 //  Creates a floating panel inside FCP that shows a transcript of timeline clips.
@@ -10,8 +10,8 @@
 //  Dragging words reorders clips on the timeline.
 //
 
-#import "FCPTranscriptPanel.h"
-#import "FCPBridge.h"
+#import "SpliceKitTranscriptPanel.h"
+#import "SpliceKit.h"
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -20,7 +20,7 @@
 static Class SFSpeechRecognizerClass = nil;
 static Class SFSpeechURLRecognitionRequestClass = nil;
 
-static void FCPTranscript_loadSpeechFramework(void) {
+static void SpliceKitTranscript_loadSpeechFramework(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         NSBundle *speechBundle = [NSBundle bundleWithPath:
@@ -28,16 +28,16 @@ static void FCPTranscript_loadSpeechFramework(void) {
         if ([speechBundle load]) {
             SFSpeechRecognizerClass = objc_getClass("SFSpeechRecognizer");
             SFSpeechURLRecognitionRequestClass = objc_getClass("SFSpeechURLRecognitionRequest");
-            FCPBridge_log(@"[Transcript] Speech.framework loaded: recognizer=%@, request=%@",
+            SpliceKit_log(@"[Transcript] Speech.framework loaded: recognizer=%@, request=%@",
                           SFSpeechRecognizerClass, SFSpeechURLRecognitionRequestClass);
         } else {
-            FCPBridge_log(@"[Transcript] ERROR: Failed to load Speech.framework");
+            SpliceKit_log(@"[Transcript] ERROR: Failed to load Speech.framework");
         }
     });
 }
 
 // macOS 26+ check for speaker diarization support
-static BOOL FCPTranscript_isSpeakerDiarizationAvailable(void) {
+static BOOL SpliceKitTranscript_isSpeakerDiarizationAvailable(void) {
     NSOperatingSystemVersion v = [[NSProcessInfo processInfo] operatingSystemVersion];
     // macOS 26 (Darwin 25.x) added SFSpeechRecognitionRequest.addsSpeakerAttribution
     return v.majorVersion >= 26;
@@ -45,7 +45,7 @@ static BOOL FCPTranscript_isSpeakerDiarizationAvailable(void) {
 
 #pragma mark - Timecode Formatting
 
-static NSString *FCPTranscript_timecodeFromSeconds(double seconds, double fps) {
+static NSString *SpliceKitTranscript_timecodeFromSeconds(double seconds, double fps) {
     if (fps <= 0) fps = 24;
     if (seconds < 0) seconds = 0;
     int totalFrames = (int)(seconds * fps + 0.5);
@@ -59,9 +59,9 @@ static NSString *FCPTranscript_timecodeFromSeconds(double seconds, double fps) {
     return [NSString stringWithFormat:@"%02d:%02d:%02d:%02d", hours, mins, secs, frames];
 }
 
-#pragma mark - FCPTranscriptWord
+#pragma mark - SpliceKitTranscriptWord
 
-@implementation FCPTranscriptWord
+@implementation SpliceKitTranscriptWord
 
 - (instancetype)init {
     self = [super init];
@@ -82,9 +82,9 @@ static NSString *FCPTranscript_timecodeFromSeconds(double seconds, double fps) {
 
 @end
 
-#pragma mark - FCPTranscriptSilence
+#pragma mark - SpliceKitTranscriptSilence
 
-@implementation FCPTranscriptSilence
+@implementation SpliceKitTranscriptSilence
 
 - (NSString *)description {
     return [NSString stringWithFormat:@"Silence: %.2f-%.2f (%.2fs) after word %lu",
@@ -95,7 +95,7 @@ static NSString *FCPTranscript_timecodeFromSeconds(double seconds, double fps) {
 
 #pragma mark - Forward Declarations
 
-@interface FCPTranscriptPanel (TextViewCallbacks)
+@interface SpliceKitTranscriptPanel (TextViewCallbacks)
 - (void)handleClickAtCharIndex:(NSUInteger)charIdx;
 - (void)handleDeleteKeyInTextView;
 - (void)handleDropOfWordStart:(NSUInteger)srcStart count:(NSUInteger)srcCount atCharIndex:(NSUInteger)charIdx;
@@ -104,7 +104,7 @@ static NSString *FCPTranscript_timecodeFromSeconds(double seconds, double fps) {
 - (void)focusSearchField;
 @end
 
-static NSPasteboardType const FCPTranscriptWordDragType = @"com.fcpbridge.transcript.words";
+static NSPasteboardType const SpliceKitTranscriptWordDragType = @"com.splicekit.transcript.words";
 
 // Custom attribute keys for tracking what's at each position in the text view
 static NSString *const FCPAttrItemType = @"FCPItemType";
@@ -116,21 +116,21 @@ static NSString *const FCPAttrSegmentEndIndex = @"FCPSegmentEndIndex";
 
 #pragma mark - Custom Text View for Transcript
 
-@interface FCPTranscriptTextView : NSTextView <NSDraggingSource>
-@property (nonatomic, weak) FCPTranscriptPanel *transcriptPanel;
+@interface SpliceKitTranscriptTextView : NSTextView <NSDraggingSource>
+@property (nonatomic, weak) SpliceKitTranscriptPanel *transcriptPanel;
 @property (nonatomic) BOOL isDragging;
 @property (nonatomic) NSPoint dragOrigin;
 @end
 
-@implementation FCPTranscriptTextView
+@implementation SpliceKitTranscriptTextView
 
 - (void)awakeFromNib {
     [super awakeFromNib];
-    [self registerForDraggedTypes:@[FCPTranscriptWordDragType]];
+    [self registerForDraggedTypes:@[SpliceKitTranscriptWordDragType]];
 }
 
 - (void)setupDragTypes {
-    [self registerForDraggedTypes:@[FCPTranscriptWordDragType]];
+    [self registerForDraggedTypes:@[SpliceKitTranscriptWordDragType]];
 }
 
 - (void)mouseDown:(NSEvent *)event {
@@ -194,7 +194,7 @@ static NSString *const FCPAttrSegmentEndIndex = @"FCPSegmentEndIndex";
     NSString *data = [NSString stringWithFormat:@"%lu,%lu",
         (unsigned long)wordRange.location, (unsigned long)wordRange.length];
     NSPasteboardItem *pbItem = [[NSPasteboardItem alloc] init];
-    [pbItem setString:data forType:FCPTranscriptWordDragType];
+    [pbItem setString:data forType:SpliceKitTranscriptWordDragType];
 
     NSString *dragText = [[self.textStorage string] substringWithRange:sel];
 
@@ -237,7 +237,7 @@ static NSString *const FCPAttrSegmentEndIndex = @"FCPSegmentEndIndex";
 // NSDraggingDestination
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
     NSPasteboard *pb = [sender draggingPasteboard];
-    if ([pb availableTypeFromArray:@[FCPTranscriptWordDragType]]) {
+    if ([pb availableTypeFromArray:@[SpliceKitTranscriptWordDragType]]) {
         return NSDragOperationMove;
     }
     return NSDragOperationNone;
@@ -245,7 +245,7 @@ static NSString *const FCPAttrSegmentEndIndex = @"FCPSegmentEndIndex";
 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
     NSPasteboard *pb = [sender draggingPasteboard];
-    if ([pb availableTypeFromArray:@[FCPTranscriptWordDragType]]) {
+    if ([pb availableTypeFromArray:@[SpliceKitTranscriptWordDragType]]) {
         NSPoint point = [self convertPoint:[sender draggingLocation] fromView:nil];
         NSUInteger charIdx = [self characterIndexForInsertionAtPoint:point];
         [self setSelectedRange:NSMakeRange(charIdx, 0)];
@@ -260,7 +260,7 @@ static NSString *const FCPAttrSegmentEndIndex = @"FCPSegmentEndIndex";
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
     NSPasteboard *pb = [sender draggingPasteboard];
-    NSString *data = [pb stringForType:FCPTranscriptWordDragType];
+    NSString *data = [pb stringForType:SpliceKitTranscriptWordDragType];
     if (!data) return NO;
 
     NSArray *parts = [data componentsSeparatedByString:@","];
@@ -323,18 +323,18 @@ static NSString *const FCPAttrSegmentEndIndex = @"FCPSegmentEndIndex";
 
 @end
 
-#pragma mark - FCPTranscriptPanel Private
+#pragma mark - SpliceKitTranscriptPanel Private
 
-typedef struct { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch; } FCPTranscript_CMTime;
-typedef struct { FCPTranscript_CMTime start; FCPTranscript_CMTime duration; } FCPTranscript_CMTimeRange;
+typedef struct { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch; } SpliceKitTranscript_CMTime;
+typedef struct { SpliceKitTranscript_CMTime start; SpliceKitTranscript_CMTime duration; } SpliceKitTranscript_CMTimeRange;
 
-static double CMTimeToSeconds(FCPTranscript_CMTime t) {
+static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
     return (t.timescale > 0) ? (double)t.value / t.timescale : 0;
 }
 
-@interface FCPTranscriptPanel () <NSTextViewDelegate, NSWindowDelegate, NSSearchFieldDelegate>
+@interface SpliceKitTranscriptPanel () <NSTextViewDelegate, NSWindowDelegate, NSSearchFieldDelegate>
 @property (nonatomic, strong) NSPanel *panel;
-@property (nonatomic, strong) FCPTranscriptTextView *textView;
+@property (nonatomic, strong) SpliceKitTranscriptTextView *textView;
 @property (nonatomic, strong) NSScrollView *scrollView;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) NSProgressIndicator *spinner;
@@ -351,9 +351,9 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 @property (nonatomic, strong) NSButton *nextResultButton;
 
 // Data
-@property (nonatomic, readwrite) FCPTranscriptStatus status;
-@property (nonatomic, readwrite, strong) NSMutableArray<FCPTranscriptWord *> *mutableWords;
-@property (nonatomic, readwrite, strong) NSMutableArray<FCPTranscriptSilence *> *mutableSilences;
+@property (nonatomic, readwrite) SpliceKitTranscriptStatus status;
+@property (nonatomic, readwrite, strong) NSMutableArray<SpliceKitTranscriptWord *> *mutableWords;
+@property (nonatomic, readwrite, strong) NSMutableArray<SpliceKitTranscriptSilence *> *mutableSilences;
 @property (nonatomic, readwrite, copy) NSString *fullText;
 @property (nonatomic, readwrite, copy) NSString *errorMessage;
 
@@ -387,15 +387,15 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 @property (nonatomic) double frameRate;
 @end
 
-@implementation FCPTranscriptPanel
+@implementation SpliceKitTranscriptPanel
 
 #pragma mark - Singleton
 
 + (instancetype)sharedPanel {
-    static FCPTranscriptPanel *instance = nil;
+    static SpliceKitTranscriptPanel *instance = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        instance = [[FCPTranscriptPanel alloc] init];
+        instance = [[SpliceKitTranscriptPanel alloc] init];
     });
     return instance;
 }
@@ -403,7 +403,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _status = FCPTranscriptStatusIdle;
+        _status = SpliceKitTranscriptStatusIdle;
         _mutableWords = [NSMutableArray array];
         _mutableSilences = [NSMutableArray array];
         _pendingTranscriptions = [NSMutableArray array];
@@ -412,7 +412,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         _currentFilter = @"all";
         _silenceThreshold = 0.3; // 300ms default
         _frameRate = 24.0;
-        _engine = FCPTranscriptEngineParakeet; // Default to Parakeet (fastest, most accurate)
+        _engine = SpliceKitTranscriptEngineParakeet; // Default to Parakeet (fastest, most accurate)
         _parakeetModelVersion = @"v3"; // v3 = multilingual, v2 = English-optimized
         _lastPlayheadHighlightRange = NSMakeRange(NSNotFound, 0);
 
@@ -431,7 +431,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 - (void)setupPanelIfNeeded {
     if (self.panel) return;
 
-    FCPBridge_log(@"[Transcript] Setting up panel UI");
+    SpliceKit_log(@"[Transcript] Setting up panel UI");
 
     // Create floating panel — wider for segment layout
     NSRect frame = NSMakeRect(100, 150, 620, 700);
@@ -613,7 +613,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     // the clip view. lineFragmentPadding provides left/right text padding within the
     // text container; textContainerInset provides top/bottom only.
     NSSize cs = self.scrollView.contentSize;
-    self.textView = [[FCPTranscriptTextView alloc] initWithFrame:
+    self.textView = [[SpliceKitTranscriptTextView alloc] initWithFrame:
         NSMakeRect(0, 0, cs.width, cs.height)];
     self.textView.transcriptPanel = self;
     self.textView.minSize = NSMakeSize(0, cs.height);
@@ -732,7 +732,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [self setupPanelIfNeeded];
         [self.panel makeKeyAndOrderFront:nil];
-        if (self.status == FCPTranscriptStatusReady && self.mutableWords.count > 0) {
+        if (self.status == SpliceKitTranscriptStatusReady && self.mutableWords.count > 0) {
             [self startPlayheadTimer];
         }
     });
@@ -766,33 +766,33 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 - (void)engineChanged:(id)sender {
     NSString *selected = self.enginePopup.titleOfSelectedItem;
     if ([selected isEqualToString:@"Apple Speech"]) {
-        self.engine = FCPTranscriptEngineAppleSpeech;
-        FCPBridge_log(@"[Transcript] Engine switched to Apple Speech (SFSpeechRecognizer)");
+        self.engine = SpliceKitTranscriptEngineAppleSpeech;
+        SpliceKit_log(@"[Transcript] Engine switched to Apple Speech (SFSpeechRecognizer)");
     } else if ([selected hasPrefix:@"Parakeet"]) {
-        self.engine = FCPTranscriptEngineParakeet;
+        self.engine = SpliceKitTranscriptEngineParakeet;
         if ([selected isEqualToString:@"Parakeet v2"]) {
             self.parakeetModelVersion = @"v2";
-            FCPBridge_log(@"[Transcript] Engine switched to Parakeet v2 (English-optimized)");
+            SpliceKit_log(@"[Transcript] Engine switched to Parakeet v2 (English-optimized)");
         } else {
             self.parakeetModelVersion = @"v3";
-            FCPBridge_log(@"[Transcript] Engine switched to Parakeet v3 (Multilingual)");
+            SpliceKit_log(@"[Transcript] Engine switched to Parakeet v3 (Multilingual)");
         }
     } else {
-        self.engine = FCPTranscriptEngineFCPNative;
-        FCPBridge_log(@"[Transcript] Engine switched to FCP Native (AASpeechAnalyzer)");
+        self.engine = SpliceKitTranscriptEngineFCPNative;
+        SpliceKit_log(@"[Transcript] Engine switched to FCP Native (AASpeechAnalyzer)");
     }
     [self updateSpeakerCheckboxState];
 }
 
 - (void)speakerDetectionToggled:(id)sender {
     self.speakerDetectionEnabled = (self.speakerDetectionCheckbox.state == NSControlStateValueOn);
-    FCPBridge_log(@"[Transcript] Speaker detection %@", self.speakerDetectionEnabled ? @"enabled" : @"disabled");
+    SpliceKit_log(@"[Transcript] Speaker detection %@", self.speakerDetectionEnabled ? @"enabled" : @"disabled");
 }
 
 - (void)updateSpeakerCheckboxState {
-    BOOL macOS26 = FCPTranscript_isSpeakerDiarizationAvailable();
-    BOOL isAppleSpeech = (self.engine == FCPTranscriptEngineAppleSpeech);
-    BOOL isParakeet = (self.engine == FCPTranscriptEngineParakeet);
+    BOOL macOS26 = SpliceKitTranscript_isSpeakerDiarizationAvailable();
+    BOOL isAppleSpeech = (self.engine == SpliceKitTranscriptEngineAppleSpeech);
+    BOOL isParakeet = (self.engine == SpliceKitTranscriptEngineParakeet);
 
     if (isParakeet) {
         // Parakeet has built-in diarization via FluidAudio — always available
@@ -851,7 +851,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     @synchronized (self.mutableWords) {
         for (NSValue *rangeVal in self.searchResultRanges) {
             NSRange range = rangeVal.rangeValue;
-            for (FCPTranscriptWord *word in self.mutableWords) {
+            for (SpliceKitTranscriptWord *word in self.mutableWords) {
                 NSRange intersection = NSIntersectionRange(range, word.textRange);
                 if (intersection.length > 0) {
                     [wordIndicesToDelete addObject:@(word.wordIndex)];
@@ -935,7 +935,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
     if (filterPauses) {
         // Highlight all silence markers
-        for (FCPTranscriptSilence *silence in self.mutableSilences) {
+        for (SpliceKitTranscriptSilence *silence in self.mutableSilences) {
             if (silence.textRange.location + silence.textRange.length <= storage.length) {
                 [self.searchResultRanges addObject:[NSValue valueWithRange:silence.textRange]];
                 [storage addAttribute:NSBackgroundColorAttributeName
@@ -946,7 +946,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     } else if (filterLowConf) {
         // Highlight low confidence words
         @synchronized (self.mutableWords) {
-            for (FCPTranscriptWord *word in self.mutableWords) {
+            for (SpliceKitTranscriptWord *word in self.mutableWords) {
                 if (word.confidence < 0.5 && word.textRange.location + word.textRange.length <= storage.length) {
                     [self.searchResultRanges addObject:[NSValue valueWithRange:word.textRange]];
                     [storage addAttribute:NSBackgroundColorAttributeName
@@ -1048,7 +1048,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     // Check for special keywords
     if ([[query lowercaseString] isEqualToString:@"pauses"] ||
         [[query lowercaseString] isEqualToString:@"silences"]) {
-        for (FCPTranscriptSilence *silence in self.mutableSilences) {
+        for (SpliceKitTranscriptSilence *silence in self.mutableSilences) {
             [results addObject:@{
                 @"type": @"silence",
                 @"startTime": @(silence.startTime),
@@ -1062,7 +1062,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
     // Text search through words
     @synchronized (self.mutableWords) {
-        for (FCPTranscriptWord *word in self.mutableWords) {
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
             if ([word.text rangeOfString:query options:NSCaseInsensitiveSearch].location != NSNotFound) {
                 [results addObject:@{
                     @"type": @"word",
@@ -1091,7 +1091,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
 - (void)requestSpeechAuthorizationWithCompletion:(void(^)(BOOL authorized))completion {
     if (!SFSpeechRecognizerClass) {
-        FCPBridge_log(@"[Transcript] Speech framework not loaded");
+        SpliceKit_log(@"[Transcript] Speech framework not loaded");
         completion(NO);
         return;
     }
@@ -1100,7 +1100,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     // SFSpeechRecognizerAuthorizationStatus: 0=notDetermined, 1=denied, 2=restricted, 3=authorized
     SEL statusSel = NSSelectorFromString(@"authorizationStatus");
     NSInteger status = ((NSInteger (*)(Class, SEL))objc_msgSend)(SFSpeechRecognizerClass, statusSel);
-    FCPBridge_log(@"[Transcript] Speech authorization status: %ld", (long)status);
+    SpliceKit_log(@"[Transcript] Speech authorization status: %ld", (long)status);
 
     if (status == 3) { // authorized
         completion(YES);
@@ -1108,28 +1108,28 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     }
 
     if (status == 0) { // notDetermined — request it, which should trigger the system dialog
-        FCPBridge_log(@"[Transcript] Requesting speech recognition authorization...");
+        SpliceKit_log(@"[Transcript] Requesting speech recognition authorization...");
         SEL reqSel = NSSelectorFromString(@"requestAuthorization:");
         ((void (*)(Class, SEL, id))objc_msgSend)(SFSpeechRecognizerClass, reqSel,
             ^(NSInteger newStatus) {
-                FCPBridge_log(@"[Transcript] Authorization callback: %ld", (long)newStatus);
+                SpliceKit_log(@"[Transcript] Authorization callback: %ld", (long)newStatus);
                 completion(newStatus == 3);
             });
         return;
     }
 
     // denied or restricted — still try, on-device recognition may work without full authorization
-    FCPBridge_log(@"[Transcript] Speech auth status %ld, attempting anyway (on-device may work)", (long)status);
+    SpliceKit_log(@"[Transcript] Speech auth status %ld, attempting anyway (on-device may work)", (long)status);
     completion(YES);
 }
 
 #pragma mark - Transcribe Timeline
 
 - (void)transcribeTimeline {
-    FCPBridge_log(@"[Transcript] Starting timeline transcription");
+    SpliceKit_log(@"[Transcript] Starting timeline transcription");
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.status = FCPTranscriptStatusTranscribing;
+        self.status = SpliceKitTranscriptStatusTranscribing;
         self.errorMessage = nil;
         [self updateStatusUI:@"Analyzing timeline..."];
         self.spinner.hidden = NO;
@@ -1142,7 +1142,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     });
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        if (self.engine == FCPTranscriptEngineFCPNative || self.engine == FCPTranscriptEngineParakeet) {
+        if (self.engine == SpliceKitTranscriptEngineFCPNative || self.engine == SpliceKitTranscriptEngineParakeet) {
             // FCP Native and Parakeet don't need Apple speech authorization
             [self performTimelineTranscription];
         } else {
@@ -1164,7 +1164,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
         double clipDuration = 0;
         if ([item respondsToSelector:@selector(duration)]) {
-            FCPTranscript_CMTime d = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(item, @selector(duration));
+            SpliceKitTranscript_CMTime d = ((SpliceKitTranscript_CMTime (*)(id, SEL))objc_msgSend)(item, @selector(duration));
             clipDuration = CMTimeToSeconds(d);
         }
 
@@ -1177,7 +1177,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             *timelinePos += clipDuration;
 
         } else if (isCollection && clipDuration > 0) {
-            FCPBridge_log(@"[Transcript] Collection: %@ (%.2fs) at %.2fs", className, clipDuration, *timelinePos);
+            SpliceKit_log(@"[Transcript] Collection: %@ (%.2fs) at %.2fs", className, clipDuration, *timelinePos);
 
             id innerMedia = [self findFirstMediaInContainer:item];
             if (innerMedia) {
@@ -1185,15 +1185,15 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                 SEL crSel = NSSelectorFromString(@"clippedRange");
                 if ([item respondsToSelector:crSel]) {
                     NSMethodSignature *sig = [item methodSignatureForSelector:crSel];
-                    if (sig && [sig methodReturnLength] == sizeof(FCPTranscript_CMTimeRange)) {
-                        FCPTranscript_CMTimeRange range;
+                    if (sig && [sig methodReturnLength] == sizeof(SpliceKitTranscript_CMTimeRange)) {
+                        SpliceKitTranscript_CMTimeRange range;
                         NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
                         [inv setTarget:item];
                         [inv setSelector:crSel];
                         [inv invoke];
                         [inv getReturnValue:&range];
                         collTrimStart = CMTimeToSeconds(range.start);
-                        FCPBridge_log(@"[Transcript]   collection clippedRange: start=%.2fs dur=%.2fs",
+                        SpliceKit_log(@"[Transcript]   collection clippedRange: start=%.2fs dur=%.2fs",
                                       collTrimStart, CMTimeToSeconds(range.duration));
                     }
                 }
@@ -1238,8 +1238,8 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     SEL unclippedSel = NSSelectorFromString(@"unclippedRange");
     if ([clip respondsToSelector:unclippedSel]) {
         NSMethodSignature *sig = [clip methodSignatureForSelector:unclippedSel];
-        if (sig && [sig methodReturnLength] == sizeof(FCPTranscript_CMTimeRange)) {
-            FCPTranscript_CMTimeRange range;
+        if (sig && [sig methodReturnLength] == sizeof(SpliceKitTranscript_CMTimeRange)) {
+            SpliceKitTranscript_CMTimeRange range;
             NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
             [inv setTarget:clip];
             [inv setSelector:unclippedSel];
@@ -1256,7 +1256,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSMutableDictionary *info = [NSMutableDictionary dictionary];
     info[@"timelineStart"] = @(timelinePos);
     info[@"duration"] = @(clipDuration);
-    info[@"handle"] = FCPBridge_storeHandle(clip);
+    info[@"handle"] = SpliceKit_storeHandle(clip);
     info[@"className"] = NSStringFromClass([clip class]);
     info[@"trimStart"] = @(trimStart);
 
@@ -1270,7 +1270,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         info[@"mediaURL"] = mediaURL;
     }
 
-    FCPBridge_log(@"[Transcript] Clip at %.2fs (dur=%.2fs, trim=%.2fs): %@ -> %@",
+    SpliceKit_log(@"[Transcript] Clip at %.2fs (dur=%.2fs, trim=%.2fs): %@ -> %@",
                   timelinePos, clipDuration, trimStart, info[@"name"],
                   mediaURL ? [mediaURL path] : @"(no URL)");
 
@@ -1278,9 +1278,9 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 }
 
 - (void)performTimelineTranscription {
-    if (self.engine == FCPTranscriptEngineFCPNative) {
+    if (self.engine == SpliceKitTranscriptEngineFCPNative) {
         [self performFCPNativeTranscription];
-    } else if (self.engine == FCPTranscriptEngineParakeet) {
+    } else if (self.engine == SpliceKitTranscriptEngineParakeet) {
         [self performParakeetTranscription];
     } else {
         [self performAppleSpeechTranscription];
@@ -1290,7 +1290,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 #pragma mark - FCP Native Transcription (AASpeechAnalyzer via FFTranscriptionCoordinator)
 
 - (void)performFCPNativeTranscription {
-    FCPBridge_log(@"[Transcript] Using FCP Native engine (FFTranscriptionCoordinator)");
+    SpliceKit_log(@"[Transcript] Using FCP Native engine (FFTranscriptionCoordinator)");
 
     // Gather assets from timeline clips on the main thread.
     // FCP's own startBackgroundTranscriptionForClips: iterates clips and calls
@@ -1298,7 +1298,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     // We replicate that exact pattern here.
     __block NSArray *assetArray = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id timeline = [self getActiveTimelineModule];
             if (!timeline) {
@@ -1308,7 +1308,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
             // Detect frame rate
             if ([timeline respondsToSelector:@selector(sequenceFrameDuration)]) {
-                FCPTranscript_CMTime fd = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
+                SpliceKitTranscript_CMTime fd = ((SpliceKitTranscript_CMTime (*)(id, SEL))objc_msgSend)(
                     timeline, @selector(sequenceFrameDuration));
                 if (fd.timescale > 0 && fd.value > 0) {
                     self.frameRate = (double)fd.timescale / fd.value;
@@ -1351,7 +1351,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                     id itemAssets = ((id (*)(id, SEL))objc_msgSend)(item, assetsSel);
                     if ([itemAssets isKindOfClass:[NSSet class]] && [(NSSet *)itemAssets count] > 0) {
                         [clipObjects addObject:item];
-                        FCPBridge_log(@"[Transcript] Item %@ has %lu assets",
+                        SpliceKit_log(@"[Transcript] Item %@ has %lu assets",
                             NSStringFromClass([item class]), (unsigned long)[(NSSet *)itemAssets count]);
                     }
                 }
@@ -1360,11 +1360,11 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             // If no items had assets, try the sequence itself
             if (clipObjects.count == 0 && [sequence respondsToSelector:assetsSel]) {
                 [clipObjects addObject:sequence];
-                FCPBridge_log(@"[Transcript] Using sequence as clip source");
+                SpliceKit_log(@"[Transcript] Using sequence as clip source");
             }
 
             assetArray = clipObjects;
-            FCPBridge_log(@"[Transcript] Collected %lu clip objects for transcription",
+            SpliceKit_log(@"[Transcript] Collected %lu clip objects for transcription",
                 (unsigned long)assetArray.count);
 
         } @catch (NSException *e) {
@@ -1373,13 +1373,13 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     });
 
     if (!assetArray || assetArray.count == 0) {
-        if (self.status != FCPTranscriptStatusError) {
+        if (self.status != SpliceKitTranscriptStatusError) {
             [self setErrorState:@"No assets found on timeline. Try Apple Speech engine instead."];
         }
         return;
     }
 
-    FCPBridge_log(@"[Transcript] Found %lu assets for FCP native transcription", (unsigned long)assetArray.count);
+    SpliceKit_log(@"[Transcript] Found %lu assets for FCP native transcription", (unsigned long)assetArray.count);
 
     dispatch_async(dispatch_get_main_queue(), ^{
         [self updateStatusUI:[NSString stringWithFormat:@"Transcribing %lu asset(s) via FCP engine...",
@@ -1420,7 +1420,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         NSString *locale = [[NSLocale currentLocale] languageCode] ?: @"en";
         NSString *localeID = [[NSLocale currentLocale] localeIdentifier] ?: @"en-US";
 
-        FCPBridge_log(@"[Transcript] Calling modalTranscriptsForClips with %lu assets, locale=%@",
+        SpliceKit_log(@"[Transcript] Calling modalTranscriptsForClips with %lu assets, locale=%@",
                       (unsigned long)assetArray.count, localeID);
 
         // modalTranscriptsForClips:locale: — synchronous, must be called off main thread
@@ -1433,7 +1433,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             return;
         }
 
-        FCPBridge_log(@"[Transcript] FCP transcription complete, processing results...");
+        SpliceKit_log(@"[Transcript] FCP transcription complete, processing results...");
 
         dispatch_async(dispatch_get_main_queue(), ^{
             [self updateStatusUI:@"Processing transcript..."];
@@ -1475,9 +1475,9 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                         // Get timeRange (CMTimeRange struct)
                         SEL trSel = NSSelectorFromString(@"timeRange");
                         NSMethodSignature *sig = [fcpWord methodSignatureForSelector:trSel];
-                        if (!sig || [sig methodReturnLength] != sizeof(FCPTranscript_CMTimeRange)) continue;
+                        if (!sig || [sig methodReturnLength] != sizeof(SpliceKitTranscript_CMTimeRange)) continue;
 
-                        FCPTranscript_CMTimeRange timeRange;
+                        SpliceKitTranscript_CMTimeRange timeRange;
                         NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
                         [inv setTarget:fcpWord];
                         [inv setSelector:trSel];
@@ -1489,7 +1489,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
                         if (duration <= 0) continue;
 
-                        FCPTranscriptWord *word = [[FCPTranscriptWord alloc] init];
+                        SpliceKitTranscriptWord *word = [[SpliceKitTranscriptWord alloc] init];
                         word.text = text;
                         word.startTime = startTime;
                         word.duration = duration;
@@ -1505,15 +1505,15 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                 }
             }
         } @catch (NSException *e) {
-            FCPBridge_log(@"[Transcript] Exception extracting results: %@", e.reason);
+            SpliceKit_log(@"[Transcript] Exception extracting results: %@", e.reason);
         }
 
-        FCPBridge_log(@"[Transcript] Extracted %lu words from FCP native transcription", (unsigned long)totalWords);
+        SpliceKit_log(@"[Transcript] Extracted %lu words from FCP native transcription", (unsigned long)totalWords);
 
         // Finalize on main thread
         dispatch_async(dispatch_get_main_queue(), ^{
             @synchronized (self.mutableWords) {
-                [self.mutableWords sortUsingComparator:^NSComparisonResult(FCPTranscriptWord *a, FCPTranscriptWord *b) {
+                [self.mutableWords sortUsingComparator:^NSComparisonResult(SpliceKitTranscriptWord *a, SpliceKitTranscriptWord *b) {
                     if (a.startTime < b.startTime) return NSOrderedAscending;
                     if (a.startTime > b.startTime) return NSOrderedDescending;
                     return NSOrderedSame;
@@ -1527,7 +1527,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             [self detectSilences];
             [self assignSpeakers];
 
-            self.status = FCPTranscriptStatusReady;
+            self.status = SpliceKitTranscriptStatusReady;
             [self rebuildTextView];
             [self startPlayheadTimer];
 
@@ -1541,7 +1541,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             [self updateStatusUI:[NSString stringWithFormat:@"%lu words, %lu pauses (FCP Native)",
                 (unsigned long)self.mutableWords.count, (unsigned long)silenceCount]];
 
-            FCPBridge_log(@"[Transcript] FCP Native complete: %lu words, %lu silences",
+            SpliceKit_log(@"[Transcript] FCP Native complete: %lu words, %lu silences",
                           (unsigned long)self.mutableWords.count, (unsigned long)silenceCount);
         });
 
@@ -1553,13 +1553,13 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 #pragma mark - Apple Speech Transcription (SFSpeechRecognizer fallback)
 
 - (void)performAppleSpeechTranscription {
-    FCPBridge_log(@"[Transcript] Using Apple Speech engine (SFSpeechRecognizer)");
-    FCPTranscript_loadSpeechFramework();
+    SpliceKit_log(@"[Transcript] Using Apple Speech engine (SFSpeechRecognizer)");
+    SpliceKitTranscript_loadSpeechFramework();
 
     __block NSArray *clips = nil;
     __block double totalDuration = 0;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id timeline = [self getActiveTimelineModule];
             if (!timeline) {
@@ -1569,7 +1569,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
             // Detect frame rate
             if ([timeline respondsToSelector:@selector(sequenceFrameDuration)]) {
-                FCPTranscript_CMTime fd = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
+                SpliceKitTranscript_CMTime fd = ((SpliceKitTranscript_CMTime (*)(id, SEL))objc_msgSend)(
                     timeline, @selector(sequenceFrameDuration));
                 if (fd.timescale > 0 && fd.value > 0) {
                     self.frameRate = (double)fd.timescale / fd.value;
@@ -1616,13 +1616,13 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     });
 
     if (!clips || clips.count == 0) {
-        if (self.status != FCPTranscriptStatusError) {
+        if (self.status != SpliceKitTranscriptStatusError) {
             [self setErrorState:@"No media clips found on timeline."];
         }
         return;
     }
 
-    FCPBridge_log(@"[Transcript] Found %lu clips, total duration: %.2fs", (unsigned long)clips.count, totalDuration);
+    SpliceKit_log(@"[Transcript] Found %lu clips, total duration: %.2fs", (unsigned long)clips.count, totalDuration);
 
     [self.mutableWords removeAllObjects];
     [self.mutableSilences removeAllObjects];
@@ -1654,7 +1654,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     [self transcribeClipsSequentially:transcribableClips index:0 completion:^{
         dispatch_async(dispatch_get_main_queue(), ^{
             @synchronized (self.mutableWords) {
-                [self.mutableWords sortUsingComparator:^NSComparisonResult(FCPTranscriptWord *a, FCPTranscriptWord *b) {
+                [self.mutableWords sortUsingComparator:^NSComparisonResult(SpliceKitTranscriptWord *a, SpliceKitTranscriptWord *b) {
                     if (a.startTime < b.startTime) return NSOrderedAscending;
                     if (a.startTime > b.startTime) return NSOrderedDescending;
                     return NSOrderedSame;
@@ -1669,7 +1669,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             [self detectSilences];
             [self assignSpeakers];
 
-            self.status = FCPTranscriptStatusReady;
+            self.status = SpliceKitTranscriptStatusReady;
             [self rebuildTextView];
             [self startPlayheadTimer];
 
@@ -1683,7 +1683,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             [self updateStatusUI:[NSString stringWithFormat:@"%lu words, %lu pauses",
                 (unsigned long)self.mutableWords.count, (unsigned long)silenceCount]];
 
-            FCPBridge_log(@"[Transcript] Complete: %lu words, %lu silences",
+            SpliceKit_log(@"[Transcript] Complete: %lu words, %lu silences",
                           (unsigned long)self.mutableWords.count, (unsigned long)silenceCount);
         });
     }];
@@ -1707,14 +1707,14 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                     trimStart:trimStart
                  trimDuration:clipDuration
                    clipHandle:clipHandle
-                   completion:^(NSArray<FCPTranscriptWord *> *words, NSError *error) {
+                   completion:^(NSArray<SpliceKitTranscriptWord *> *words, NSError *error) {
         if (error) {
-            FCPBridge_log(@"[Transcript] Transcription error for %@: %@", mediaURL.lastPathComponent, error);
+            SpliceKit_log(@"[Transcript] Transcription error for %@: %@", mediaURL.lastPathComponent, error);
         } else {
             @synchronized (self.mutableWords) {
                 [self.mutableWords addObjectsFromArray:words];
             }
-            FCPBridge_log(@"[Transcript] Transcribed %lu words from %@",
+            SpliceKit_log(@"[Transcript] Transcribed %lu words from %@",
                           (unsigned long)words.count, mediaURL.lastPathComponent);
         }
         self.completedTranscriptions++;
@@ -1745,7 +1745,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
     // 1. Inside the FCP framework bundle (deployed by patcher)
     NSString *buildDir = [[[NSBundle mainBundle] bundlePath]
-        stringByAppendingPathComponent:@"Contents/Frameworks/FCPBridge.framework/Versions/A/Resources"];
+        stringByAppendingPathComponent:@"Contents/Frameworks/SpliceKit.framework/Versions/A/Resources"];
     NSString *builtPath = [buildDir stringByAppendingPathComponent:@"parakeet-transcriber"];
     if ([fm fileExistsAtPath:builtPath]) return builtPath;
 
@@ -1753,11 +1753,11 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSString *home = NSHomeDirectory();
     NSArray *searchPaths = @[
         [home stringByAppendingPathComponent:@"Library/Application Support/SpliceKit/tools/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"Desktop/FCPBridge/build/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"Documents/GitHub/FCPBridge/build/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"Desktop/FCPBridge/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"Documents/GitHub/FCPBridge/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"FCPBridge/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Desktop/SpliceKit/build/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Documents/GitHub/SpliceKit/build/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Desktop/SpliceKit/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Documents/GitHub/SpliceKit/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"SpliceKit/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
         [home stringByAppendingPathComponent:@"Library/Caches/SpliceKit/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
     ];
     for (NSString *path in searchPaths) {
@@ -1771,9 +1771,9 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *home = NSHomeDirectory();
     NSArray *candidates = @[
-        [home stringByAppendingPathComponent:@"Documents/GitHub/FCPBridge/tools/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"Desktop/FCPBridge/tools/parakeet-transcriber"],
-        [home stringByAppendingPathComponent:@"FCPBridge/tools/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Documents/GitHub/SpliceKit/tools/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Desktop/SpliceKit/tools/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"SpliceKit/tools/parakeet-transcriber"],
         [home stringByAppendingPathComponent:@"Library/Caches/SpliceKit/tools/parakeet-transcriber"],
     ];
     for (NSString *path in candidates) {
@@ -1787,12 +1787,12 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 - (BOOL)buildParakeetTranscriberWithStatus:(void(^)(NSString *status))statusUpdate {
     NSString *projectDir = [self findParakeetTranscriberProjectDir];
     if (!projectDir) {
-        FCPBridge_log(@"[Transcript] Parakeet transcriber project not found in any known location");
+        SpliceKit_log(@"[Transcript] Parakeet transcriber project not found in any known location");
         return NO;
     }
 
     statusUpdate(@"Building Parakeet transcriber (first time only)...");
-    FCPBridge_log(@"[Transcript] Building Parakeet transcriber...");
+    SpliceKit_log(@"[Transcript] Building Parakeet transcriber...");
 
     NSTask *task = [[NSTask alloc] init];
     task.launchPath = @"/usr/bin/swift";
@@ -1807,7 +1807,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         [task launch];
         [task waitUntilExit];
     } @catch (NSException *e) {
-        FCPBridge_log(@"[Transcript] Failed to launch swift build: %@", e.reason);
+        SpliceKit_log(@"[Transcript] Failed to launch swift build: %@", e.reason);
         return NO;
     }
 
@@ -1815,30 +1815,30 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSString *output = [[NSString alloc] initWithData:outputData encoding:NSUTF8StringEncoding];
 
     if (task.terminationStatus != 0) {
-        FCPBridge_log(@"[Transcript] Parakeet build failed (exit code %d)", task.terminationStatus);
+        SpliceKit_log(@"[Transcript] Parakeet build failed (exit code %d)", task.terminationStatus);
         // Log last 500 chars of build output for diagnostics
         NSString *tail = output.length > 500 ? [output substringFromIndex:output.length - 500] : output;
-        FCPBridge_log(@"[Transcript] Build output (last 500 chars): %@", tail);
+        SpliceKit_log(@"[Transcript] Build output (last 500 chars): %@", tail);
 
         // Check for specific build failures
         if ([output containsString:@"xcrun: error"] || [output containsString:@"xcode-select"]) {
-            FCPBridge_log(@"[Transcript] CAUSE: Xcode Command Line Tools not installed");
+            SpliceKit_log(@"[Transcript] CAUSE: Xcode Command Line Tools not installed");
         } else if ([output containsString:@"no such module"]) {
-            FCPBridge_log(@"[Transcript] CAUSE: Swift package dependency resolution failed — check network");
+            SpliceKit_log(@"[Transcript] CAUSE: Swift package dependency resolution failed — check network");
         } else if ([output containsString:@"No space left"]) {
-            FCPBridge_log(@"[Transcript] CAUSE: Disk full during build");
+            SpliceKit_log(@"[Transcript] CAUSE: Disk full during build");
         } else if ([output containsString:@"Cannot find"]) {
-            FCPBridge_log(@"[Transcript] CAUSE: Source files may be corrupted — re-run patcher");
+            SpliceKit_log(@"[Transcript] CAUSE: Source files may be corrupted — re-run patcher");
         }
         return NO;
     }
 
-    FCPBridge_log(@"[Transcript] Parakeet transcriber built successfully");
+    SpliceKit_log(@"[Transcript] Parakeet transcriber built successfully");
     return YES;
 }
 
 - (void)performParakeetTranscription {
-    FCPBridge_log(@"[Transcript] Using Parakeet engine (FluidAudio)");
+    SpliceKit_log(@"[Transcript] Using Parakeet engine (FluidAudio)");
 
     // Check / build the CLI tool
     NSString *binaryPath = [self parakeetTranscriberPath];
@@ -1870,8 +1870,8 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             }
 
             [self setErrorState:[NSString stringWithFormat:
-                @"Failed to build Parakeet transcriber.%@ Re-run the FCPBridge Patcher to fix this.", xcodeCheck]];
-            FCPBridge_log(@"[Transcript] Parakeet build failed.%@ Searched: ~/Library/Caches/FCPBridge/tools/parakeet-transcriber/", xcodeCheck);
+                @"Failed to build Parakeet transcriber.%@ Re-run the SpliceKit Patcher to fix this.", xcodeCheck]];
+            SpliceKit_log(@"[Transcript] Parakeet build failed.%@ Searched: ~/Library/Caches/SpliceKit/tools/parakeet-transcriber/", xcodeCheck);
             return;
         }
         binaryPath = [self parakeetTranscriberPath];
@@ -1881,12 +1881,12 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         }
     }
 
-    FCPBridge_log(@"[Transcript] Using parakeet-transcriber at: %@", binaryPath);
+    SpliceKit_log(@"[Transcript] Using parakeet-transcriber at: %@", binaryPath);
 
     // Collect clips from timeline (reuse existing logic)
     __block NSArray *clips = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id timeline = [self getActiveTimelineModule];
             if (!timeline) {
@@ -1896,7 +1896,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
             // Detect frame rate
             if ([timeline respondsToSelector:@selector(sequenceFrameDuration)]) {
-                FCPTranscript_CMTime fd = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
+                SpliceKitTranscript_CMTime fd = ((SpliceKitTranscript_CMTime (*)(id, SEL))objc_msgSend)(
                     timeline, @selector(sequenceFrameDuration));
                 if (fd.timescale > 0 && fd.value > 0) {
                     self.frameRate = (double)fd.timescale / fd.value;
@@ -1930,7 +1930,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     });
 
     if (!clips || clips.count == 0) {
-        if (self.status != FCPTranscriptStatusError) {
+        if (self.status != SpliceKitTranscriptStatusError) {
             [self setErrorState:@"No media clips found on timeline."];
         }
         return;
@@ -1961,7 +1961,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     });
 
     // Build batch manifest — deduplicate so each source file is transcribed only once
-    NSString *manifestPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"fcpbridge_batch.json"];
+    NSString *manifestPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"splicekit_batch.json"];
     NSMutableOrderedSet *uniqueFiles = [NSMutableOrderedSet orderedSet];
     for (NSDictionary *clipInfo in transcribableClips) {
         NSURL *mediaURL = clipInfo[@"mediaURL"];
@@ -1974,7 +1974,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSData *manifestData = [NSJSONSerialization dataWithJSONObject:manifestEntries options:0 error:nil];
     [manifestData writeToFile:manifestPath atomically:YES];
 
-    FCPBridge_log(@"[Transcript] Parakeet batch: %lu clips, %lu unique files",
+    SpliceKit_log(@"[Transcript] Parakeet batch: %lu clips, %lu unique files",
         (unsigned long)transcribableClips.count, (unsigned long)uniqueFiles.count);
 
     // Build arguments for batch mode
@@ -2030,7 +2030,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                 }
             } else if ([line hasPrefix:@"ERROR:"]) {
                 NSString *errMsg = [line substringFromIndex:6];
-                FCPBridge_log(@"[Transcript] Parakeet: %@", errMsg);
+                SpliceKit_log(@"[Transcript] Parakeet: %@", errMsg);
                 // Show actionable errors in the UI too
                 if ([errMsg containsString:@"Network"] || [errMsg containsString:@"network"] ||
                     [errMsg containsString:@"connect"] || [errMsg containsString:@"internet"]) {
@@ -2048,7 +2048,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                 } else if ([errMsg containsString:@"INFO:"]) {
                     // Informational, just log
                 } else if ([errMsg containsString:@"TIP:"]) {
-                    FCPBridge_log(@"[Transcript] %@", errMsg);
+                    SpliceKit_log(@"[Transcript] %@", errMsg);
                 }
             }
         }
@@ -2058,7 +2058,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         [task launch];
         [task waitUntilExit];
     } @catch (NSException *e) {
-        FCPBridge_log(@"[Transcript] Parakeet task failed: %@", e.reason);
+        SpliceKit_log(@"[Transcript] Parakeet task failed: %@", e.reason);
         stdoutPipe.fileHandleForReading.readabilityHandler = nil;
         stderrPipe.fileHandleForReading.readabilityHandler = nil;
         [self setErrorState:[NSString stringWithFormat:@"Parakeet failed: %@", e.reason]];
@@ -2079,12 +2079,12 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     [[NSFileManager defaultManager] removeItemAtPath:manifestPath error:nil];
 
     if (task.terminationStatus != 0) {
-        FCPBridge_log(@"[Transcript] Parakeet process exited with code %d", task.terminationStatus);
+        SpliceKit_log(@"[Transcript] Parakeet process exited with code %d", task.terminationStatus);
         // Read any remaining stderr for clues
         NSData *stderrRemaining = [stderrPipe.fileHandleForReading readDataToEndOfFile];
         NSString *stderrText = [[NSString alloc] initWithData:stderrRemaining encoding:NSUTF8StringEncoding] ?: @"";
         if (stderrText.length > 0) {
-            FCPBridge_log(@"[Transcript] Parakeet final stderr: %@", stderrText);
+            SpliceKit_log(@"[Transcript] Parakeet final stderr: %@", stderrText);
         }
 
         // Build a user-friendly error from whatever we know
@@ -2112,7 +2112,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSArray *batchResults = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
 
     if (![batchResults isKindOfClass:[NSArray class]]) {
-        FCPBridge_log(@"[Transcript] Parakeet returned invalid batch JSON");
+        SpliceKit_log(@"[Transcript] Parakeet returned invalid batch JSON");
         [self setErrorState:@"Parakeet returned invalid output."];
         return;
     }
@@ -2138,7 +2138,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
             NSArray *wordDicts = resultsByFile[mediaURL.path];
             if (!wordDicts) {
-                FCPBridge_log(@"[Transcript] No results for %@", mediaURL.lastPathComponent);
+                SpliceKit_log(@"[Transcript] No results for %@", mediaURL.lastPathComponent);
                 continue;
             }
 
@@ -2151,7 +2151,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                 NSString *speaker = wd[@"speaker"] ?: @"Unknown";
 
                 if (startTime >= trimStart && startTime < trimStart + clipDuration) {
-                    FCPTranscriptWord *word = [[FCPTranscriptWord alloc] init];
+                    SpliceKitTranscriptWord *word = [[SpliceKitTranscriptWord alloc] init];
                     word.text = text;
                     word.startTime = timelineStart + (startTime - trimStart);
                     word.duration = MIN(endTime - startTime, (trimStart + clipDuration) - startTime);
@@ -2167,7 +2167,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                 }
             }
 
-            FCPBridge_log(@"[Transcript] Parakeet got %lu words from %@",
+            SpliceKit_log(@"[Transcript] Parakeet got %lu words from %@",
                 (unsigned long)wordsAdded, mediaURL.lastPathComponent);
         }
     }
@@ -2175,7 +2175,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     // Finalize — sort, index, detect silences, build UI
     dispatch_async(dispatch_get_main_queue(), ^{
         @synchronized (self.mutableWords) {
-            [self.mutableWords sortUsingComparator:^NSComparisonResult(FCPTranscriptWord *a, FCPTranscriptWord *b) {
+            [self.mutableWords sortUsingComparator:^NSComparisonResult(SpliceKitTranscriptWord *a, SpliceKitTranscriptWord *b) {
                 if (a.startTime < b.startTime) return NSOrderedAscending;
                 if (a.startTime > b.startTime) return NSOrderedDescending;
                 return NSOrderedSame;
@@ -2188,7 +2188,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         [self detectSilences];
         [self assignSpeakers];
 
-        self.status = FCPTranscriptStatusReady;
+        self.status = SpliceKitTranscriptStatusReady;
         [self rebuildTextView];
         [self startPlayheadTimer];
 
@@ -2201,7 +2201,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         [self updateStatusUI:[NSString stringWithFormat:@"%lu words, %lu pauses (Parakeet)",
             (unsigned long)self.mutableWords.count, (unsigned long)self.mutableSilences.count]];
 
-        FCPBridge_log(@"[Transcript] Parakeet transcription complete: %lu words, %lu silences",
+        SpliceKit_log(@"[Transcript] Parakeet transcription complete: %lu words, %lu silences",
             (unsigned long)self.mutableWords.count, (unsigned long)self.mutableSilences.count);
     });
 }
@@ -2215,12 +2215,12 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         if (self.mutableWords.count < 2) return;
 
         for (NSUInteger i = 0; i < self.mutableWords.count - 1; i++) {
-            FCPTranscriptWord *current = self.mutableWords[i];
-            FCPTranscriptWord *next = self.mutableWords[i + 1];
+            SpliceKitTranscriptWord *current = self.mutableWords[i];
+            SpliceKitTranscriptWord *next = self.mutableWords[i + 1];
 
             double gap = next.startTime - current.endTime;
             if (gap >= self.silenceThreshold) {
-                FCPTranscriptSilence *silence = [[FCPTranscriptSilence alloc] init];
+                SpliceKitTranscriptSilence *silence = [[SpliceKitTranscriptSilence alloc] init];
                 silence.startTime = current.endTime;
                 silence.endTime = next.startTime;
                 silence.duration = gap;
@@ -2230,7 +2230,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         }
     }
 
-    FCPBridge_log(@"[Transcript] Detected %lu silences (threshold: %.2fs)",
+    SpliceKit_log(@"[Transcript] Detected %lu silences (threshold: %.2fs)",
                   (unsigned long)self.mutableSilences.count, self.silenceThreshold);
 }
 
@@ -2241,7 +2241,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     // Otherwise label unknown words as "Unknown" (same as Premiere Pro).
     // Users can always manually override via setSpeaker:forWordsFrom:count:.
     @synchronized (self.mutableWords) {
-        for (FCPTranscriptWord *word in self.mutableWords) {
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
             if (!word.speaker || word.speaker.length == 0) {
                 word.speaker = @"Unknown";
             }
@@ -2312,7 +2312,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             }
         }
     } @catch (NSException *e) {
-        FCPBridge_log(@"[Transcript] Exception getting media URL (chain 1): %@", e.reason);
+        SpliceKit_log(@"[Transcript] Exception getting media URL (chain 1): %@", e.reason);
     }
 
     // Chain 2: clip.assetMediaReference -> resolvedURL
@@ -2329,7 +2329,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             }
         }
     } @catch (NSException *e) {
-        FCPBridge_log(@"[Transcript] Exception getting media URL (chain 2): %@", e.reason);
+        SpliceKit_log(@"[Transcript] Exception getting media URL (chain 2): %@", e.reason);
     }
 
     // Chain 3: KVC path clip.media.fileURL
@@ -2392,22 +2392,22 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                   trimStart:(double)trimStart
                trimDuration:(double)trimDuration
                  clipHandle:(NSString *)clipHandle
-                 completion:(void(^)(NSArray<FCPTranscriptWord *> *, NSError *))completion {
+                 completion:(void(^)(NSArray<SpliceKitTranscriptWord *> *, NSError *))completion {
 
     if (!SFSpeechRecognizerClass || !SFSpeechURLRecognitionRequestClass) {
-        completion(nil, [NSError errorWithDomain:@"FCPTranscript" code:1
+        completion(nil, [NSError errorWithDomain:@"SpliceKitTranscript" code:1
             userInfo:@{NSLocalizedDescriptionKey: @"Speech framework not available"}]);
         return;
     }
 
     if (![[NSFileManager defaultManager] fileExistsAtPath:audioURL.path]) {
-        FCPBridge_log(@"[Transcript] File not found: %@", audioURL.path);
-        completion(nil, [NSError errorWithDomain:@"FCPTranscript" code:2
+        SpliceKit_log(@"[Transcript] File not found: %@", audioURL.path);
+        completion(nil, [NSError errorWithDomain:@"SpliceKitTranscript" code:2
             userInfo:@{NSLocalizedDescriptionKey: @"Media file not found"}]);
         return;
     }
 
-    FCPBridge_log(@"[Transcript] Transcribing: %@ (timeline:%.2f, trim:%.2f, dur:%.2f)",
+    SpliceKit_log(@"[Transcript] Transcribing: %@ (timeline:%.2f, trim:%.2f, dur:%.2f)",
                   audioURL.lastPathComponent, timelineStart, trimStart, trimDuration);
 
     id recognizer = ((id (*)(id, SEL, id))objc_msgSend)(
@@ -2416,14 +2416,14 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         [NSLocale localeWithLocaleIdentifier:@"en-US"]);
 
     if (!recognizer) {
-        completion(nil, [NSError errorWithDomain:@"FCPTranscript" code:3
+        completion(nil, [NSError errorWithDomain:@"SpliceKitTranscript" code:3
             userInfo:@{NSLocalizedDescriptionKey: @"Could not create speech recognizer"}]);
         return;
     }
 
     BOOL isAvailable = ((BOOL (*)(id, SEL))objc_msgSend)(recognizer, NSSelectorFromString(@"isAvailable"));
     if (!isAvailable) {
-        completion(nil, [NSError errorWithDomain:@"FCPTranscript" code:4
+        completion(nil, [NSError errorWithDomain:@"SpliceKitTranscript" code:4
             userInfo:@{NSLocalizedDescriptionKey: @"Speech recognizer not available"}]);
         return;
     }
@@ -2434,7 +2434,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         audioURL);
 
     if (!request) {
-        completion(nil, [NSError errorWithDomain:@"FCPTranscript" code:5
+        completion(nil, [NSError errorWithDomain:@"SpliceKitTranscript" code:5
             userInfo:@{NSLocalizedDescriptionKey: @"Could not create recognition request"}]);
         return;
     }
@@ -2452,14 +2452,14 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
     // macOS 26+: Enable speaker diarization if user opted in
     __block BOOL useSpeakerDiarization = NO;
-    if (self.speakerDetectionEnabled && FCPTranscript_isSpeakerDiarizationAvailable()) {
+    if (self.speakerDetectionEnabled && SpliceKitTranscript_isSpeakerDiarizationAvailable()) {
         SEL speakerSel = NSSelectorFromString(@"setAddsSpeakerAttribution:");
         if ([request respondsToSelector:speakerSel]) {
             ((void (*)(id, SEL, BOOL))objc_msgSend)(request, speakerSel, YES);
             useSpeakerDiarization = YES;
-            FCPBridge_log(@"[Transcript] Speaker diarization enabled (macOS 26+)");
+            SpliceKit_log(@"[Transcript] Speaker diarization enabled (macOS 26+)");
         } else {
-            FCPBridge_log(@"[Transcript] Speaker diarization selector not available on this request");
+            SpliceKit_log(@"[Transcript] Speaker diarization selector not available on this request");
         }
     }
 
@@ -2517,7 +2517,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             }
 
             // Final result — extract all words
-            NSMutableArray<FCPTranscriptWord *> *words = [NSMutableArray array];
+            NSMutableArray<SpliceKitTranscriptWord *> *words = [NSMutableArray array];
             NSMutableSet *speakerNames = [NSMutableSet set];
 
             for (id segment in (NSArray *)segments) {
@@ -2577,7 +2577,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                 }
 
                 if (timestamp >= trimStart && timestamp < trimStart + trimDuration) {
-                    FCPTranscriptWord *word = [[FCPTranscriptWord alloc] init];
+                    SpliceKitTranscriptWord *word = [[SpliceKitTranscriptWord alloc] init];
                     word.text = text;
                     word.startTime = timelineStart + (timestamp - trimStart);
                     word.duration = MIN(duration, (trimStart + trimDuration) - timestamp);
@@ -2593,10 +2593,10 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             }
 
             if (useSpeakerDiarization) {
-                FCPBridge_log(@"[Transcript] Got %lu words with %lu unique speakers from segments",
+                SpliceKit_log(@"[Transcript] Got %lu words with %lu unique speakers from segments",
                     (unsigned long)words.count, (unsigned long)speakerNames.count);
             } else {
-                FCPBridge_log(@"[Transcript] Got %lu words from segments", (unsigned long)words.count);
+                SpliceKit_log(@"[Transcript] Got %lu words from segments", (unsigned long)words.count);
             }
             completion(words, nil);
         });
@@ -2611,10 +2611,10 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
        trimStart:(double)trimStart
        trimDuration:(double)trimDuration {
 
-    FCPBridge_log(@"[Transcript] Transcribing file: %@", audioURL.path);
+    SpliceKit_log(@"[Transcript] Transcribing file: %@", audioURL.path);
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.status = FCPTranscriptStatusTranscribing;
+        self.status = SpliceKitTranscriptStatusTranscribing;
         self.errorMessage = nil;
         [self updateStatusUI:@"Transcribing audio file..."];
         self.spinner.hidden = NO;
@@ -2641,7 +2641,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                         trimStart:trimStart
                      trimDuration:(trimDuration == HUGE_VAL ? 7200.0 : trimDuration)
                        clipHandle:nil
-                       completion:^(NSArray<FCPTranscriptWord *> *words, NSError *error) {
+                       completion:^(NSArray<SpliceKitTranscriptWord *> *words, NSError *error) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (error) {
                     [self setErrorState:[NSString stringWithFormat:@"Transcription error: %@",
@@ -2657,7 +2657,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                     [self detectSilences];
                     [self assignSpeakers];
 
-                    self.status = FCPTranscriptStatusReady;
+                    self.status = SpliceKitTranscriptStatusReady;
                     [self rebuildTextView];
                     [self startPlayheadTimer];
                     self.deleteSilencesButton.enabled = (self.mutableSilences.count > 0);
@@ -2713,8 +2713,8 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     };
 
     // Build silence lookup: afterWordIndex -> silence
-    NSMutableDictionary<NSNumber *, FCPTranscriptSilence *> *silenceMap = [NSMutableDictionary dictionary];
-    for (FCPTranscriptSilence *s in self.mutableSilences) {
+    NSMutableDictionary<NSNumber *, SpliceKitTranscriptSilence *> *silenceMap = [NSMutableDictionary dictionary];
+    for (SpliceKitTranscriptSilence *s in self.mutableSilences) {
         silenceMap[@(s.afterWordIndex)] = s;
     }
 
@@ -2730,13 +2730,13 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         NSString *currentSpeaker = nil;
 
         for (NSUInteger i = 0; i < self.mutableWords.count; i++) {
-            FCPTranscriptWord *word = self.mutableWords[i];
+            SpliceKitTranscriptWord *word = self.mutableWords[i];
             BOOL newSegment = NO;
 
             if (i == 0) {
                 newSegment = YES;
             } else {
-                FCPTranscriptWord *prev = self.mutableWords[i - 1];
+                SpliceKitTranscriptWord *prev = self.mutableWords[i - 1];
                 double gap = word.startTime - prev.endTime;
                 // New segment on sentence-level pauses (>1s) or speaker change.
                 // 1 second is a natural sentence/thought boundary that creates
@@ -2779,8 +2779,8 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             }
 
             // ── Segment Header: "Speaker 1        00:00:00:00 - 00:00:15:19" ──
-            NSString *startTC = FCPTranscript_timecodeFromSeconds(segStartTime, self.frameRate);
-            NSString *endTC = FCPTranscript_timecodeFromSeconds(segEndTime, self.frameRate);
+            NSString *startTC = SpliceKitTranscript_timecodeFromSeconds(segStartTime, self.frameRate);
+            NSString *endTC = SpliceKitTranscript_timecodeFromSeconds(segEndTime, self.frameRate);
 
             // Speaker name (clickable to rename)
             NSString *speakerStr = [NSString stringWithFormat:@"%@", speaker];
@@ -2826,11 +2826,11 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
             // ── Words in this segment ──
             for (NSUInteger i = segStart; i <= segEnd; i++) {
-                FCPTranscriptWord *word = self.mutableWords[i];
+                SpliceKitTranscriptWord *word = self.mutableWords[i];
 
                 // Check for silence before this word
                 if (i > 0) {
-                    FCPTranscriptSilence *silence = silenceMap[@(i - 1)];
+                    SpliceKitTranscriptSilence *silence = silenceMap[@(i - 1)];
                     if (silence) {
                         // Insert silence marker: " [···] "
                         NSString *silenceStr = @" [\u22EF] ";
@@ -2843,8 +2843,8 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
                             FCPAttrSilenceIndex: @([self.mutableSilences indexOfObject:silence]),
                             NSToolTipAttributeName: [NSString stringWithFormat:@"Pause: %.1fs (%@ - %@)",
                                 silence.duration,
-                                FCPTranscript_timecodeFromSeconds(silence.startTime, self.frameRate),
-                                FCPTranscript_timecodeFromSeconds(silence.endTime, self.frameRate)],
+                                SpliceKitTranscript_timecodeFromSeconds(silence.startTime, self.frameRate),
+                                SpliceKitTranscript_timecodeFromSeconds(silence.endTime, self.frameRate)],
                         }];
 
                         silence.textRange = NSMakeRange(textPos, silenceStr.length);
@@ -2870,8 +2870,8 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
                 NSMutableDictionary *wordAttrs = [attrs mutableCopy];
                 wordAttrs[NSToolTipAttributeName] = [NSString stringWithFormat:@"%@ - %@ (%.0f%%)",
-                    FCPTranscript_timecodeFromSeconds(word.startTime, self.frameRate),
-                    FCPTranscript_timecodeFromSeconds(word.endTime, self.frameRate),
+                    SpliceKitTranscript_timecodeFromSeconds(word.startTime, self.frameRate),
+                    SpliceKitTranscript_timecodeFromSeconds(word.endTime, self.frameRate),
                     word.confidence * 100];
                 wordAttrs[FCPAttrWordIndex] = @(i);
 
@@ -2903,10 +2903,10 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSString *itemType = attrs[FCPAttrItemType];
 
     if ([itemType isEqualToString:@"word"]) {
-        FCPTranscriptWord *word = [self wordAtCharIndex:charIdx];
+        SpliceKitTranscriptWord *word = [self wordAtCharIndex:charIdx];
         if (!word) return;
 
-        FCPBridge_log(@"[Transcript] Clicked word %lu: \"%@\" at %.2fs",
+        SpliceKit_log(@"[Transcript] Clicked word %lu: \"%@\" at %.2fs",
                       (unsigned long)word.wordIndex, word.text, word.startTime);
 
         [self setPlayheadToTime:word.startTime];
@@ -2927,17 +2927,17 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     } else if ([itemType isEqualToString:@"silence"]) {
         NSNumber *silenceIdx = attrs[FCPAttrSilenceIndex];
         if (silenceIdx && silenceIdx.unsignedIntegerValue < self.mutableSilences.count) {
-            FCPTranscriptSilence *silence = self.mutableSilences[silenceIdx.unsignedIntegerValue];
-            FCPBridge_log(@"[Transcript] Clicked silence at %.2fs (%.1fs duration)",
+            SpliceKitTranscriptSilence *silence = self.mutableSilences[silenceIdx.unsignedIntegerValue];
+            SpliceKit_log(@"[Transcript] Clicked silence at %.2fs (%.1fs duration)",
                           silence.startTime, silence.duration);
             [self setPlayheadToTime:silence.startTime];
         }
     }
 }
 
-- (FCPTranscriptWord *)wordAtCharIndex:(NSUInteger)charIdx {
+- (SpliceKitTranscriptWord *)wordAtCharIndex:(NSUInteger)charIdx {
     @synchronized (self.mutableWords) {
-        for (FCPTranscriptWord *word in self.mutableWords) {
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
             if (charIdx >= word.textRange.location &&
                 charIdx < NSMaxRange(word.textRange)) {
                 return word;
@@ -3039,12 +3039,12 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     @synchronized (self.mutableWords) {
         if (renameAll) {
             // Rename all words with this speaker name
-            for (FCPTranscriptWord *word in self.mutableWords) {
+            for (SpliceKitTranscriptWord *word in self.mutableWords) {
                 if ([word.speaker isEqualToString:oldName]) {
                     word.speaker = newName;
                 }
             }
-            FCPBridge_log(@"[Transcript] Renamed all \"%@\" -> \"%@\"", oldName, newName);
+            SpliceKit_log(@"[Transcript] Renamed all \"%@\" -> \"%@\"", oldName, newName);
         } else {
             // Rename only this segment
             NSUInteger start = segStartNum.unsignedIntegerValue;
@@ -3052,7 +3052,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             for (NSUInteger i = start; i <= end && i < self.mutableWords.count; i++) {
                 self.mutableWords[i].speaker = newName;
             }
-            FCPBridge_log(@"[Transcript] Renamed segment %lu-%lu \"%@\" -> \"%@\"",
+            SpliceKit_log(@"[Transcript] Renamed segment %lu-%lu \"%@\" -> \"%@\"",
                 (unsigned long)start, (unsigned long)end, oldName, newName);
         }
     }
@@ -3073,7 +3073,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     // Find all words that overlap with the selection
     NSMutableIndexSet *wordIndices = [NSMutableIndexSet indexSet];
     @synchronized (self.mutableWords) {
-        for (FCPTranscriptWord *word in self.mutableWords) {
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
             NSRange intersection = NSIntersectionRange(selectedRange, word.textRange);
             if (intersection.length > 0) {
                 [wordIndices addIndex:word.wordIndex];
@@ -3082,8 +3082,8 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     }
 
     // Also check if any silences are fully selected (for deleting pauses)
-    NSMutableArray<FCPTranscriptSilence *> *selectedSilences = [NSMutableArray array];
-    for (FCPTranscriptSilence *silence in self.mutableSilences) {
+    NSMutableArray<SpliceKitTranscriptSilence *> *selectedSilences = [NSMutableArray array];
+    for (SpliceKitTranscriptSilence *silence in self.mutableSilences) {
         NSRange intersection = NSIntersectionRange(selectedRange, silence.textRange);
         if (intersection.length > 0) {
             [selectedSilences addObject:silence];
@@ -3100,11 +3100,11 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         [self updateStatusUI:@"Deleting pauses..."];
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             // Delete from end to start to avoid position shifts
-            NSArray *sorted = [selectedSilences sortedArrayUsingComparator:^NSComparisonResult(FCPTranscriptSilence *a, FCPTranscriptSilence *b) {
+            NSArray *sorted = [selectedSilences sortedArrayUsingComparator:^NSComparisonResult(SpliceKitTranscriptSilence *a, SpliceKitTranscriptSilence *b) {
                 return (a.startTime > b.startTime) ? NSOrderedAscending : NSOrderedDescending;
             }];
             double totalRemoved = 0;
-            for (FCPTranscriptSilence *silence in sorted) {
+            for (SpliceKitTranscriptSilence *silence in sorted) {
                 // Adjust for already-removed time
                 double adjStart = silence.startTime - totalRemoved;
                 double adjEnd = silence.endTime - totalRemoved;
@@ -3114,7 +3114,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
                 // Shift all words after this silence earlier
                 @synchronized (self.mutableWords) {
-                    for (FCPTranscriptWord *word in self.mutableWords) {
+                    for (SpliceKitTranscriptWord *word in self.mutableWords) {
                         if (word.startTime > silence.startTime - (totalRemoved - removed)) {
                             word.startTime -= removed;
                         }
@@ -3136,11 +3136,11 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSUInteger startIdx = wordIndices.firstIndex;
     NSUInteger count = wordIndices.lastIndex - wordIndices.firstIndex + 1;
 
-    FCPBridge_log(@"[Transcript] Deleting %lu words starting at index %lu",
+    SpliceKit_log(@"[Transcript] Deleting %lu words starting at index %lu",
                   (unsigned long)count, (unsigned long)startIdx);
 
     NSDictionary *result = [self deleteWordsFromIndex:startIdx count:count];
-    FCPBridge_log(@"[Transcript] Delete result: %@", result);
+    SpliceKit_log(@"[Transcript] Delete result: %@", result);
 }
 
 #pragma mark - Drag & Drop Word Reordering
@@ -3151,7 +3151,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
     NSMutableIndexSet *wordIndices = [NSMutableIndexSet indexSet];
     @synchronized (self.mutableWords) {
-        for (FCPTranscriptWord *word in self.mutableWords) {
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
             NSRange intersection = NSIntersectionRange(sel, word.textRange);
             if (intersection.length > 0) {
                 [wordIndices addIndex:word.wordIndex];
@@ -3168,7 +3168,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
 - (NSUInteger)wordIndexAtCharIndex:(NSUInteger)charIdx {
     @synchronized (self.mutableWords) {
-        for (FCPTranscriptWord *word in self.mutableWords) {
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
             if (charIdx <= word.textRange.location) {
                 return word.wordIndex;
             }
@@ -3189,11 +3189,11 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSUInteger destWordIdx = [self wordIndexAtCharIndex:charIdx];
 
     if (destWordIdx >= srcStart && destWordIdx <= srcStart + srcCount) {
-        FCPBridge_log(@"[Transcript] Drop at same position — no-op");
+        SpliceKit_log(@"[Transcript] Drop at same position — no-op");
         return;
     }
 
-    FCPBridge_log(@"[Transcript] Drag-drop: words %lu-%lu -> before word %lu",
+    SpliceKit_log(@"[Transcript] Drag-drop: words %lu-%lu -> before word %lu",
                   (unsigned long)srcStart, (unsigned long)(srcStart + srcCount - 1),
                   (unsigned long)destWordIdx);
 
@@ -3204,10 +3204,10 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (result[@"error"]) {
                 [self updateStatusUI:[NSString stringWithFormat:@"Move failed: %@", result[@"error"]]];
-                FCPBridge_log(@"[Transcript] Move error: %@", result[@"error"]);
+                SpliceKit_log(@"[Transcript] Move error: %@", result[@"error"]);
             } else {
                 [self updateStatusUI:[NSString stringWithFormat:@"Moved %lu word(s)", (unsigned long)srcCount]];
-                FCPBridge_log(@"[Transcript] Move succeeded: %@", result);
+                SpliceKit_log(@"[Transcript] Move succeeded: %@", result);
             }
         });
     });
@@ -3217,7 +3217,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
 - (NSDictionary *)deleteTimelineRange:(double)deleteStart end:(double)deleteEnd {
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id timeline = [self getActiveTimelineModule];
             if (!timeline) {
@@ -3282,13 +3282,13 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         }
     }
 
-    FCPTranscriptWord *firstWord = self.mutableWords[startIndex];
-    FCPTranscriptWord *lastWord = self.mutableWords[startIndex + count - 1];
+    SpliceKitTranscriptWord *firstWord = self.mutableWords[startIndex];
+    SpliceKitTranscriptWord *lastWord = self.mutableWords[startIndex + count - 1];
     double deleteStart = firstWord.startTime;
     double deleteEnd = lastWord.endTime;
     double deletedDuration = deleteEnd - deleteStart;
 
-    FCPBridge_log(@"[Transcript] Deleting words %lu-%lu: %.2fs - %.2fs (%.2fs)",
+    SpliceKit_log(@"[Transcript] Deleting words %lu-%lu: %.2fs - %.2fs (%.2fs)",
                   (unsigned long)startIndex, (unsigned long)(startIndex + count - 1),
                   deleteStart, deleteEnd, deletedDuration);
 
@@ -3327,8 +3327,8 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
 - (NSDictionary *)deleteSilencesLongerThan:(double)minDuration {
     // Collect silences to delete (filter by minimum duration)
-    NSMutableArray<FCPTranscriptSilence *> *toDelete = [NSMutableArray array];
-    for (FCPTranscriptSilence *silence in self.mutableSilences) {
+    NSMutableArray<SpliceKitTranscriptSilence *> *toDelete = [NSMutableArray array];
+    for (SpliceKitTranscriptSilence *silence in self.mutableSilences) {
         if (silence.duration >= minDuration) {
             [toDelete addObject:silence];
         }
@@ -3338,7 +3338,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         return @{@"status": @"ok", @"deletedCount": @0, @"message": @"No silences to delete"};
     }
 
-    FCPBridge_log(@"[Transcript] Batch deleting %lu silences (min duration: %.2fs)",
+    SpliceKit_log(@"[Transcript] Batch deleting %lu silences (min duration: %.2fs)",
                   (unsigned long)toDelete.count, minDuration);
 
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -3349,7 +3349,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     });
 
     // Sort by startTime descending (delete from end first to avoid position shifts)
-    [toDelete sortUsingComparator:^NSComparisonResult(FCPTranscriptSilence *a, FCPTranscriptSilence *b) {
+    [toDelete sortUsingComparator:^NSComparisonResult(SpliceKitTranscriptSilence *a, SpliceKitTranscriptSilence *b) {
         return (a.startTime > b.startTime) ? NSOrderedAscending : NSOrderedDescending;
     }];
 
@@ -3357,7 +3357,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     __block NSString *lastError = nil;
     double totalTimeRemoved = 0;
 
-    for (FCPTranscriptSilence *silence in toDelete) {
+    for (SpliceKitTranscriptSilence *silence in toDelete) {
         // Adjust times for already-removed content
         double adjStart = silence.startTime - totalTimeRemoved;
         double adjEnd = silence.endTime - totalTimeRemoved;
@@ -3365,7 +3365,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         NSDictionary *result = [self deleteTimelineRange:adjStart end:adjEnd];
         if (result[@"error"]) {
             lastError = result[@"error"];
-            FCPBridge_log(@"[Transcript] Error deleting silence at %.2fs: %@", adjStart, lastError);
+            SpliceKit_log(@"[Transcript] Error deleting silence at %.2fs: %@", adjStart, lastError);
         } else {
             deletedCount++;
             totalTimeRemoved += silence.duration;
@@ -3388,10 +3388,10 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         // toDelete is sorted descending, reverse it for forward processing
         NSArray *forwardSilences = [[toDelete reverseObjectEnumerator] allObjects];
 
-        for (FCPTranscriptWord *word in self.mutableWords) {
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
             // Advance past silences that ended before this word
             while (silIdx < forwardSilences.count) {
-                FCPTranscriptSilence *s = forwardSilences[silIdx];
+                SpliceKitTranscriptSilence *s = forwardSilences[silIdx];
                 if (s.endTime <= word.startTime) {
                     cumulativeShift += s.duration;
                     silIdx++;
@@ -3444,8 +3444,8 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         }
     }
 
-    FCPTranscriptWord *firstWord = self.mutableWords[startIndex];
-    FCPTranscriptWord *lastWord = self.mutableWords[startIndex + count - 1];
+    SpliceKitTranscriptWord *firstWord = self.mutableWords[startIndex];
+    SpliceKitTranscriptWord *lastWord = self.mutableWords[startIndex + count - 1];
     double sourceStart = firstWord.startTime;
     double sourceEnd = lastWord.endTime;
     double sourceDuration = sourceEnd - sourceStart;
@@ -3454,18 +3454,18 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     if (destIndex == 0) {
         destTime = 0;
     } else if (destIndex >= self.mutableWords.count) {
-        FCPTranscriptWord *lastW = self.mutableWords.lastObject;
+        SpliceKitTranscriptWord *lastW = self.mutableWords.lastObject;
         destTime = lastW.endTime;
     } else {
         destTime = self.mutableWords[destIndex].startTime;
     }
 
-    FCPBridge_log(@"[Transcript] Moving words %lu-%lu (%.2fs-%.2fs) to index %lu (time %.2fs)",
+    SpliceKit_log(@"[Transcript] Moving words %lu-%lu (%.2fs-%.2fs) to index %lu (time %.2fs)",
                   (unsigned long)startIndex, (unsigned long)(startIndex + count - 1),
                   sourceStart, sourceEnd, (unsigned long)destIndex, destTime);
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id timeline = [self getActiveTimelineModule];
             if (!timeline) {
@@ -3560,7 +3560,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 }
 
 - (void)scheduleRetranscribe {
-    FCPBridge_log(@"[Transcript] Scheduling re-transcribe after edit...");
+    SpliceKit_log(@"[Transcript] Scheduling re-transcribe after edit...");
     dispatch_async(dispatch_get_main_queue(), ^{
         [self updateStatusUI:@"Refreshing transcript..."];
         self.spinner.hidden = NO;
@@ -3580,14 +3580,14 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     // Each word has an immutable sourceMediaTime (its position in the source file).
     // We match each word to the clip that contains its source time, then compute:
     //   word.startTime = clip.timelineStart + (word.sourceMediaTime - clip.trimStart)
-    FCPBridge_log(@"[Transcript] Resyncing timestamps from timeline...");
+    SpliceKit_log(@"[Transcript] Resyncing timestamps from timeline...");
 
     // Give FCP a moment to settle after the edit
     [NSThread sleepForTimeInterval:0.3];
 
     __block NSArray *clipInfos = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id timeline = [self getActiveTimelineModule];
             if (!timeline) return;
@@ -3612,12 +3612,12 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             [self collectClipsFrom:(NSArray *)items atTimeline:&timelinePos into:infos];
             clipInfos = [infos copy];
         } @catch (NSException *e) {
-            FCPBridge_log(@"[Transcript] Resync error: %@", e.reason);
+            SpliceKit_log(@"[Transcript] Resync error: %@", e.reason);
         }
     });
 
     if (!clipInfos || clipInfos.count == 0) {
-        FCPBridge_log(@"[Transcript] Resync: no clips found");
+        SpliceKit_log(@"[Transcript] Resync: no clips found");
         return;
     }
 
@@ -3635,14 +3635,14 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         }
     }
 
-    FCPBridge_log(@"[Transcript] Resync: found %lu clips on timeline", (unsigned long)actualClips.count);
+    SpliceKit_log(@"[Transcript] Resync: found %lu clips on timeline", (unsigned long)actualClips.count);
 
     @synchronized (self.mutableWords) {
         if (self.mutableWords.count == 0) return;
 
         NSUInteger matched = 0, unmatched = 0;
 
-        for (FCPTranscriptWord *word in self.mutableWords) {
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
             double smt = word.sourceMediaTime;
             NSString *path = word.sourceMediaPath;
             BOOL found = NO;
@@ -3678,12 +3678,12 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             }
         }
 
-        FCPBridge_log(@"[Transcript] Resync: matched %lu words, %lu unmatched",
+        SpliceKit_log(@"[Transcript] Resync: matched %lu words, %lu unmatched",
                       (unsigned long)matched, (unsigned long)unmatched);
     }
 
     [self detectSilences];
-    FCPBridge_log(@"[Transcript] Resync complete");
+    SpliceKit_log(@"[Transcript] Resync complete");
 }
 
 #pragma mark - Playhead Sync
@@ -3703,7 +3703,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 }
 
 - (void)playheadTimerFired:(NSTimer *)timer {
-    if (self.status != FCPTranscriptStatusReady) return;
+    if (self.status != SpliceKitTranscriptStatusReady) return;
     if (self.mutableWords.count == 0) return;
     if (!self.panel.isVisible) return;
 
@@ -3714,14 +3714,14 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
         SEL currentTimeSel = NSSelectorFromString(@"currentSequenceTime");
         if ([timeline respondsToSelector:currentTimeSel]) {
-            FCPTranscript_CMTime t = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
+            SpliceKitTranscript_CMTime t = ((SpliceKitTranscript_CMTime (*)(id, SEL))objc_msgSend)(
                 timeline, currentTimeSel);
             double secs = CMTimeToSeconds(t);
             if (secs >= 0) playheadTime = secs;
         }
 
         if (playheadTime < 0 && [timeline respondsToSelector:@selector(playheadTime)]) {
-            FCPTranscript_CMTime t = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
+            SpliceKitTranscript_CMTime t = ((SpliceKitTranscript_CMTime (*)(id, SEL))objc_msgSend)(
                 timeline, @selector(playheadTime));
             playheadTime = CMTimeToSeconds(t);
         }
@@ -3730,7 +3730,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
             id container = [self getEditorContainer];
             SEL pstSel = NSSelectorFromString(@"playheadSequenceTime");
             if (container && [container respondsToSelector:pstSel]) {
-                FCPTranscript_CMTime t = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
+                SpliceKitTranscript_CMTime t = ((SpliceKitTranscript_CMTime (*)(id, SEL))objc_msgSend)(
                     container, pstSel);
                 playheadTime = CMTimeToSeconds(t);
             }
@@ -3754,7 +3754,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         // Find which word the playhead is on
         NSRange newRange = NSMakeRange(NSNotFound, 0);
         @synchronized (self.mutableWords) {
-            for (FCPTranscriptWord *word in self.mutableWords) {
+            for (SpliceKitTranscriptWord *word in self.mutableWords) {
                 if (timeInSeconds >= word.startTime && timeInSeconds < word.endTime) {
                     if (word.textRange.location + word.textRange.length <= storageLen) {
                         newRange = word.textRange;
@@ -3797,7 +3797,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         NSUInteger end = MIN(wordRange.location + wordRange.length, self.mutableWords.count);
 
         for (NSUInteger i = wordRange.location; i < end; i++) {
-            FCPTranscriptWord *word = self.mutableWords[i];
+            SpliceKitTranscriptWord *word = self.mutableWords[i];
             if (word.textRange.location + word.textRange.length <= storage.length) {
                 [storage addAttribute:NSBackgroundColorAttributeName
                                 value:color
@@ -3847,12 +3847,12 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
     int32_t timescale = 600;
     if ([timeline respondsToSelector:@selector(sequenceFrameDuration)]) {
-        FCPTranscript_CMTime fd = ((FCPTranscript_CMTime (*)(id, SEL))objc_msgSend)(
+        SpliceKitTranscript_CMTime fd = ((SpliceKitTranscript_CMTime (*)(id, SEL))objc_msgSend)(
             timeline, @selector(sequenceFrameDuration));
         if (fd.timescale > 0) timescale = fd.timescale;
     }
 
-    FCPTranscript_CMTime cmTime = {
+    SpliceKitTranscript_CMTime cmTime = {
         .value = (int64_t)(seconds * timescale),
         .timescale = timescale,
         .flags = 1,
@@ -3861,19 +3861,19 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
     SEL setPlayheadSel = NSSelectorFromString(@"setPlayheadTime:");
     if ([timeline respondsToSelector:setPlayheadSel]) {
-        ((void (*)(id, SEL, FCPTranscript_CMTime))objc_msgSend)(timeline, setPlayheadSel, cmTime);
+        ((void (*)(id, SEL, SpliceKitTranscript_CMTime))objc_msgSend)(timeline, setPlayheadSel, cmTime);
     }
 }
 
 #pragma mark - State
 
-- (NSArray<FCPTranscriptWord *> *)words {
+- (NSArray<SpliceKitTranscriptWord *> *)words {
     @synchronized (self.mutableWords) {
         return [self.mutableWords copy];
     }
 }
 
-- (NSArray<FCPTranscriptSilence *> *)silences {
+- (NSArray<SpliceKitTranscriptSilence *> *)silences {
     return [self.mutableSilences copy];
 }
 
@@ -3881,10 +3881,10 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     NSMutableDictionary *state = [NSMutableDictionary dictionary];
 
     switch (self.status) {
-        case FCPTranscriptStatusIdle:        state[@"status"] = @"idle"; break;
-        case FCPTranscriptStatusTranscribing: state[@"status"] = @"transcribing"; break;
-        case FCPTranscriptStatusReady:       state[@"status"] = @"ready"; break;
-        case FCPTranscriptStatusError:       state[@"status"] = @"error"; break;
+        case SpliceKitTranscriptStatusIdle:        state[@"status"] = @"idle"; break;
+        case SpliceKitTranscriptStatusTranscribing: state[@"status"] = @"transcribing"; break;
+        case SpliceKitTranscriptStatusReady:       state[@"status"] = @"ready"; break;
+        case SpliceKitTranscriptStatusError:       state[@"status"] = @"error"; break;
     }
 
     state[@"visible"] = @(self.isVisible);
@@ -3892,12 +3892,12 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     state[@"silenceCount"] = @(self.mutableSilences.count);
     state[@"silenceThreshold"] = @(self.silenceThreshold);
     state[@"frameRate"] = @(self.frameRate);
-    state[@"engine"] = (self.engine == FCPTranscriptEngineFCPNative) ? @"fcpNative" :
-                       (self.engine == FCPTranscriptEngineParakeet) ? @"parakeet" : @"appleSpeech";
-    if (self.engine == FCPTranscriptEngineParakeet) {
+    state[@"engine"] = (self.engine == SpliceKitTranscriptEngineFCPNative) ? @"fcpNative" :
+                       (self.engine == SpliceKitTranscriptEngineParakeet) ? @"parakeet" : @"appleSpeech";
+    if (self.engine == SpliceKitTranscriptEngineParakeet) {
         state[@"parakeetModel"] = self.parakeetModelVersion ?: @"v3";
     }
-    state[@"speakerDetectionAvailable"] = @(FCPTranscript_isSpeakerDiarizationAvailable());
+    state[@"speakerDetectionAvailable"] = @(SpliceKitTranscript_isSpeakerDiarizationAvailable());
     state[@"speakerDetectionEnabled"] = @(self.speakerDetectionEnabled);
 
     if (self.errorMessage) {
@@ -3908,7 +3908,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
         state[@"text"] = self.fullText;
     }
 
-    if (self.status == FCPTranscriptStatusTranscribing) {
+    if (self.status == SpliceKitTranscriptStatusTranscribing) {
         state[@"progress"] = @{
             @"completed": @(self.completedTranscriptions),
             @"total": @(self.totalTranscriptions)
@@ -3918,7 +3918,7 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
     if (self.mutableWords.count > 0) {
         NSMutableArray *wordList = [NSMutableArray array];
         @synchronized (self.mutableWords) {
-            for (FCPTranscriptWord *word in self.mutableWords) {
+            for (SpliceKitTranscriptWord *word in self.mutableWords) {
                 [wordList addObject:@{
                     @"index": @(word.wordIndex),
                     @"text": word.text ?: @"",
@@ -3935,14 +3935,14 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 
     if (self.mutableSilences.count > 0) {
         NSMutableArray *silenceList = [NSMutableArray array];
-        for (FCPTranscriptSilence *silence in self.mutableSilences) {
+        for (SpliceKitTranscriptSilence *silence in self.mutableSilences) {
             [silenceList addObject:@{
                 @"startTime": @(silence.startTime),
                 @"endTime": @(silence.endTime),
                 @"duration": @(silence.duration),
                 @"afterWordIndex": @(silence.afterWordIndex),
-                @"startTimecode": FCPTranscript_timecodeFromSeconds(silence.startTime, self.frameRate),
-                @"endTimecode": FCPTranscript_timecodeFromSeconds(silence.endTime, self.frameRate),
+                @"startTimecode": SpliceKitTranscript_timecodeFromSeconds(silence.startTime, self.frameRate),
+                @"endTimecode": SpliceKitTranscript_timecodeFromSeconds(silence.endTime, self.frameRate),
             }];
         }
         state[@"silences"] = silenceList;
@@ -3968,9 +3968,9 @@ static double CMTimeToSeconds(FCPTranscript_CMTime t) {
 }
 
 - (void)setErrorState:(NSString *)error {
-    FCPBridge_log(@"[Transcript] Error: %@", error);
+    SpliceKit_log(@"[Transcript] Error: %@", error);
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.status = FCPTranscriptStatusError;
+        self.status = SpliceKitTranscriptStatusError;
         self.errorMessage = error;
         [self updateStatusUI:[NSString stringWithFormat:@"Error: %@", error]];
         self.spinner.hidden = YES;

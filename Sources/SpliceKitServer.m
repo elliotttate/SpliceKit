@@ -1,11 +1,11 @@
 //
-//  FCPBridgeServer.m
+//  SpliceKitServer.m
 //  JSON-RPC 2.0 server over Unix domain socket
 //
 
-#import "FCPBridge.h"
-#import "FCPTranscriptPanel.h"
-#import "FCPCommandPalette.h"
+#import "SpliceKit.h"
+#import "SpliceKitTranscriptPanel.h"
+#import "SpliceKitCommandPalette.h"
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
@@ -31,28 +31,28 @@
 #endif
 
 // Forward declaration — defined in #pragma mark - Effect Drag as Adjustment Clip
-void FCPBridge_installEffectDragSwizzlesNow(void);
+void SpliceKit_installEffectDragSwizzlesNow(void);
 
-#define FCPBRIDGE_TCP_PORT 9876
+#define SPLICEKIT_TCP_PORT 9876
 
 static int sServerFd = -1;
 
 // Forward declarations
-static NSDictionary *FCPBridge_sendAppAction(NSString *selectorName);
-static NSDictionary *FCPBridge_sendPlayerAction(NSString *selectorName);
-static id FCPBridge_getActiveTimelineModule(void);
-static id FCPBridge_getEditorContainer(void);
+static NSDictionary *SpliceKit_sendAppAction(NSString *selectorName);
+static NSDictionary *SpliceKit_sendPlayerAction(NSString *selectorName);
+static id SpliceKit_getActiveTimelineModule(void);
+static id SpliceKit_getEditorContainer(void);
 
 #pragma mark - Object Handle System
 
 static NSMutableDictionary<NSString *, id> *sHandleMap = nil;
 static uint64_t sHandleCounter = 0;
 
-NSString *FCPBridge_storeHandle(id object) {
+NSString *SpliceKit_storeHandle(id object) {
     if (!object) return nil;
     if (!sHandleMap) sHandleMap = [NSMutableDictionary dictionary];
-    if (sHandleMap.count >= FCPBRIDGE_MAX_HANDLES) {
-        FCPBridge_log(@"Handle limit reached (%d), clearing old handles", FCPBRIDGE_MAX_HANDLES);
+    if (sHandleMap.count >= SPLICEKIT_MAX_HANDLES) {
+        SpliceKit_log(@"Handle limit reached (%d), clearing old handles", SPLICEKIT_MAX_HANDLES);
         [sHandleMap removeAllObjects];
     }
     sHandleCounter++;
@@ -61,20 +61,20 @@ NSString *FCPBridge_storeHandle(id object) {
     return handle;
 }
 
-id FCPBridge_resolveHandle(NSString *handleId) {
+id SpliceKit_resolveHandle(NSString *handleId) {
     if (!handleId || !sHandleMap) return nil;
     return sHandleMap[handleId];
 }
 
-void FCPBridge_releaseHandle(NSString *handleId) {
+void SpliceKit_releaseHandle(NSString *handleId) {
     [sHandleMap removeObjectForKey:handleId];
 }
 
-void FCPBridge_releaseAllHandles(void) {
+void SpliceKit_releaseAllHandles(void) {
     [sHandleMap removeAllObjects];
 }
 
-NSDictionary *FCPBridge_listHandles(void) {
+NSDictionary *SpliceKit_listHandles(void) {
     NSMutableArray *entries = [NSMutableArray array];
     for (NSString *key in sHandleMap) {
         id obj = sHandleMap[key];
@@ -90,15 +90,15 @@ NSDictionary *FCPBridge_listHandles(void) {
 
 #pragma mark - Type Helpers
 
-typedef struct { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch; } FCPBridge_CMTime;
-typedef struct { FCPBridge_CMTime start; FCPBridge_CMTime duration; } FCPBridge_CMTimeRange;
+typedef struct { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch; } SpliceKit_CMTime;
+typedef struct { SpliceKit_CMTime start; SpliceKit_CMTime duration; } SpliceKit_CMTimeRange;
 
-static NSDictionary *FCPBridge_serializeCMTime(FCPBridge_CMTime t) {
+static NSDictionary *SpliceKit_serializeCMTime(SpliceKit_CMTime t) {
     double seconds = (t.timescale > 0) ? (double)t.value / t.timescale : 0;
     return @{@"value": @(t.value), @"timescale": @(t.timescale), @"seconds": @(seconds)};
 }
 
-static id FCPBridge_serializeReturnValue(NSInvocation *invocation, BOOL returnHandle) {
+static id SpliceKit_serializeReturnValue(NSInvocation *invocation, BOOL returnHandle) {
     const char *retType = [[invocation methodSignature] methodReturnType];
     if (retType[0] == 'v') return @{@"result": @"void"};
 
@@ -107,7 +107,7 @@ static id FCPBridge_serializeReturnValue(NSInvocation *invocation, BOOL returnHa
         [invocation getReturnValue:&retObj];
         if (!retObj) return @{@"result": [NSNull null]};
         if (returnHandle) {
-            NSString *h = FCPBridge_storeHandle(retObj);
+            NSString *h = SpliceKit_storeHandle(retObj);
             return @{@"handle": h, @"class": NSStringFromClass([retObj class]),
                      @"description": [[retObj description] substringToIndex:
                          MIN((NSUInteger)500, [[retObj description] length])]};
@@ -142,10 +142,10 @@ static id FCPBridge_serializeReturnValue(NSInvocation *invocation, BOOL returnHa
     }
     // CMTime struct
     if (strstr(retType, "CMTime") || (retType[0] == '{' && strstr(retType, "qiIq"))) {
-        FCPBridge_CMTime val;
-        if ([[invocation methodSignature] methodReturnLength] == sizeof(FCPBridge_CMTime)) {
+        SpliceKit_CMTime val;
+        if ([[invocation methodSignature] methodReturnLength] == sizeof(SpliceKit_CMTime)) {
             [invocation getReturnValue:&val];
-            return @{@"result": FCPBridge_serializeCMTime(val)};
+            return @{@"result": SpliceKit_serializeCMTime(val)};
         }
     }
     return @{@"result": @"<unsupported return type>", @"returnType": @(retType)};
@@ -156,7 +156,7 @@ static id FCPBridge_serializeReturnValue(NSInvocation *invocation, BOOL returnHa
 static NSMutableArray *sConnectedClients = nil;
 static dispatch_queue_t sClientQueue = nil;
 
-void FCPBridge_broadcastEvent(NSDictionary *event) {
+void SpliceKit_broadcastEvent(NSDictionary *event) {
     if (!sConnectedClients || !sClientQueue) return;
 
     NSMutableDictionary *notification = [NSMutableDictionary dictionaryWithDictionary:@{
@@ -181,9 +181,9 @@ void FCPBridge_broadcastEvent(NSDictionary *event) {
 
 #pragma mark - Request Handler
 
-static NSDictionary *FCPBridge_handleSystemGetClasses(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSystemGetClasses(NSDictionary *params) {
     NSString *filter = params[@"filter"];
-    NSArray *allClasses = FCPBridge_allLoadedClasses();
+    NSArray *allClasses = SpliceKit_allLoadedClasses();
 
     if (filter && filter.length > 0) {
         NSPredicate *predicate = [NSPredicate predicateWithFormat:
@@ -194,7 +194,7 @@ static NSDictionary *FCPBridge_handleSystemGetClasses(NSDictionary *params) {
     return @{@"classes": allClasses, @"count": @(allClasses.count)};
 }
 
-static NSDictionary *FCPBridge_handleSystemGetMethods(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSystemGetMethods(NSDictionary *params) {
     NSString *className = params[@"className"];
     if (!className) return @{@"error": @"className required"};
 
@@ -206,7 +206,7 @@ static NSDictionary *FCPBridge_handleSystemGetMethods(NSDictionary *params) {
 
     Class current = cls;
     while (current) {
-        NSDictionary *methods = FCPBridge_methodsForClass(current);
+        NSDictionary *methods = SpliceKit_methodsForClass(current);
         [allMethods addEntriesFromDictionary:methods];
         if (!includeSuper) break;
         current = class_getSuperclass(current);
@@ -244,7 +244,7 @@ static NSDictionary *FCPBridge_handleSystemGetMethods(NSDictionary *params) {
     };
 }
 
-static NSDictionary *FCPBridge_handleSystemCallMethod(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSystemCallMethod(NSDictionary *params) {
     NSString *className = params[@"className"];
     NSString *selectorName = params[@"selector"];
     BOOL isClassMethod = [params[@"classMethod"] boolValue];
@@ -259,7 +259,7 @@ static NSDictionary *FCPBridge_handleSystemCallMethod(NSDictionary *params) {
 
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id target = isClassMethod ? (id)cls : nil;
 
@@ -346,10 +346,10 @@ static NSDictionary *FCPBridge_handleSystemCallMethod(NSDictionary *params) {
     return result;
 }
 
-static NSDictionary *FCPBridge_handleSystemVersion(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSystemVersion(NSDictionary *params) {
     NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
     return @{
-        @"fcpbridge_version": @FCPBRIDGE_VERSION,
+        @"splicekit_version": @SPLICEKIT_VERSION,
         @"fcp_version": info[@"CFBundleShortVersionString"] ?: @"unknown",
         @"fcp_build": info[@"CFBundleVersion"] ?: @"unknown",
         @"pid": @(getpid()),
@@ -362,12 +362,12 @@ static NSDictionary *FCPBridge_handleSystemVersion(NSDictionary *params) {
     };
 }
 
-static NSDictionary *FCPBridge_handleSystemSwizzle(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSystemSwizzle(NSDictionary *params) {
     // Swizzle is more complex -- for now just report capability
     return @{@"error": @"Swizzle requires compiled IMP. Use system.callMethod for direct calls."};
 }
 
-static NSDictionary *FCPBridge_handleSystemGetProperties(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSystemGetProperties(NSDictionary *params) {
     NSString *className = params[@"className"];
     if (!className) return @{@"error": @"className required"};
 
@@ -392,7 +392,7 @@ static NSDictionary *FCPBridge_handleSystemGetProperties(NSDictionary *params) {
     return @{@"className": className, @"properties": properties, @"count": @(count)};
 }
 
-static NSDictionary *FCPBridge_handleSystemGetProtocols(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSystemGetProtocols(NSDictionary *params) {
     NSString *className = params[@"className"];
     if (!className) return @{@"error": @"className required"};
 
@@ -412,7 +412,7 @@ static NSDictionary *FCPBridge_handleSystemGetProtocols(NSDictionary *params) {
     return @{@"className": className, @"protocols": protocols, @"count": @(count)};
 }
 
-static NSDictionary *FCPBridge_handleSystemGetSuperchain(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSystemGetSuperchain(NSDictionary *params) {
     NSString *className = params[@"className"];
     if (!className) return @{@"error": @"className required"};
 
@@ -429,7 +429,7 @@ static NSDictionary *FCPBridge_handleSystemGetSuperchain(NSDictionary *params) {
     return @{@"className": className, @"superchain": chain};
 }
 
-static NSDictionary *FCPBridge_handleSystemGetIvars(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSystemGetIvars(NSDictionary *params) {
     NSString *className = params[@"className"];
     if (!className) return @{@"error": @"className required"};
 
@@ -458,13 +458,13 @@ static NSDictionary *FCPBridge_handleSystemGetIvars(NSDictionary *params) {
 
 #pragma mark - system.callMethodWithArgs
 
-static id FCPBridge_resolveTarget(NSDictionary *params) {
+static id SpliceKit_resolveTarget(NSDictionary *params) {
     NSString *target = params[@"target"] ?: params[@"className"];
     BOOL isClassMethod = [params[@"classMethod"] boolValue];
 
     // Check if target is a handle
     if ([target hasPrefix:@"obj_"]) {
-        return FCPBridge_resolveHandle(target);
+        return SpliceKit_resolveHandle(target);
     }
 
     Class cls = objc_getClass([target UTF8String]);
@@ -482,7 +482,7 @@ static id FCPBridge_resolveTarget(NSDictionary *params) {
     return nil;
 }
 
-static BOOL FCPBridge_isKnownUnsafeNilErrorSelector(NSString *selectorName, NSArray *args,
+static BOOL SpliceKit_isKnownUnsafeNilErrorSelector(NSString *selectorName, NSArray *args,
                                                     NSString **reason) {
     if (![selectorName isKindOfClass:[NSString class]]) return NO;
     if (![args isKindOfClass:[NSArray class]] || args.count == 0) return NO;
@@ -511,7 +511,7 @@ static BOOL FCPBridge_isKnownUnsafeNilErrorSelector(NSString *selectorName, NSAr
     return YES;
 }
 
-static NSDictionary *FCPBridge_handleCallMethodWithArgs(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleCallMethodWithArgs(NSDictionary *params) {
     NSString *targetName = params[@"target"] ?: params[@"className"];
     NSString *selectorName = params[@"selector"];
     NSArray *args = params[@"args"] ?: @[];
@@ -522,9 +522,9 @@ static NSDictionary *FCPBridge_handleCallMethodWithArgs(NSDictionary *params) {
 
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id target = FCPBridge_resolveTarget(params);
+            id target = SpliceKit_resolveTarget(params);
             if (!target) {
                 result = @{@"error": [NSString stringWithFormat:@"Cannot resolve target: %@", targetName]};
                 return;
@@ -547,7 +547,7 @@ static NSDictionary *FCPBridge_handleCallMethodWithArgs(NSDictionary *params) {
             }
 
             NSString *unsafeReason = nil;
-            if (FCPBridge_isKnownUnsafeNilErrorSelector(selectorName, args, &unsafeReason)) {
+            if (SpliceKit_isKnownUnsafeNilErrorSelector(selectorName, args, &unsafeReason)) {
                 result = @{@"error": unsafeReason ?: @"Unsafe selector invocation blocked"};
                 return;
             }
@@ -587,7 +587,7 @@ static NSDictionary *FCPBridge_handleCallMethodWithArgs(NSDictionary *params) {
                     id val = nil;
                     [inv setArgument:&val atIndex:argIdx];
                 } else if ([type isEqualToString:@"handle"]) {
-                    id val = FCPBridge_resolveHandle(arg[@"value"]);
+                    id val = SpliceKit_resolveHandle(arg[@"value"]);
                     if (!val) {
                         result = @{@"error": [NSString stringWithFormat:
                             @"Handle not found: %@", arg[@"value"]]};
@@ -596,7 +596,7 @@ static NSDictionary *FCPBridge_handleCallMethodWithArgs(NSDictionary *params) {
                     [inv setArgument:&val atIndex:argIdx];
                 } else if ([type isEqualToString:@"cmtime"]) {
                     NSDictionary *tv = arg[@"value"];
-                    FCPBridge_CMTime t = {
+                    SpliceKit_CMTime t = {
                         .value = [tv[@"value"] longLongValue],
                         .timescale = [tv[@"timescale"] intValue],
                         .flags = 1, .epoch = 0
@@ -613,7 +613,7 @@ static NSDictionary *FCPBridge_handleCallMethodWithArgs(NSDictionary *params) {
             }
 
             [inv invoke];
-            result = FCPBridge_serializeReturnValue(inv, returnHandle);
+            result = SpliceKit_serializeReturnValue(inv, returnHandle);
         } @catch (NSException *e) {
             result = @{@"error": [NSString stringWithFormat:@"Exception: %@ - %@",
                         e.name, e.reason]};
@@ -625,52 +625,52 @@ static NSDictionary *FCPBridge_handleCallMethodWithArgs(NSDictionary *params) {
 
 #pragma mark - Object Handlers
 
-static NSDictionary *FCPBridge_handleObjectGet(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleObjectGet(NSDictionary *params) {
     NSString *handle = params[@"handle"];
     if (!handle) return @{@"error": @"handle required"};
-    id obj = FCPBridge_resolveHandle(handle);
+    id obj = SpliceKit_resolveHandle(handle);
     if (!obj) return @{@"error": [NSString stringWithFormat:@"Handle not found: %@", handle]};
     return @{@"handle": handle, @"class": NSStringFromClass([obj class]),
              @"description": [[obj description] substringToIndex:
                  MIN((NSUInteger)500, [[obj description] length])], @"valid": @YES};
 }
 
-static NSDictionary *FCPBridge_handleObjectRelease(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleObjectRelease(NSDictionary *params) {
     if ([params[@"all"] boolValue]) {
         NSUInteger count = sHandleMap.count;
-        FCPBridge_releaseAllHandles();
+        SpliceKit_releaseAllHandles();
         return @{@"released": @(count)};
     }
     NSString *handle = params[@"handle"];
     if (!handle) return @{@"error": @"handle or all:true required"};
-    BOOL existed = (FCPBridge_resolveHandle(handle) != nil);
-    FCPBridge_releaseHandle(handle);
+    BOOL existed = (SpliceKit_resolveHandle(handle) != nil);
+    SpliceKit_releaseHandle(handle);
     return @{@"handle": handle, @"released": @(existed)};
 }
 
-static NSDictionary *FCPBridge_handleObjectList(NSDictionary *params) {
-    return FCPBridge_listHandles();
+static NSDictionary *SpliceKit_handleObjectList(NSDictionary *params) {
+    return SpliceKit_listHandles();
 }
 
 #pragma mark - KVC Property Access
 
-static NSDictionary *FCPBridge_handleGetProperty(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleGetProperty(NSDictionary *params) {
     NSString *handle = params[@"handle"];
     NSString *key = params[@"key"];
     BOOL returnHandle = [params[@"returnHandle"] boolValue];
     if (!handle || !key) return @{@"error": @"handle and key required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id obj = FCPBridge_resolveHandle(handle);
+            id obj = SpliceKit_resolveHandle(handle);
             if (!obj) { result = @{@"error": @"Handle not found"}; return; }
 
             id value = [obj valueForKey:key];
             if (!value) {
                 result = @{@"key": key, @"result": [NSNull null]};
             } else if (returnHandle) {
-                NSString *h = FCPBridge_storeHandle(value);
+                NSString *h = SpliceKit_storeHandle(value);
                 result = @{@"key": key, @"handle": h,
                            @"class": NSStringFromClass([value class]),
                            @"description": [[value description] substringToIndex:
@@ -687,15 +687,15 @@ static NSDictionary *FCPBridge_handleGetProperty(NSDictionary *params) {
     return result;
 }
 
-static NSDictionary *FCPBridge_handleSetProperty(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSetProperty(NSDictionary *params) {
     NSString *handle = params[@"handle"];
     NSString *key = params[@"key"];
     if (!handle || !key) return @{@"error": @"handle and key required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id obj = FCPBridge_resolveHandle(handle);
+            id obj = SpliceKit_resolveHandle(handle);
             if (!obj) { result = @{@"error": @"Handle not found"}; return; }
 
             NSDictionary *valSpec = params[@"value"];
@@ -719,14 +719,14 @@ static NSDictionary *FCPBridge_handleSetProperty(NSDictionary *params) {
 
 #pragma mark - timeline.getDetailedState
 
-NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
-    FCPBridge_installEffectDragSwizzlesNow();
+NSDictionary *SpliceKit_handleTimelineGetDetailedState(NSDictionary *params) {
+    SpliceKit_installEffectDragSwizzlesNow();
     NSInteger limit = [params[@"limit"] integerValue] ?: 200;
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) {
                 result = @{@"error": @"No active timeline module. Is a project open?"};
                 return;
@@ -753,14 +753,14 @@ NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
 
             // Playhead
             if ([timeline respondsToSelector:@selector(playheadTime)]) {
-                FCPBridge_CMTime t = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(timeline, @selector(playheadTime));
-                state[@"playheadTime"] = FCPBridge_serializeCMTime(t);
+                SpliceKit_CMTime t = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(timeline, @selector(playheadTime));
+                state[@"playheadTime"] = SpliceKit_serializeCMTime(t);
             }
 
             // Sequence duration
             if ([sequence respondsToSelector:@selector(duration)]) {
-                FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, @selector(duration));
-                state[@"duration"] = FCPBridge_serializeCMTime(d);
+                SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, @selector(duration));
+                state[@"duration"] = SpliceKit_serializeCMTime(d);
             }
 
             // Selected items (get set for checking)
@@ -811,8 +811,8 @@ NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
                             info[@"name"] = name ?: @"";
                         }
                         if ([item respondsToSelector:@selector(duration)]) {
-                            FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
-                            info[@"duration"] = FCPBridge_serializeCMTime(d);
+                            SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
+                            info[@"duration"] = SpliceKit_serializeCMTime(d);
                         }
                         if ([item respondsToSelector:@selector(anchoredLane)]) {
                             long long lane = ((long long (*)(id, SEL))objc_msgSend)(item, @selector(anchoredLane));
@@ -826,31 +826,31 @@ NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
                         info[@"selected"] = @(selectedSet && [selectedSet containsObject:item]);
 
                         // Store handle for the item
-                        NSString *h = FCPBridge_storeHandle(item);
+                        NSString *h = SpliceKit_storeHandle(item);
                         info[@"handle"] = h;
 
                         // Trimmed offset (in-point in source media)
                         SEL trimOffSel = NSSelectorFromString(@"trimmedOffset");
                         if ([item respondsToSelector:trimOffSel]) {
-                            FCPBridge_CMTime t = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, trimOffSel);
-                            info[@"trimmedOffset"] = FCPBridge_serializeCMTime(t);
+                            SpliceKit_CMTime t = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, trimOffSel);
+                            info[@"trimmedOffset"] = SpliceKit_serializeCMTime(t);
                         }
 
                         // Absolute position in timeline via effectiveRangeOfObject:
                         if (canGetRange) {
                             @try {
-                                FCPBridge_CMTimeRange range = ((FCPBridge_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                                SpliceKit_CMTimeRange range = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
                                     primaryObj, erSel, item);
-                                info[@"startTime"] = FCPBridge_serializeCMTime(range.start);
+                                info[@"startTime"] = SpliceKit_serializeCMTime(range.start);
                                 // Compute end time = start + duration
-                                FCPBridge_CMTime endTime = range.start;
+                                SpliceKit_CMTime endTime = range.start;
                                 if (range.duration.timescale == range.start.timescale) {
                                     endTime.value = range.start.value + range.duration.value;
                                 } else if (range.duration.timescale > 0) {
                                     endTime.value = range.start.value +
                                         (range.duration.value * range.start.timescale / range.duration.timescale);
                                 }
-                                info[@"endTime"] = FCPBridge_serializeCMTime(endTime);
+                                info[@"endTime"] = SpliceKit_serializeCMTime(endTime);
                             } @catch (NSException *e) {
                                 // Silently skip if effectiveRangeOfObject: fails for this item
                             }
@@ -865,8 +865,8 @@ NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
             // Frame rate from sequence
             SEL frdSel = NSSelectorFromString(@"frameDuration");
             if ([sequence respondsToSelector:frdSel]) {
-                FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, frdSel);
-                state[@"frameDuration"] = FCPBridge_serializeCMTime(fd);
+                SpliceKit_CMTime fd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, frdSel);
+                state[@"frameDuration"] = SpliceKit_serializeCMTime(fd);
                 if (fd.value > 0) {
                     state[@"frameRate"] = @((double)fd.timescale / fd.value);
                 }
@@ -883,27 +883,27 @@ NSDictionary *FCPBridge_handleTimelineGetDetailedState(NSDictionary *params) {
 #pragma mark - FCPXML Import
 
 // Forward declarations
-static NSDictionary *FCPBridge_handlePasteboardImportXML(NSDictionary *params);
-static NSDictionary *FCPBridge_handleInspectorSet(NSDictionary *params);
+static NSDictionary *SpliceKit_handlePasteboardImportXML(NSDictionary *params);
+static NSDictionary *SpliceKit_handleInspectorSet(NSDictionary *params);
 
-static NSDictionary *FCPBridge_handleFCPXMLImport(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleFCPXMLImport(NSDictionary *params) {
     NSString *xml = params[@"xml"];
     if (!xml) return @{@"error": @"xml parameter required"};
     BOOL useInternal = [params[@"internal"] boolValue];
 
     // Preferred path: use FFXMLTranslationTask (no dialog, no blocking)
     if (useInternal) {
-        NSDictionary *pbResult = FCPBridge_handlePasteboardImportXML(@{@"xml": xml});
+        NSDictionary *pbResult = SpliceKit_handlePasteboardImportXML(@{@"xml": xml});
         if (!pbResult[@"error"]) {
             return pbResult;
         }
-        FCPBridge_log(@"Pasteboard import failed (%@), falling back to file import",
+        SpliceKit_log(@"Pasteboard import failed (%@), falling back to file import",
                       pbResult[@"error"]);
     }
 
     // Fallback: file-based import via NSWorkspace (async, won't block bridge)
     NSString *tmpPath = [NSTemporaryDirectory()
-        stringByAppendingPathComponent:@"fcpbridge_import.fcpxml"];
+        stringByAppendingPathComponent:@"splicekit_import.fcpxml"];
     NSData *data = [xml dataUsingEncoding:NSUTF8StringEncoding];
     [data writeToFile:tmpPath atomically:YES];
     NSURL *fileURL = [NSURL fileURLWithPath:tmpPath];
@@ -927,14 +927,14 @@ static NSDictionary *FCPBridge_handleFCPXMLImport(NSDictionary *params) {
 
 #pragma mark - FCPXML Pasteboard Import (bypasses library dialog)
 
-static NSDictionary *FCPBridge_handlePasteboardImportXML(NSDictionary *params) {
+static NSDictionary *SpliceKit_handlePasteboardImportXML(NSDictionary *params) {
     // Import FCPXML from the system pasteboard (or provided XML string) directly
     // into the current project, using FFXMLTranslationTask. This bypasses the
     // library selection dialog that openXMLDocumentWithURL: triggers.
     NSString *xml = params[@"xml"]; // Optional: if provided, write to PB first
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // If xml provided, write it to the pasteboard
             if (xml) {
@@ -1029,7 +1029,7 @@ static NSDictionary *FCPBridge_handlePasteboardImportXML(NSDictionary *params) {
             }
 
             // Set target event from the current timeline's sequence
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (timeline) {
                 SEL seqSel = NSSelectorFromString(@"sequence");
                 id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, seqSel);
@@ -1127,7 +1127,7 @@ static NSDictionary *FCPBridge_handlePasteboardImportXML(NSDictionary *params) {
                             if (attrs[@"volume"] || attrs[@"opacity"]) {
                                 // Find the imported clip by loading the new sequence and selecting
                                 // For now, we apply to the most recently created sequence's clips
-                                id activeModule = FCPBridge_getActiveTimelineModule();
+                                id activeModule = SpliceKit_getActiveTimelineModule();
                                 if (!activeModule) {
                                     // The import created a new project; we need to find and load it.
                                     // Look for a sequence matching the project name in the FCPXML.
@@ -1161,7 +1161,7 @@ static NSDictionary *FCPBridge_handlePasteboardImportXML(NSDictionary *params) {
                                                     }
                                                     // Brief pause for the sequence to load
                                                     [NSThread sleepForTimeInterval:0.5];
-                                                    activeModule = FCPBridge_getActiveTimelineModule();
+                                                    activeModule = SpliceKit_getActiveTimelineModule();
                                                     break;
                                                 }
                                             }
@@ -1179,7 +1179,7 @@ static NSDictionary *FCPBridge_handlePasteboardImportXML(NSDictionary *params) {
 
                                     // Apply volume via inspector path
                                     if (attrs[@"volume"]) {
-                                        NSDictionary *volResult = FCPBridge_handleInspectorSet(
+                                        NSDictionary *volResult = SpliceKit_handleInspectorSet(
                                             @{@"property": @"volume", @"value": attrs[@"volume"]});
                                         if (!volResult[@"error"]) {
                                             [appliedAttrs addObject:
@@ -1187,7 +1187,7 @@ static NSDictionary *FCPBridge_handlePasteboardImportXML(NSDictionary *params) {
                                         }
                                     }
                                     if (attrs[@"opacity"]) {
-                                        NSDictionary *opaResult = FCPBridge_handleInspectorSet(
+                                        NSDictionary *opaResult = SpliceKit_handleInspectorSet(
                                             @{@"property": @"opacity", @"value": attrs[@"opacity"]});
                                         if (!opaResult[@"error"]) {
                                             [appliedAttrs addObject:
@@ -1199,7 +1199,7 @@ static NSDictionary *FCPBridge_handlePasteboardImportXML(NSDictionary *params) {
                         }
                     }
                 } @catch (NSException *e) {
-                    FCPBridge_log(@"[PasteImport] Attribute restore error: %@", e.reason);
+                    SpliceKit_log(@"[PasteImport] Attribute restore error: %@", e.reason);
                 }
             }
 
@@ -1224,13 +1224,13 @@ static NSDictionary *FCPBridge_handlePasteboardImportXML(NSDictionary *params) {
 
 #pragma mark - Effect Discovery
 
-static NSDictionary *FCPBridge_handleEffectList(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleEffectList(NSDictionary *params) {
     NSString *filter = params[@"filter"];
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) {
                 result = @{@"error": @"No active timeline"};
                 return;
@@ -1265,7 +1265,7 @@ static NSDictionary *FCPBridge_handleEffectList(NSDictionary *params) {
             }
 
             if (registry) {
-                NSString *h = FCPBridge_storeHandle(registry);
+                NSString *h = SpliceKit_storeHandle(registry);
                 result = @{@"handle": h, @"class": NSStringFromClass([registry class]),
                            @"message": @"Use get_object_property to explore the registry"};
             } else {
@@ -1278,20 +1278,20 @@ static NSDictionary *FCPBridge_handleEffectList(NSDictionary *params) {
     return result;
 }
 
-static NSDictionary *FCPBridge_handleGetClipEffects(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleGetClipEffects(NSDictionary *params) {
     NSString *clipHandle = params[@"handle"];
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id clip = nil;
             if (clipHandle) {
-                clip = FCPBridge_resolveHandle(clipHandle);
+                clip = SpliceKit_resolveHandle(clipHandle);
             }
 
             if (!clip) {
                 // Get first selected clip
-                id timeline = FCPBridge_getActiveTimelineModule();
+                id timeline = SpliceKit_getActiveTimelineModule();
                 if (!timeline) { result = @{@"error": @"No timeline"}; return; }
 
                 SEL selSel = NSSelectorFromString(@"selectedItems:includeItemBeforePlayheadIfLast:");
@@ -1316,7 +1316,7 @@ static NSDictionary *FCPBridge_handleGetClipEffects(NSDictionary *params) {
             if ([clip respondsToSelector:esSel]) {
                 id effectStack = ((id (*)(id, SEL))objc_msgSend)(clip, esSel);
                 if (effectStack) {
-                    NSString *esHandle = FCPBridge_storeHandle(effectStack);
+                    NSString *esHandle = SpliceKit_storeHandle(effectStack);
                     info[@"effectStackHandle"] = esHandle;
                     info[@"effectStackClass"] = NSStringFromClass([effectStack class]);
                     info[@"effectStackDescription"] = [[effectStack description] substringToIndex:
@@ -1339,7 +1339,7 @@ static NSDictionary *FCPBridge_handleGetClipEffects(NSDictionary *params) {
                         if ([effect respondsToSelector:@selector(effectID)]) {
                             ef[@"effectID"] = ((id (*)(id, SEL))objc_msgSend)(effect, @selector(effectID)) ?: @"";
                         }
-                        NSString *efHandle = FCPBridge_storeHandle(effect);
+                        NSString *efHandle = SpliceKit_storeHandle(effect);
                         ef[@"handle"] = efHandle;
                         [efList addObject:ef];
                     }
@@ -1358,7 +1358,7 @@ static NSDictionary *FCPBridge_handleGetClipEffects(NSDictionary *params) {
 
 #pragma mark - Timeline Helpers
 
-static id FCPBridge_getActiveTimelineModule(void) {
+static id SpliceKit_getActiveTimelineModule(void) {
     // PEAppController -> activeEditorContainer -> timelineModule
     // The app delegate is the PEAppController
     id app = ((id (*)(id, SEL))objc_msgSend)(
@@ -1387,7 +1387,7 @@ static id FCPBridge_getActiveTimelineModule(void) {
     return nil;
 }
 
-static id FCPBridge_getEditorContainer(void) {
+static id SpliceKit_getEditorContainer(void) {
     id app = ((id (*)(id, SEL))objc_msgSend)(
         objc_getClass("NSApplication"), @selector(sharedApplication));
     id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
@@ -1399,12 +1399,12 @@ static id FCPBridge_getEditorContainer(void) {
 }
 
 // Send an IBAction-style message (-(void)action:(id)sender) to the timeline module
-static NSDictionary *FCPBridge_sendTimelineAction(NSString *selectorName) {
+static NSDictionary *SpliceKit_sendTimelineAction(NSString *selectorName) {
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) {
                 result = @{@"error": @"No active timeline module. Is a project open?"};
                 return;
@@ -1428,12 +1428,12 @@ static NSDictionary *FCPBridge_sendTimelineAction(NSString *selectorName) {
 }
 
 // Send an IBAction to the editor container (for playback)
-static NSDictionary *FCPBridge_sendEditorAction(NSString *selectorName) {
+static NSDictionary *SpliceKit_sendEditorAction(NSString *selectorName) {
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id container = FCPBridge_getEditorContainer();
+            id container = SpliceKit_getEditorContainer();
             if (!container) {
                 result = @{@"error": @"No active editor container"};
                 return;
@@ -1458,9 +1458,9 @@ static NSDictionary *FCPBridge_sendEditorAction(NSString *selectorName) {
 
 #pragma mark - Timeline Command Handlers
 
-NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
+NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
     // Lazily install effect-drag swizzles on first timeline access
-    FCPBridge_installEffectDragSwizzlesNow();
+    SpliceKit_installEffectDragSwizzlesNow();
 
     NSString *action = params[@"action"];
     if (!action) return @{@"error": @"action parameter required"};
@@ -1860,7 +1860,7 @@ NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
     // Undo/redo go through the document's FFUndoManager
     if ([action isEqualToString:@"undo"] || [action isEqualToString:@"redo"]) {
         __block NSDictionary *undoResult = nil;
-        FCPBridge_executeOnMainThread(^{
+        SpliceKit_executeOnMainThread(^{
             @try {
                 id app = ((id (*)(id, SEL))objc_msgSend)(
                     objc_getClass("NSApplication"), @selector(sharedApplication));
@@ -1929,7 +1929,7 @@ NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
     // For FCPXML content, we must route through FFXMLTranslationTask instead.
     if ([action isEqualToString:@"paste"]) {
         __block BOOL hasXML = NO;
-        FCPBridge_executeOnMainThread(^{
+        SpliceKit_executeOnMainThread(^{
             NSPasteboard *pb = [NSPasteboard generalPasteboard];
             SEL containsXMLSel = NSSelectorFromString(@"containsXML");
             if ([pb respondsToSelector:containsXMLSel]) {
@@ -1944,18 +1944,18 @@ NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
             }
         });
         if (hasXML) {
-            return FCPBridge_handlePasteboardImportXML(@{});
+            return SpliceKit_handlePasteboardImportXML(@{});
         }
     }
 
     // First try on the timeline module directly (fastest, most specific)
-    NSDictionary *result = FCPBridge_sendTimelineAction(selector);
+    NSDictionary *result = SpliceKit_sendTimelineAction(selector);
 
     // If timeline module doesn't respond, fall back to responder chain
     if (result[@"error"]) {
         NSString *errMsg = result[@"error"];
         if ([errMsg containsString:@"does not respond"] || [errMsg containsString:@"No active"]) {
-            return FCPBridge_sendAppAction(selector);
+            return SpliceKit_sendAppAction(selector);
         }
     }
 
@@ -1971,7 +1971,7 @@ NSDictionary *FCPBridge_handleTimelineAction(NSDictionary *params) {
 // Usage: {"method":"timeline.directAction", "params":{"selector":"actionRetimeSetRatePreset:rate:ripple:allowVariableSpeedRetiming:objectsAndNewRanges:error:", "args":[...]}}
 // Or use friendly names: {"method":"timeline.directAction", "params":{"action":"retimeSetRate", "rate":0.5, "ripple":true}}
 
-NSDictionary *FCPBridge_handleDirectTimelineAction(NSDictionary *params) {
+NSDictionary *SpliceKit_handleDirectTimelineAction(NSDictionary *params) {
     NSString *action = params[@"action"];
     NSString *rawSelector = params[@"selector"];
 
@@ -1981,9 +1981,9 @@ NSDictionary *FCPBridge_handleDirectTimelineAction(NSDictionary *params) {
 
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) {
                 result = @{@"error": @"No active timeline module. Is a project open?"};
                 return;
@@ -2033,7 +2033,7 @@ NSDictionary *FCPBridge_handleDirectTimelineAction(NSDictionary *params) {
                 NSString *name = params[@"name"];
                 NSString *markerHandle = params[@"marker"];
                 if (!name) { result = @{@"error": @"name parameter required"}; return; }
-                id marker = markerHandle ? FCPBridge_resolveHandle(markerHandle) : nil;
+                id marker = markerHandle ? SpliceKit_resolveHandle(markerHandle) : nil;
                 if (!marker) {
                     // Try to use selected marker
                     id selected = getSelectedItems();
@@ -2052,7 +2052,7 @@ NSDictionary *FCPBridge_handleDirectTimelineAction(NSDictionary *params) {
 
             if ([action isEqualToString:@"markMarkerCompleted"]) {
                 // Mark a todo marker as completed
-                id marker = params[@"marker"] ? FCPBridge_resolveHandle(params[@"marker"]) : nil;
+                id marker = params[@"marker"] ? SpliceKit_resolveHandle(params[@"marker"]) : nil;
                 if (!marker) {
                     id selected = getSelectedItems();
                     if ([selected respondsToSelector:@selector(firstObject)]) {
@@ -2070,7 +2070,7 @@ NSDictionary *FCPBridge_handleDirectTimelineAction(NSDictionary *params) {
             }
 
             if ([action isEqualToString:@"removeMarker"]) {
-                id marker = params[@"marker"] ? FCPBridge_resolveHandle(params[@"marker"]) : nil;
+                id marker = params[@"marker"] ? SpliceKit_resolveHandle(params[@"marker"]) : nil;
                 if (!marker) { result = @{@"error": @"marker handle required"}; return; }
                 NSError *error = nil;
                 SEL sel = NSSelectorFromString(@"actionRemoveMarker:error:");
@@ -2759,8 +2759,8 @@ NSDictionary *FCPBridge_handleDirectTimelineAction(NSDictionary *params) {
 }
 
 // Get the FFPlayerModule from editor container
-static id FCPBridge_getPlayerModule(void) {
-    id container = FCPBridge_getEditorContainer();
+static id SpliceKit_getPlayerModule(void) {
+    id container = SpliceKit_getEditorContainer();
     if (!container) return nil;
 
     // Try playerModule or editorModule.playerModule
@@ -2780,10 +2780,10 @@ static id FCPBridge_getPlayerModule(void) {
 }
 
 // Send action via NSApp.sendAction:to:from: (goes through responder chain)
-static NSDictionary *FCPBridge_sendAppAction(NSString *selectorName) {
+static NSDictionary *SpliceKit_sendAppAction(NSString *selectorName) {
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id app = ((id (*)(id, SEL))objc_msgSend)(
                 objc_getClass("NSApplication"), @selector(sharedApplication));
@@ -2805,12 +2805,12 @@ static NSDictionary *FCPBridge_sendAppAction(NSString *selectorName) {
 }
 
 // Send action to the player module specifically
-static NSDictionary *FCPBridge_sendPlayerAction(NSString *selectorName) {
+static NSDictionary *SpliceKit_sendPlayerAction(NSString *selectorName) {
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id player = FCPBridge_getPlayerModule();
+            id player = SpliceKit_getPlayerModule();
             if (!player) {
                 result = @{@"error": @"No player module found"};
                 return;
@@ -2833,7 +2833,7 @@ static NSDictionary *FCPBridge_sendPlayerAction(NSString *selectorName) {
     return result;
 }
 
-NSDictionary *FCPBridge_handlePlayback(NSDictionary *params) {
+NSDictionary *SpliceKit_handlePlayback(NSDictionary *params) {
     NSString *action = params[@"action"];
     if (!action) return @{@"error": @"action parameter required"};
 
@@ -2866,17 +2866,17 @@ NSDictionary *FCPBridge_handlePlayback(NSDictionary *params) {
         }
     }
 
-    return FCPBridge_sendAppAction(selector);
+    return SpliceKit_sendAppAction(selector);
 }
 
-NSDictionary *FCPBridge_handlePlaybackSeek(NSDictionary *params) {
+NSDictionary *SpliceKit_handlePlaybackSeek(NSDictionary *params) {
     NSNumber *seconds = params[@"seconds"];
     if (!seconds) return @{@"error": @"seconds parameter required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) {
                 result = @{@"error": @"No active timeline module"};
                 return;
@@ -2892,7 +2892,7 @@ NSDictionary *FCPBridge_handlePlaybackSeek(NSDictionary *params) {
                     // On ARM64, objc_msgSend handles struct returns directly
                     SEL fdSel = NSSelectorFromString(@"frameDuration");
                     if ([sequence respondsToSelector:fdSel]) {
-                        FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(
+                        SpliceKit_CMTime fd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
                             sequence, fdSel);
                         if (fd.timescale > 0) timescale = fd.timescale;
                     }
@@ -2901,7 +2901,7 @@ NSDictionary *FCPBridge_handlePlaybackSeek(NSDictionary *params) {
 
             // Build CMTime from seconds
             double secs = [seconds doubleValue];
-            FCPBridge_CMTime targetTime;
+            SpliceKit_CMTime targetTime;
             targetTime.value = (int64_t)(secs * timescale);
             targetTime.timescale = timescale;
             targetTime.flags = 1; // kCMTimeFlags_Valid
@@ -2910,12 +2910,12 @@ NSDictionary *FCPBridge_handlePlaybackSeek(NSDictionary *params) {
             // Call setPlayheadTime: on the timeline module
             SEL setSel = @selector(setPlayheadTime:);
             if ([timeline respondsToSelector:setSel]) {
-                ((void (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                     timeline, setSel, targetTime);
                 result = @{
                     @"status": @"ok",
                     @"seconds": @(secs),
-                    @"time": FCPBridge_serializeCMTime(targetTime),
+                    @"time": SpliceKit_serializeCMTime(targetTime),
                 };
             } else {
                 result = @{@"error": @"Timeline module does not respond to setPlayheadTime:"};
@@ -2927,38 +2927,38 @@ NSDictionary *FCPBridge_handlePlaybackSeek(NSDictionary *params) {
     return result ?: @{@"error": @"Failed to seek"};
 }
 
-NSDictionary *FCPBridge_handlePlaybackGetPosition(NSDictionary *params) {
+NSDictionary *SpliceKit_handlePlaybackGetPosition(NSDictionary *params) {
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) { result = @{@"error": @"No active timeline module"}; return; }
 
             // Read playhead time
             SEL phSel = NSSelectorFromString(@"playheadTime");
             if ([timeline respondsToSelector:phSel]) {
-                FCPBridge_CMTime pht = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(timeline, phSel);
+                SpliceKit_CMTime pht = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(timeline, phSel);
                 double seconds = (pht.timescale > 0) ? (double)pht.value / pht.timescale : 0;
 
                 NSMutableDictionary *r = [NSMutableDictionary dictionary];
                 r[@"seconds"] = @(seconds);
-                r[@"time"] = FCPBridge_serializeCMTime(pht);
+                r[@"time"] = SpliceKit_serializeCMTime(pht);
 
                 // Also get sequence duration for context
                 SEL seqSel = @selector(sequence);
                 if ([timeline respondsToSelector:seqSel]) {
                     id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, seqSel);
                     if (sequence && [sequence respondsToSelector:@selector(duration)]) {
-                        FCPBridge_CMTime dur = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, @selector(duration));
-                        r[@"duration"] = FCPBridge_serializeCMTime(dur);
+                        SpliceKit_CMTime dur = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, @selector(duration));
+                        r[@"duration"] = SpliceKit_serializeCMTime(dur);
                     }
                     // Frame rate
                     SEL fdSel = NSSelectorFromString(@"frameDuration");
                     if (sequence && [sequence respondsToSelector:fdSel]) {
-                        FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
+                        SpliceKit_CMTime fd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
                         if (fd.timescale > 0 && fd.value > 0) {
                             r[@"frameRate"] = @((double)fd.timescale / fd.value);
-                            r[@"frameDuration"] = FCPBridge_serializeCMTime(fd);
+                            r[@"frameDuration"] = SpliceKit_serializeCMTime(fd);
                         }
                     }
                 }
@@ -2984,7 +2984,7 @@ NSDictionary *FCPBridge_handlePlaybackGetPosition(NSDictionary *params) {
 #pragma mark - Range Selection & Batch Export
 
 // Helper: build a CMTime from seconds using the sequence timescale
-static FCPBridge_CMTime FCPBridge_buildCMTime(double seconds, id timeline) {
+static SpliceKit_CMTime SpliceKit_buildCMTime(double seconds, id timeline) {
     int32_t timescale = 24000; // default
     SEL seqSel = @selector(sequence);
     if ([timeline respondsToSelector:seqSel]) {
@@ -2992,12 +2992,12 @@ static FCPBridge_CMTime FCPBridge_buildCMTime(double seconds, id timeline) {
         if (sequence) {
             SEL fdSel = NSSelectorFromString(@"frameDuration");
             if ([sequence respondsToSelector:fdSel]) {
-                FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
+                SpliceKit_CMTime fd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
                 if (fd.timescale > 0) timescale = fd.timescale;
             }
         }
     }
-    FCPBridge_CMTime t;
+    SpliceKit_CMTime t;
     t.value = (int64_t)(seconds * timescale);
     t.timescale = timescale;
     t.flags = 1; // kCMTimeFlags_Valid
@@ -3006,7 +3006,7 @@ static FCPBridge_CMTime FCPBridge_buildCMTime(double seconds, id timeline) {
 }
 
 // Helper: simulate a key press in FCP (posts key down + key up events)
-static void FCPBridge_simulateKeyPress(unsigned short keyCode, NSString *chars, NSEventModifierFlags mods) {
+static void SpliceKit_simulateKeyPress(unsigned short keyCode, NSString *chars, NSEventModifierFlags mods) {
     id app = ((id (*)(id, SEL))objc_msgSend)(
         objc_getClass("NSApplication"), @selector(sharedApplication));
     id window = ((id (*)(id, SEL))objc_msgSend)(app, @selector(mainWindow));
@@ -3038,11 +3038,11 @@ static void FCPBridge_simulateKeyPress(unsigned short keyCode, NSString *chars, 
 }
 
 // Helper: seek playhead and mark in/out via direct responder chain (no key simulation)
-static BOOL FCPBridge_seekAndMark(id timeline, FCPBridge_CMTime time, NSString *actionSelector) {
+static BOOL SpliceKit_seekAndMark(id timeline, SpliceKit_CMTime time, NSString *actionSelector) {
     // Seek playhead
     SEL setSel = @selector(setPlayheadTime:);
     if (![timeline respondsToSelector:setSel]) return NO;
-    ((void (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(timeline, setSel, time);
+    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(timeline, setSel, time);
 
     // Let FCP update playhead position
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
@@ -3059,26 +3059,26 @@ static BOOL FCPBridge_seekAndMark(id timeline, FCPBridge_CMTime time, NSString *
 }
 
 // Batch add markers at specific times using direct ObjC calls (no playhead movement needed)
-static NSDictionary *FCPBridge_handleBatchAddMarkers(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleBatchAddMarkers(NSDictionary *params) {
     NSArray *markers = params[@"markers"];
     if (!markers || ![markers isKindOfClass:[NSArray class]] || markers.count == 0) {
         return @{@"error": @"markers array required (each: {time, name, kind})"};
     }
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) { result = @{@"error": @"No active timeline module"}; return; }
 
             id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
             if (!sequence) { result = @{@"error": @"No sequence in timeline"}; return; }
 
             // Get frame duration for marker length
-            FCPBridge_CMTime frameDur = {100, 2400, 1, 0}; // default 24fps
+            SpliceKit_CMTime frameDur = {100, 2400, 1, 0}; // default 24fps
             SEL fdSel = NSSelectorFromString(@"frameDuration");
             if ([sequence respondsToSelector:fdSel]) {
-                FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
+                SpliceKit_CMTime fd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
                 if (fd.timescale > 0) frameDur = fd;
             }
 
@@ -3093,7 +3093,7 @@ static NSDictionary *FCPBridge_handleBatchAddMarkers(NSDictionary *params) {
             if ([containedItems isKindOfClass:[NSArray class]]) {
                 for (id item in (NSArray *)containedItems) {
                     if ([item respondsToSelector:@selector(duration)]) {
-                        FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
+                        SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
                         double dur = (d.timescale > 0) ? (double)d.value / d.timescale : 0;
                         if (dur > bestDur) { bestDur = dur; targetClip = item; }
                     }
@@ -3107,7 +3107,7 @@ static NSDictionary *FCPBridge_handleBatchAddMarkers(NSDictionary *params) {
                 return;
             }
 
-            typedef BOOL (*AddMarkerFn)(id, SEL, id, BOOL, BOOL, FCPBridge_CMTimeRange, NSError **);
+            typedef BOOL (*AddMarkerFn)(id, SEL, id, BOOL, BOOL, SpliceKit_CMTimeRange, NSError **);
             AddMarkerFn addMarker = (AddMarkerFn)objc_msgSend;
 
             int32_t ts = frameDur.timescale > 0 ? frameDur.timescale : 600;
@@ -3120,8 +3120,8 @@ static NSDictionary *FCPBridge_handleBatchAddMarkers(NSDictionary *params) {
                 BOOL isToDo = [kind isEqualToString:@"todo"];
                 BOOL isChapter = [kind isEqualToString:@"chapter"];
 
-                FCPBridge_CMTime markerTime = {(int64_t)round(t * ts), ts, 1, 0};
-                FCPBridge_CMTimeRange range = {markerTime, frameDur};
+                SpliceKit_CMTime markerTime = {(int64_t)round(t * ts), ts, 1, 0};
+                SpliceKit_CMTimeRange range = {markerTime, frameDur};
                 NSError *err = nil;
                 BOOL ok = addMarker(sequence, addSel, targetClip, isToDo, isChapter, range, &err);
                 if (ok) {
@@ -3146,7 +3146,7 @@ static NSDictionary *FCPBridge_handleBatchAddMarkers(NSDictionary *params) {
     return result ?: @{@"error": @"Failed to add markers"};
 }
 
-static NSDictionary *FCPBridge_handleSetRange(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleSetRange(NSDictionary *params) {
     NSNumber *startSec = params[@"startSeconds"];
     NSNumber *endSec = params[@"endSeconds"];
     if (!startSec || !endSec) {
@@ -3154,9 +3154,9 @@ static NSDictionary *FCPBridge_handleSetRange(NSDictionary *params) {
     }
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) {
                 result = @{@"error": @"No active timeline module"};
                 return;
@@ -3166,13 +3166,13 @@ static NSDictionary *FCPBridge_handleSetRange(NSDictionary *params) {
             double endVal = [endSec doubleValue];
 
             // Build CMTimes
-            FCPBridge_CMTime startTime = FCPBridge_buildCMTime(startVal, timeline);
-            FCPBridge_CMTime endTime = FCPBridge_buildCMTime(endVal, timeline);
+            SpliceKit_CMTime startTime = SpliceKit_buildCMTime(startVal, timeline);
+            SpliceKit_CMTime endTime = SpliceKit_buildCMTime(endVal, timeline);
 
             // Seek to start, mark in
-            BOOL inOk = FCPBridge_seekAndMark(timeline, startTime, @"setRangeStart:");
+            BOOL inOk = SpliceKit_seekAndMark(timeline, startTime, @"setRangeStart:");
             // Seek to end, mark out
-            BOOL outOk = FCPBridge_seekAndMark(timeline, endTime, @"setRangeEnd:");
+            BOOL outOk = SpliceKit_seekAndMark(timeline, endTime, @"setRangeEnd:");
 
             result = @{
                 @"status": @"ok",
@@ -3189,7 +3189,7 @@ static NSDictionary *FCPBridge_handleSetRange(NSDictionary *params) {
 }
 
 // Helper: collect exportable clips with their time ranges (no ARC-managed ObjC objects in the mix)
-static NSArray *FCPBridge_collectExportableClips(id primaryObj, NSSet *selectedSet) {
+static NSArray *SpliceKit_collectExportableClips(id primaryObj, NSSet *selectedSet) {
     SEL erSel = NSSelectorFromString(@"effectiveRangeOfObject:");
     if (![primaryObj respondsToSelector:erSel]) return nil;
 
@@ -3206,14 +3206,14 @@ static NSArray *FCPBridge_collectExportableClips(id primaryObj, NSSet *selectedS
         if (selectedSet && ![selectedSet containsObject:item]) continue;
 
         @try {
-            FCPBridge_CMTimeRange range = ((FCPBridge_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+            SpliceKit_CMTimeRange range = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
                 primaryObj, erSel, item);
             NSString *name = @"Untitled";
             if ([item respondsToSelector:@selector(displayName)]) {
                 id n = ((id (*)(id, SEL))objc_msgSend)(item, @selector(displayName));
                 if (n) name = n;
             }
-            FCPBridge_CMTime endTime = range.start;
+            SpliceKit_CMTime endTime = range.start;
             if (range.duration.timescale == range.start.timescale) {
                 endTime.value = range.start.value + range.duration.value;
             } else if (range.duration.timescale > 0) {
@@ -3222,10 +3222,10 @@ static NSArray *FCPBridge_collectExportableClips(id primaryObj, NSSet *selectedS
             }
             [clips addObject:@{
                 @"name": name,
-                @"startTime": FCPBridge_serializeCMTime(range.start),
-                @"endTime": FCPBridge_serializeCMTime(endTime),
-                @"startCMTime": [NSValue valueWithBytes:&range.start objCType:@encode(FCPBridge_CMTime)],
-                @"endCMTime": [NSValue valueWithBytes:&endTime objCType:@encode(FCPBridge_CMTime)],
+                @"startTime": SpliceKit_serializeCMTime(range.start),
+                @"endTime": SpliceKit_serializeCMTime(endTime),
+                @"startCMTime": [NSValue valueWithBytes:&range.start objCType:@encode(SpliceKit_CMTime)],
+                @"endCMTime": [NSValue valueWithBytes:&endTime objCType:@encode(SpliceKit_CMTime)],
             }];
         } @catch (NSException *e) { /* skip */ }
     }
@@ -3242,18 +3242,18 @@ static NSString *sBatchExportFileName = nil;
 static BOOL sBatchExportActive = NO;
 static IMP sOrigShowSharePanel = NULL;
 static NSInteger sBatchExportPendingCount = 0; // tracks async exports still running
-static FCPBridge_CMTime sBatchExportClipStart;
-static FCPBridge_CMTime sBatchExportClipEnd;
+static SpliceKit_CMTime sBatchExportClipStart;
+static SpliceKit_CMTime sBatchExportClipEnd;
 
 // Swizzle NSWorkspace openURL: to suppress auto-open of exported files
 static IMP sOrigOpenURL = NULL;
-static BOOL FCPBridge_swizzled_openURL(id self, SEL _cmd, id url) {
+static BOOL SpliceKit_swizzled_openURL(id self, SEL _cmd, id url) {
     if (sBatchExportPendingCount > 0 && url && [url isKindOfClass:[NSURL class]]) {
         // Suppress opening files from the batch export folder
         NSString *path = [(NSURL *)url path];
         NSString *folderPath = [sBatchExportFolderURL path];
         if (folderPath && [path hasPrefix:folderPath]) {
-            FCPBridge_log(@"[BatchExport] Suppressed auto-open: %@", path);
+            SpliceKit_log(@"[BatchExport] Suppressed auto-open: %@", path);
             sBatchExportPendingCount--;
             return YES; // pretend we opened it
         }
@@ -3264,9 +3264,9 @@ static BOOL FCPBridge_swizzled_openURL(id self, SEL _cmd, id url) {
 
 // Also suppress activateFileViewerSelectingURLs: (Reveal in Finder)
 static IMP sOrigRevealURLs = NULL;
-static void FCPBridge_swizzled_revealURLs(id self, SEL _cmd, id urls) {
+static void SpliceKit_swizzled_revealURLs(id self, SEL _cmd, id urls) {
     if (sBatchExportPendingCount > 0 && urls) {
-        FCPBridge_log(@"[BatchExport] Suppressed reveal in Finder");
+        SpliceKit_log(@"[BatchExport] Suppressed reveal in Finder");
         return;
     }
     if (sOrigRevealURLs) ((void (*)(id, SEL, id))sOrigRevealURLs)(self, _cmd, urls);
@@ -3274,12 +3274,12 @@ static void FCPBridge_swizzled_revealURLs(id self, SEL _cmd, id urls) {
 
 // Suppress openURL:configuration:completionHandler: (modern API)
 static IMP sOrigOpenURLConfig = NULL;
-static void FCPBridge_swizzled_openURLConfig(id self, SEL _cmd, id url, id config, id handler) {
+static void SpliceKit_swizzled_openURLConfig(id self, SEL _cmd, id url, id config, id handler) {
     if (sBatchExportPendingCount > 0 && url && [url isKindOfClass:[NSURL class]]) {
         NSString *path = [(NSURL *)url path];
         NSString *folderPath = [sBatchExportFolderURL path];
         if (folderPath && [path hasPrefix:folderPath]) {
-            FCPBridge_log(@"[BatchExport] Suppressed openURL:config: %@", path);
+            SpliceKit_log(@"[BatchExport] Suppressed openURL:config: %@", path);
             sBatchExportPendingCount--;
             if (handler) ((void (^)(id, id))handler)(nil, nil);
             return;
@@ -3290,9 +3290,9 @@ static void FCPBridge_swizzled_openURLConfig(id self, SEL _cmd, id url, id confi
 
 // Suppress openURLs:withApplicationAtURL:configuration:completionHandler:
 static IMP sOrigOpenURLs = NULL;
-static void FCPBridge_swizzled_openURLs(id self, SEL _cmd, id urls, id appURL, id config, id handler) {
+static void SpliceKit_swizzled_openURLs(id self, SEL _cmd, id urls, id appURL, id config, id handler) {
     if (sBatchExportPendingCount > 0 && urls) {
-        FCPBridge_log(@"[BatchExport] Suppressed openURLs: batch");
+        SpliceKit_log(@"[BatchExport] Suppressed openURLs: batch");
         sBatchExportPendingCount--;
         if (handler) ((void (^)(id, id))handler)(nil, nil);
         return;
@@ -3302,7 +3302,7 @@ static void FCPBridge_swizzled_openURLs(id self, SEL _cmd, id urls, id appURL, i
 
 // Suppress openFile: (deprecated but still used)
 static IMP sOrigOpenFile = NULL;
-static BOOL FCPBridge_swizzled_openFile(id self, SEL _cmd, id path) {
+static BOOL SpliceKit_swizzled_openFile(id self, SEL _cmd, id path) {
     if (sBatchExportPendingCount > 0 && path) {
         NSString *folderPath = [sBatchExportFolderURL path];
         if (folderPath && [(NSString *)path hasPrefix:folderPath]) {
@@ -3315,7 +3315,7 @@ static BOOL FCPBridge_swizzled_openFile(id self, SEL _cmd, id path) {
 
 // Replacement for -[FFSequenceExporter showSharePanelWithSources:destination:destinationURL:parentWindow:]
 // Called after shareToDestination:parentWindow: has already converted sources to CK format
-static void FCPBridge_swizzled_showSharePanel(id self, SEL _cmd, id sources, id dest, id destURL, id parentWindow) {
+static void SpliceKit_swizzled_showSharePanel(id self, SEL _cmd, id sources, id dest, id destURL, id parentWindow) {
     if (!sBatchExportActive) {
         // Not in batch mode - call original
         if (sOrigShowSharePanel) {
@@ -3324,7 +3324,7 @@ static void FCPBridge_swizzled_showSharePanel(id self, SEL _cmd, id sources, id 
         return;
     }
 
-    FCPBridge_log(@"[BatchExport] Swizzled showSharePanel called with %@ sources, dest=%@",
+    SpliceKit_log(@"[BatchExport] Swizzled showSharePanel called with %@ sources, dest=%@",
         sources ? @([(NSArray *)sources count]) : @"nil", NSStringFromClass([dest class]));
 
     @try {
@@ -3354,7 +3354,7 @@ static void FCPBridge_swizzled_showSharePanel(id self, SEL _cmd, id sources, id 
                 SEL inPtSel = NSSelectorFromString(@"inPoint");
                 id origIn = [firstSource respondsToSelector:inPtSel]
                     ? ((id (*)(id, SEL))objc_msgSend)(firstSource, inPtSel) : nil;
-                FCPBridge_log(@"[BatchExport] Original inPoint: %@ (class: %@)",
+                SpliceKit_log(@"[BatchExport] Original inPoint: %@ (class: %@)",
                     origIn, origIn ? NSStringFromClass([origIn class]) : @"nil");
 
                 // Try creating time objects from our CMTime values
@@ -3363,13 +3363,13 @@ static void FCPBridge_swizzled_showSharePanel(id self, SEL _cmd, id sources, id 
                 if (timeObjClass) {
                     SEL initWithTimeSel = NSSelectorFromString(@"timeObjectWithCMTime:");
                     if ([(id)timeObjClass respondsToSelector:initWithTimeSel]) {
-                        id startObj = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                        id startObj = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                             (id)timeObjClass, initWithTimeSel, sBatchExportClipStart);
-                        id endObj = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                        id endObj = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                             (id)timeObjClass, initWithTimeSel, sBatchExportClipEnd);
                         if (startObj && endObj) {
                             ((void (*)(id, SEL, id, id))objc_msgSend)(sourceToUse, setInOutSel, startObj, endObj);
-                            FCPBridge_log(@"[BatchExport] Set in/out: %@ - %@", startObj, endObj);
+                            SpliceKit_log(@"[BatchExport] Set in/out: %@ - %@", startObj, endObj);
                         }
                     }
                 }
@@ -3393,7 +3393,7 @@ static void FCPBridge_swizzled_showSharePanel(id self, SEL _cmd, id sources, id 
 
         if (!panel) {
             id panelError = rawError ? (__bridge id)rawError : nil;
-            FCPBridge_log(@"[BatchExport] Panel creation failed: %@",
+            SpliceKit_log(@"[BatchExport] Panel creation failed: %@",
                 panelError ? ((id (*)(id, SEL))objc_msgSend)(panelError, @selector(localizedDescription)) : @"nil");
             return;
         }
@@ -3413,10 +3413,10 @@ static void FCPBridge_swizzled_showSharePanel(id self, SEL _cmd, id sources, id 
 
         // Get batches (created during panel init)
         NSArray *batches = ((id (*)(id, SEL))objc_msgSend)(panel, NSSelectorFromString(@"batches"));
-        FCPBridge_log(@"[BatchExport] Panel created %lu batches", (unsigned long)(batches ? batches.count : 0));
+        SpliceKit_log(@"[BatchExport] Panel created %lu batches", (unsigned long)(batches ? batches.count : 0));
 
         if (!batches || batches.count == 0) {
-            FCPBridge_log(@"[BatchExport] No batches from panel");
+            SpliceKit_log(@"[BatchExport] No batches from panel");
             return;
         }
 
@@ -3442,23 +3442,23 @@ static void FCPBridge_swizzled_showSharePanel(id self, SEL _cmd, id sources, id 
         // Queue the export operations directly (no dialog!)
         SEL queueSel = NSSelectorFromString(@"queueShareOperationsForBatches:addToTheater:");
         if ([self respondsToSelector:queueSel]) {
-            FCPBridge_log(@"[BatchExport] Queuing batches on %@", NSStringFromClass([self class]));
+            SpliceKit_log(@"[BatchExport] Queuing batches on %@", NSStringFromClass([self class]));
             ((void (*)(id, SEL, id, BOOL))objc_msgSend)(self, queueSel, batches, NO);
-            FCPBridge_log(@"[BatchExport] Queued successfully!");
+            SpliceKit_log(@"[BatchExport] Queued successfully!");
         } else {
-            FCPBridge_log(@"[BatchExport] Exporter doesn't respond to queueShareOperationsForBatches:");
+            SpliceKit_log(@"[BatchExport] Exporter doesn't respond to queueShareOperationsForBatches:");
         }
     } @catch (NSException *e) {
-        FCPBridge_log(@"[BatchExport] Exception in swizzled showSharePanel: %@", e.reason);
+        SpliceKit_log(@"[BatchExport] Exception in swizzled showSharePanel: %@", e.reason);
     }
 }
 
 // Unused - kept for reference
-static NSString *FCPBridge_queueClipExport(id timeline, FCPBridge_CMTime startTime, FCPBridge_CMTime endTime,
+static NSString *SpliceKit_queueClipExport(id timeline, SpliceKit_CMTime startTime, SpliceKit_CMTime endTime,
                                             NSURL *fileURL, id dest) {
     // Set range for this clip
-    FCPBridge_seekAndMark(timeline, startTime, @"setRangeStart:");
-    FCPBridge_seekAndMark(timeline, endTime, @"setRangeEnd:");
+    SpliceKit_seekAndMark(timeline, startTime, @"setRangeStart:");
+    SpliceKit_seekAndMark(timeline, endTime, @"setRangeEnd:");
 
     // Get sources for this range via shareSelection:
     SEL selSel = NSSelectorFromString(@"shareSelection:");
@@ -3468,27 +3468,27 @@ static NSString *FCPBridge_queueClipExport(id timeline, FCPBridge_CMTime startTi
     if (!rawSources) return @"no sources for range";
 
     id sources = (__bridge id)rawSources;
-    FCPBridge_log(@"[BatchExport] shareSelection: returned %@ (class: %@)", sources, NSStringFromClass([sources class]));
+    SpliceKit_log(@"[BatchExport] shareSelection: returned %@ (class: %@)", sources, NSStringFromClass([sources class]));
 
     if (![sources isKindOfClass:[NSArray class]]) {
         return [NSString stringWithFormat:@"sources not array, got %@", NSStringFromClass([sources class])];
     }
     NSUInteger sourceCount = [(NSArray *)sources count];
     if (sourceCount == 0) return @"empty sources";
-    FCPBridge_log(@"[BatchExport] Got %lu sources", (unsigned long)sourceCount);
+    SpliceKit_log(@"[BatchExport] Got %lu sources", (unsigned long)sourceCount);
 
     // Create share panel silently to build CK batch objects
     Class panelClass = objc_getClass("FFConsumerSharePanel")
         ?: objc_getClass("FFSharePanel")
         ?: objc_getClass("FFBaseSharePanel");
     if (!panelClass) return @"no share panel class";
-    FCPBridge_log(@"[BatchExport] Using panel class: %@", NSStringFromClass(panelClass));
+    SpliceKit_log(@"[BatchExport] Using panel class: %@", NSStringFromClass(panelClass));
 
     SEL createSel = NSSelectorFromString(@"sharePanelWithSource:destination:error:");
     if (![(id)panelClass respondsToSelector:createSel]) return @"panel class has no create method";
 
     id firstSource = [(NSArray *)sources firstObject];
-    FCPBridge_log(@"[BatchExport] First source: %@ (class: %@)", firstSource, NSStringFromClass([firstSource class]));
+    SpliceKit_log(@"[BatchExport] First source: %@ (class: %@)", firstSource, NSStringFromClass([firstSource class]));
 
     __unsafe_unretained id panelError = nil;
     void *rawPanel = ((void * (*)(id, SEL, id, id, __unsafe_unretained id *))objc_msgSend)(
@@ -3498,11 +3498,11 @@ static NSString *FCPBridge_queueClipExport(id timeline, FCPBridge_CMTime startTi
             ? [NSString stringWithFormat:@"panel: %@",
                ((id (*)(id, SEL))objc_msgSend)(panelError, @selector(localizedDescription))]
             : @"panel creation returned nil";
-        FCPBridge_log(@"[BatchExport] %@", errStr);
+        SpliceKit_log(@"[BatchExport] %@", errStr);
         return errStr;
     }
     id panel = (__bridge id)rawPanel;
-    FCPBridge_log(@"[BatchExport] Panel created: %@", NSStringFromClass([panel class]));
+    SpliceKit_log(@"[BatchExport] Panel created: %@", NSStringFromClass([panel class]));
 
     // Set destination URL
     SEL setURLSel = NSSelectorFromString(@"setDestinationURL:");
@@ -3515,39 +3515,39 @@ static NSString *FCPBridge_queueClipExport(id timeline, FCPBridge_CMTime startTi
     if (![panel respondsToSelector:batchesSel]) return @"panel has no batches method";
     NSArray *batches = ((id (*)(id, SEL))objc_msgSend)(panel, batchesSel);
     if (!batches || ![batches isKindOfClass:[NSArray class]]) {
-        FCPBridge_log(@"[BatchExport] batches returned: %@ (class: %@)", batches, batches ? NSStringFromClass([batches class]) : @"nil");
+        SpliceKit_log(@"[BatchExport] batches returned: %@ (class: %@)", batches, batches ? NSStringFromClass([batches class]) : @"nil");
         return @"no batches";
     }
-    FCPBridge_log(@"[BatchExport] Got %lu batches", (unsigned long)batches.count);
+    SpliceKit_log(@"[BatchExport] Got %lu batches", (unsigned long)batches.count);
     if (batches.count == 0) return @"zero batches";
 
     // Log batch structure
     for (NSUInteger bi = 0; bi < batches.count; bi++) {
         id batch = batches[bi];
-        FCPBridge_log(@"[BatchExport] Batch %lu: %@ (class: %@)", (unsigned long)bi, batch, NSStringFromClass([batch class]));
+        SpliceKit_log(@"[BatchExport] Batch %lu: %@ (class: %@)", (unsigned long)bi, batch, NSStringFromClass([batch class]));
         SEL jobsSel = NSSelectorFromString(@"jobs");
         if ([batch respondsToSelector:jobsSel]) {
             NSArray *jobs = ((id (*)(id, SEL))objc_msgSend)(batch, jobsSel);
-            FCPBridge_log(@"[BatchExport]   Jobs: %lu", (unsigned long)(jobs ? [(NSArray *)jobs count] : 0));
+            SpliceKit_log(@"[BatchExport]   Jobs: %lu", (unsigned long)(jobs ? [(NSArray *)jobs count] : 0));
             if (jobs && [jobs isKindOfClass:[NSArray class]]) {
                 for (id job in jobs) {
                     SEL targetsSel = NSSelectorFromString(@"targets");
                     if ([job respondsToSelector:targetsSel]) {
                         NSArray *targets = ((id (*)(id, SEL))objc_msgSend)(job, targetsSel);
-                        FCPBridge_log(@"[BatchExport]     Targets: %lu", (unsigned long)(targets ? [(NSArray *)targets count] : 0));
+                        SpliceKit_log(@"[BatchExport]     Targets: %lu", (unsigned long)(targets ? [(NSArray *)targets count] : 0));
                         if (targets && [targets isKindOfClass:[NSArray class]]) {
                             for (id target in targets) {
                                 // Set destination URL on target
                                 SEL setDestSel = NSSelectorFromString(@"setDestinationURL:");
                                 if ([target respondsToSelector:setDestSel]) {
                                     ((void (*)(id, SEL, id))objc_msgSend)(target, setDestSel, fileURL);
-                                    FCPBridge_log(@"[BatchExport]     Set target URL: %@", fileURL);
+                                    SpliceKit_log(@"[BatchExport]     Set target URL: %@", fileURL);
                                 }
                                 // Log output URLs
                                 SEL outSel = NSSelectorFromString(@"outputURLs");
                                 if ([target respondsToSelector:outSel]) {
                                     id urls = ((id (*)(id, SEL))objc_msgSend)(target, outSel);
-                                    FCPBridge_log(@"[BatchExport]     Output URLs: %@", urls);
+                                    SpliceKit_log(@"[BatchExport]     Output URLs: %@", urls);
                                 }
                             }
                         }
@@ -3566,25 +3566,25 @@ static NSString *FCPBridge_queueClipExport(id timeline, FCPBridge_CMTime startTi
         (id)exporterClass, expSel, sources, nil);
     if (!rawExporter) return @"exporter creation failed";
     id exporter = (__bridge id)rawExporter;
-    FCPBridge_log(@"[BatchExport] Exporter: %@", NSStringFromClass([exporter class]));
+    SpliceKit_log(@"[BatchExport] Exporter: %@", NSStringFromClass([exporter class]));
 
     SEL queueSel = NSSelectorFromString(@"queueShareOperationsForBatches:addToTheater:");
     if (![exporter respondsToSelector:queueSel]) return @"exporter has no queue method";
 
-    FCPBridge_log(@"[BatchExport] Queuing %lu batches...", (unsigned long)batches.count);
+    SpliceKit_log(@"[BatchExport] Queuing %lu batches...", (unsigned long)batches.count);
     ((void (*)(id, SEL, id, BOOL))objc_msgSend)(exporter, queueSel, batches, NO);
-    FCPBridge_log(@"[BatchExport] Queued successfully");
+    SpliceKit_log(@"[BatchExport] Queued successfully");
     return @"queued";
 }
 
-NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params) {
+NSDictionary *SpliceKit_handleBatchExport(NSDictionary *params) {
     NSString *scope = params[@"scope"] ?: @"all";
     NSString *folderPath = params[@"folder"];
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) { result = @{@"error": @"No active timeline module"}; return; }
 
             id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
@@ -3633,7 +3633,7 @@ NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params) {
             if (!dest) { result = @{@"error": @"No default share destination. Configure in File > Share > Add Destination."}; return; }
 
             // Collect clips
-            NSArray *clips = FCPBridge_collectExportableClips(primaryObj, selectedSet);
+            NSArray *clips = SpliceKit_collectExportableClips(primaryObj, selectedSet);
             if (!clips || clips.count == 0) { result = @{@"error": @"No exportable clips"}; return; }
 
             // Install swizzle on FFSequenceExporter to bypass share dialog
@@ -3648,7 +3648,7 @@ NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params) {
 
             // Save original and install swizzle
             sOrigShowSharePanel = method_getImplementation(origMethod);
-            method_setImplementation(origMethod, (IMP)FCPBridge_swizzled_showSharePanel);
+            method_setImplementation(origMethod, (IMP)SpliceKit_swizzled_showSharePanel);
             sBatchExportActive = YES;
             sBatchExportFolderURL = folderURL;
             sBatchExportPendingCount = clips.count;
@@ -3657,19 +3657,19 @@ NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params) {
             Class wsClass = [NSWorkspace class];
             Method m;
             m = class_getInstanceMethod(wsClass, @selector(openURL:));
-            if (m && !sOrigOpenURL) { sOrigOpenURL = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_openURL); }
+            if (m && !sOrigOpenURL) { sOrigOpenURL = method_getImplementation(m); method_setImplementation(m, (IMP)SpliceKit_swizzled_openURL); }
 
             m = class_getInstanceMethod(wsClass, @selector(activateFileViewerSelectingURLs:));
-            if (m && !sOrigRevealURLs) { sOrigRevealURLs = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_revealURLs); }
+            if (m && !sOrigRevealURLs) { sOrigRevealURLs = method_getImplementation(m); method_setImplementation(m, (IMP)SpliceKit_swizzled_revealURLs); }
 
             m = class_getInstanceMethod(wsClass, NSSelectorFromString(@"openURL:configuration:completionHandler:"));
-            if (m && !sOrigOpenURLConfig) { sOrigOpenURLConfig = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_openURLConfig); }
+            if (m && !sOrigOpenURLConfig) { sOrigOpenURLConfig = method_getImplementation(m); method_setImplementation(m, (IMP)SpliceKit_swizzled_openURLConfig); }
 
             m = class_getInstanceMethod(wsClass, NSSelectorFromString(@"openURLs:withApplicationAtURL:configuration:completionHandler:"));
-            if (m && !sOrigOpenURLs) { sOrigOpenURLs = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_openURLs); }
+            if (m && !sOrigOpenURLs) { sOrigOpenURLs = method_getImplementation(m); method_setImplementation(m, (IMP)SpliceKit_swizzled_openURLs); }
 
             m = class_getInstanceMethod(wsClass, @selector(openFile:));
-            if (m && !sOrigOpenFile) { sOrigOpenFile = method_getImplementation(m); method_setImplementation(m, (IMP)FCPBridge_swizzled_openFile); }
+            if (m && !sOrigOpenFile) { sOrigOpenFile = method_getImplementation(m); method_setImplementation(m, (IMP)SpliceKit_swizzled_openFile); }
 
             // Set destination action to "Save only" (no auto-open)
             SEL actionSel = NSSelectorFromString(@"action");
@@ -3691,7 +3691,7 @@ NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params) {
 
             for (NSUInteger i = 0; i < clips.count; i++) {
                 NSDictionary *clipInfo = clips[i];
-                FCPBridge_CMTime startCMTime, endCMTime;
+                SpliceKit_CMTime startCMTime, endCMTime;
                 [clipInfo[@"startCMTime"] getValue:&startCMTime];
                 [clipInfo[@"endCMTime"] getValue:&endCMTime];
 
@@ -3716,8 +3716,8 @@ NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params) {
                     sBatchExportClipEnd = endCMTime;
 
                     // Set in/out range using simulated I/O key presses
-                    FCPBridge_seekAndMark(timeline, startCMTime, @"setRangeStart:");
-                    FCPBridge_seekAndMark(timeline, endCMTime, @"setRangeEnd:");
+                    SpliceKit_seekAndMark(timeline, startCMTime, @"setRangeStart:");
+                    SpliceKit_seekAndMark(timeline, endCMTime, @"setRangeEnd:");
 
                     // Trigger the normal share flow - our swizzle intercepts the dialog
                     if (shareHelper && [shareHelper respondsToSelector:shareSel]) {
@@ -3777,12 +3777,12 @@ NSDictionary *FCPBridge_handleBatchExport(NSDictionary *params) {
     return result ?: @{@"error": @"Failed to batch export"};
 }
 
-static NSDictionary *FCPBridge_handleTimelineGetState(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTimelineGetState(NSDictionary *params) {
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) {
                 result = @{@"error": @"No active timeline module"};
                 return;
@@ -3867,12 +3867,12 @@ static NSDictionary *FCPBridge_handleTimelineGetState(NSDictionary *params) {
 
 #pragma mark - Transcript Handlers
 
-static NSDictionary *FCPBridge_handleTranscriptOpen(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptOpen(NSDictionary *params) {
     NSString *fileURL = params[@"fileURL"];
 
     __block NSDictionary *result = nil;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        FCPTranscriptPanel *panel = [FCPTranscriptPanel sharedPanel];
+        SpliceKitTranscriptPanel *panel = [SpliceKitTranscriptPanel sharedPanel];
         [panel showPanel];
 
         if (fileURL) {
@@ -3890,96 +3890,96 @@ static NSDictionary *FCPBridge_handleTranscriptOpen(NSDictionary *params) {
     return @{@"status": @"ok", @"message": @"Transcript panel opened. Transcription started. Use transcript.getState to check progress."};
 }
 
-static NSDictionary *FCPBridge_handleTranscriptClose(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptClose(NSDictionary *params) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [[FCPTranscriptPanel sharedPanel] hidePanel];
+        [[SpliceKitTranscriptPanel sharedPanel] hidePanel];
     });
     return @{@"status": @"ok"};
 }
 
-static NSDictionary *FCPBridge_handleTranscriptGetState(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptGetState(NSDictionary *params) {
     // Don't dispatch to main thread - getState reads properties that are safe from any thread
     // Using main thread here would deadlock if transcription is in progress on main thread
-    return [[FCPTranscriptPanel sharedPanel] getState] ?: @{@"status": @"idle"};
+    return [[SpliceKitTranscriptPanel sharedPanel] getState] ?: @{@"status": @"idle"};
 }
 
-static NSDictionary *FCPBridge_handleTranscriptDeleteWords(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptDeleteWords(NSDictionary *params) {
     NSUInteger startIndex = [params[@"startIndex"] unsignedIntegerValue];
     NSUInteger count = [params[@"count"] unsignedIntegerValue];
     if (count == 0) return @{@"error": @"count must be > 0"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
-        result = [[FCPTranscriptPanel sharedPanel] deleteWordsFromIndex:startIndex count:count];
+    SpliceKit_executeOnMainThread(^{
+        result = [[SpliceKitTranscriptPanel sharedPanel] deleteWordsFromIndex:startIndex count:count];
     });
     return result ?: @{@"error": @"Operation failed"};
 }
 
-static NSDictionary *FCPBridge_handleTranscriptMoveWords(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptMoveWords(NSDictionary *params) {
     NSUInteger startIndex = [params[@"startIndex"] unsignedIntegerValue];
     NSUInteger count = [params[@"count"] unsignedIntegerValue];
     NSUInteger destIndex = [params[@"destIndex"] unsignedIntegerValue];
     if (count == 0) return @{@"error": @"count must be > 0"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
-        result = [[FCPTranscriptPanel sharedPanel] moveWordsFromIndex:startIndex count:count toIndex:destIndex];
+    SpliceKit_executeOnMainThread(^{
+        result = [[SpliceKitTranscriptPanel sharedPanel] moveWordsFromIndex:startIndex count:count toIndex:destIndex];
     });
     return result ?: @{@"error": @"Operation failed"};
 }
 
-static NSDictionary *FCPBridge_handleTranscriptSearch(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptSearch(NSDictionary *params) {
     NSString *query = params[@"query"];
     if (!query || query.length == 0) return @{@"error": @"query is required"};
 
-    return [[FCPTranscriptPanel sharedPanel] searchTranscript:query] ?: @{@"error": @"Search failed"};
+    return [[SpliceKitTranscriptPanel sharedPanel] searchTranscript:query] ?: @{@"error": @"Search failed"};
 }
 
-static NSDictionary *FCPBridge_handleTranscriptDeleteSilences(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptDeleteSilences(NSDictionary *params) {
     double minDuration = [params[@"minDuration"] doubleValue]; // 0 = delete all
 
     __block NSDictionary *result = nil;
-    result = [[FCPTranscriptPanel sharedPanel] deleteSilencesLongerThan:minDuration];
+    result = [[SpliceKitTranscriptPanel sharedPanel] deleteSilencesLongerThan:minDuration];
     return result ?: @{@"error": @"Operation failed"};
 }
 
-static NSDictionary *FCPBridge_handleTranscriptSetSilenceThreshold(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptSetSilenceThreshold(NSDictionary *params) {
     double threshold = [params[@"threshold"] doubleValue];
     if (threshold <= 0) return @{@"error": @"threshold must be > 0"};
 
-    [FCPTranscriptPanel sharedPanel].silenceThreshold = threshold;
+    [SpliceKitTranscriptPanel sharedPanel].silenceThreshold = threshold;
     return @{@"status": @"ok", @"silenceThreshold": @(threshold)};
 }
 
-static NSDictionary *FCPBridge_handleTranscriptSetEngine(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptSetEngine(NSDictionary *params) {
     NSString *engineName = params[@"engine"];
     if (!engineName) return @{@"error": @"engine is required ('fcpNative' or 'appleSpeech')"};
 
-    FCPTranscriptPanel *panel = [FCPTranscriptPanel sharedPanel];
+    SpliceKitTranscriptPanel *panel = [SpliceKitTranscriptPanel sharedPanel];
     if ([engineName isEqualToString:@"fcpNative"]) {
-        panel.engine = FCPTranscriptEngineFCPNative;
+        panel.engine = SpliceKitTranscriptEngineFCPNative;
     } else if ([engineName isEqualToString:@"appleSpeech"]) {
-        panel.engine = FCPTranscriptEngineAppleSpeech;
+        panel.engine = SpliceKitTranscriptEngineAppleSpeech;
     } else {
         return @{@"error": @"Unknown engine. Use 'fcpNative' or 'appleSpeech'"};
     }
     return @{@"status": @"ok", @"engine": engineName};
 }
 
-static NSDictionary *FCPBridge_handleTranscriptSetSpeaker(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleTranscriptSetSpeaker(NSDictionary *params) {
     NSString *speaker = params[@"speaker"];
     NSUInteger startIndex = [params[@"startIndex"] unsignedIntegerValue];
     NSUInteger count = [params[@"count"] unsignedIntegerValue];
     if (!speaker || speaker.length == 0) return @{@"error": @"speaker name is required"};
     if (count == 0) return @{@"error": @"count must be > 0"};
 
-    [[FCPTranscriptPanel sharedPanel] setSpeaker:speaker forWordsFrom:startIndex count:count];
+    [[SpliceKitTranscriptPanel sharedPanel] setSpeaker:speaker forWordsFrom:startIndex count:count];
     return @{@"status": @"ok", @"speaker": speaker, @"startIndex": @(startIndex), @"count": @(count)};
 }
 
 #pragma mark - Scene Change Detection
 
-NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
+NSDictionary *SpliceKit_handleDetectSceneChanges(NSDictionary *params) {
     // Get parameters
     double threshold = [params[@"threshold"] doubleValue] ?: 0.35;
     double sampleInterval = [params[@"sampleInterval"] doubleValue] ?: 0.1; // check every 0.1s
@@ -3992,9 +3992,9 @@ NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
         mediaURL = [NSURL fileURLWithPath:urlStr];
     } else {
         // Get from timeline
-        FCPBridge_executeOnMainThread(^{
+        SpliceKit_executeOnMainThread(^{
             @try {
-                id timeline = FCPBridge_getActiveTimelineModule();
+                id timeline = SpliceKit_getActiveTimelineModule();
                 if (!timeline) return;
                 id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
                 if (!sequence) return;
@@ -4015,7 +4015,7 @@ NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
                 double bestDur = 0;
                 for (id item in (NSArray *)items) {
                     if ([item respondsToSelector:@selector(duration)]) {
-                        FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
+                        SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
                         double dur = (d.timescale > 0) ? (double)d.value / d.timescale : 0;
                         if (dur > bestDur) { bestDur = dur; bestItem = item; }
                     }
@@ -4042,7 +4042,7 @@ NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
                     } @catch (NSException *e) {}
                 }
             } @catch (NSException *e) {
-                FCPBridge_log(@"Exception getting media URL: %@", e.reason);
+                SpliceKit_log(@"Exception getting media URL: %@", e.reason);
             }
         });
     }
@@ -4051,7 +4051,7 @@ NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
         return @{@"error": @"No media file found. Open a project with media on the timeline."};
     }
 
-    FCPBridge_log(@"Scene detection starting on: %@ (threshold=%.2f, interval=%.2fs)",
+    SpliceKit_log(@"Scene detection starting on: %@ (threshold=%.2f, interval=%.2fs)",
                   mediaURL.path, threshold, sampleInterval);
 
     // Run scene detection synchronously on this thread (called from background)
@@ -4148,7 +4148,7 @@ NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
                         @"time": @(timeSec),
                         @"score": @(normalizedDiff),
                     }];
-                    FCPBridge_log(@"Scene change at %.2fs (score=%.3f)", timeSec, normalizedDiff);
+                    SpliceKit_log(@"Scene change at %.2fs (score=%.3f)", timeSec, normalizedDiff);
                 }
             }
 
@@ -4165,24 +4165,24 @@ NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
 
     [reader cancelReading];
 
-    FCPBridge_log(@"Scene detection complete: %lu changes found in %.1fs (%d frames sampled)",
+    SpliceKit_log(@"Scene detection complete: %lu changes found in %.1fs (%d frames sampled)",
                   (unsigned long)sceneChanges.count, duration, sampledFrames);
 
     // If action is "markers" or "blade", apply them programmatically (no playhead movement)
     if (([action isEqualToString:@"markers"] || [action isEqualToString:@"blade"]) && sceneChanges.count > 0) {
         __block NSInteger applied = 0;
-        FCPBridge_executeOnMainThread(^{
+        SpliceKit_executeOnMainThread(^{
             @try {
-                id timeline = FCPBridge_getActiveTimelineModule();
+                id timeline = SpliceKit_getActiveTimelineModule();
                 if (!timeline) return;
                 id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
                 if (!sequence) return;
 
                 // Get frame duration for marker length
-                FCPBridge_CMTime frameDur = {1, 30, 1, 0};
+                SpliceKit_CMTime frameDur = {1, 30, 1, 0};
                 SEL fdSel = NSSelectorFromString(@"frameDuration");
                 if ([sequence respondsToSelector:fdSel]) {
-                    frameDur = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
+                    frameDur = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
                 }
 
                 // Get the primary object and find the target clip (longest one)
@@ -4195,7 +4195,7 @@ NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
                 double bestDur = 0;
                 for (id item in (NSArray *)containedItems) {
                     if ([item respondsToSelector:@selector(duration)]) {
-                        FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
+                        SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
                         double dur = (d.timescale > 0) ? (double)d.value / d.timescale : 0;
                         if (dur > bestDur) { bestDur = dur; targetClip = item; }
                     }
@@ -4206,35 +4206,35 @@ NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
                     // Add markers programmatically via actionAddMarkerToAnchoredObject:isToDo:isChapter:withRange:error:
                     SEL addSel = NSSelectorFromString(@"actionAddMarkerToAnchoredObject:isToDo:isChapter:withRange:error:");
                     if (![sequence respondsToSelector:addSel]) {
-                        FCPBridge_log(@"Scene detection: sequence does not respond to actionAddMarkerToAnchoredObject:");
+                        SpliceKit_log(@"Scene detection: sequence does not respond to actionAddMarkerToAnchoredObject:");
                         return;
                     }
 
-                    typedef BOOL (*AddMarkerFn)(id, SEL, id, BOOL, BOOL, FCPBridge_CMTimeRange, NSError **);
+                    typedef BOOL (*AddMarkerFn)(id, SEL, id, BOOL, BOOL, SpliceKit_CMTimeRange, NSError **);
                     AddMarkerFn addMarker = (AddMarkerFn)objc_msgSend;
 
                     for (NSDictionary *sc in sceneChanges) {
                         double t = [sc[@"time"] doubleValue];
                         int32_t ts = 600;
-                        FCPBridge_CMTime markerTime = {(int64_t)round(t * ts), ts, 1, 0};
-                        FCPBridge_CMTimeRange range = {markerTime, frameDur};
+                        SpliceKit_CMTime markerTime = {(int64_t)round(t * ts), ts, 1, 0};
+                        SpliceKit_CMTimeRange range = {markerTime, frameDur};
                         NSError *err = nil;
                         BOOL ok = addMarker(sequence, addSel, targetClip, NO, NO, range, &err);
                         if (ok) applied++;
-                        else FCPBridge_log(@"Scene marker failed at %.2fs: %@", t, err);
+                        else SpliceKit_log(@"Scene marker failed at %.2fs: %@", t, err);
                     }
                 } else {
                     // Blade: seek + blade (still needs playhead for blade action)
                     for (NSDictionary *sc in sceneChanges) {
                         double t = [sc[@"time"] doubleValue];
-                        FCPBridge_handlePlaybackSeek(@{@"seconds": @(t)});
+                        SpliceKit_handlePlaybackSeek(@{@"seconds": @(t)});
                         [NSThread sleepForTimeInterval:0.03];
-                        FCPBridge_handleTimelineAction(@{@"action": @"blade"});
+                        SpliceKit_handleTimelineAction(@{@"action": @"blade"});
                         applied++;
                     }
                 }
             } @catch (NSException *e) {
-                FCPBridge_log(@"Scene action error: %@", e.reason);
+                SpliceKit_log(@"Scene action error: %@", e.reason);
             }
         });
         // Update count with actually applied
@@ -4265,7 +4265,7 @@ NSDictionary *FCPBridge_handleDetectSceneChanges(NSDictionary *params) {
 #pragma mark - Effects Browse & Apply Handlers
 
 // Generalized handler that lists effects filtered by type(s)
-NSDictionary *FCPBridge_handleEffectsListAvailable(NSDictionary *params) {
+NSDictionary *SpliceKit_handleEffectsListAvailable(NSDictionary *params) {
     NSString *filter = params[@"filter"];
     NSString *typeFilter = params[@"type"]; // "filter", "transition", "generator", "title", "audio", or nil for all
 
@@ -4281,7 +4281,7 @@ NSDictionary *FCPBridge_handleEffectsListAvailable(NSDictionary *params) {
     NSString *internalType = typeFilter ? typeMap[[typeFilter lowercaseString]] : nil;
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             Class ffEffect = objc_getClass("FFEffect");
             if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
@@ -4349,7 +4349,7 @@ NSDictionary *FCPBridge_handleEffectsListAvailable(NSDictionary *params) {
     return result ?: @{@"error": @"Failed to list effects"};
 }
 
-NSDictionary *FCPBridge_handleEffectsApply(NSDictionary *params) {
+NSDictionary *SpliceKit_handleEffectsApply(NSDictionary *params) {
     NSString *effectID = params[@"effectID"];
     NSString *name = params[@"name"];
 
@@ -4360,7 +4360,7 @@ NSDictionary *FCPBridge_handleEffectsApply(NSDictionary *params) {
     __block NSDictionary *result = nil;
     __block NSString *resolvedID = effectID;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             Class ffEffect = objc_getClass("FFEffect");
             if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
@@ -4442,7 +4442,7 @@ NSDictionary *FCPBridge_handleEffectsApply(NSDictionary *params) {
 
             // If no items from browser, try getting selected clips from timeline
             if (!items || [(NSArray *)items count] == 0) {
-                id timelineModule = FCPBridge_getActiveTimelineModule();
+                id timelineModule = SpliceKit_getActiveTimelineModule();
                 if (timelineModule) {
                     SEL selItemsSel = NSSelectorFromString(@"selectedItems");
                     if ([timelineModule respondsToSelector:selItemsSel]) {
@@ -4495,7 +4495,7 @@ NSDictionary *FCPBridge_handleEffectsApply(NSDictionary *params) {
 
 #pragma mark - Title/Generator Insert (via Pasteboard)
 
-NSDictionary *FCPBridge_handleTitleInsert(NSDictionary *params) {
+NSDictionary *SpliceKit_handleTitleInsert(NSDictionary *params) {
     NSString *effectID = params[@"effectID"];
     NSString *name = params[@"name"];
 
@@ -4506,7 +4506,7 @@ NSDictionary *FCPBridge_handleTitleInsert(NSDictionary *params) {
     __block NSDictionary *result = nil;
     __block NSString *resolvedID = effectID;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             Class ffEffect = objc_getClass("FFEffect");
             if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
@@ -4565,7 +4565,7 @@ NSDictionary *FCPBridge_handleTitleInsert(NSDictionary *params) {
                 effectIDs, nil);
 
             // Get timeline module and insert via anchor
-            id timelineModule = FCPBridge_getActiveTimelineModule();
+            id timelineModule = SpliceKit_getActiveTimelineModule();
             if (!timelineModule) {
                 result = @{@"error": @"No active timeline module"};
                 return;
@@ -4601,7 +4601,7 @@ NSDictionary *FCPBridge_handleTitleInsert(NSDictionary *params) {
 
 #pragma mark - Subject Stabilization (Lock-On)
 
-NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
+NSDictionary *SpliceKit_handleSubjectStabilize(NSDictionary *params) {
     // Stabilize the selected clip around a tracked subject.
     // The subject stays fixed on screen while the background moves.
     //
@@ -4624,9 +4624,9 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
     __block id hexFormEffect = nil;
 
     // Step 1: Get selected clip info on main thread
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            timelineModule = FCPBridge_getActiveTimelineModule();
+            timelineModule = SpliceKit_getActiveTimelineModule();
             if (!timelineModule) {
                 result = @{@"error": @"No active timeline"};
                 return;
@@ -4792,7 +4792,7 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
             if (!mediaURL) {
                 @try { id u = [clipForMedia valueForKeyPath:@"clipInPlace.asset.originalMediaURL"]; if ([u isKindOfClass:[NSURL class]]) mediaURL = u; } @catch(NSException *e) {}
             }
-            FCPBridge_log(@"[Stabilize] Selected clip class: %@, mediaURL: %@",
+            SpliceKit_log(@"[Stabilize] Selected clip class: %@, mediaURL: %@",
                 NSStringFromClass([selectedClip class]), mediaURL ? mediaURL.path : @"nil");
 
             // Get FFHeXFormEffect via FFCutawayEffects.transformEffectForObject:createIfAbsent:
@@ -4834,7 +4834,7 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
                     }
                 } @catch (NSException *e) {}
             }
-            FCPBridge_log(@"[Stabilize] heXFormEffect: %@ (class: %@)",
+            SpliceKit_log(@"[Stabilize] heXFormEffect: %@ (class: %@)",
                 hexFormEffect ? @"found" : @"nil",
                 hexFormEffect ? NSStringFromClass([hexFormEffect class]) : @"n/a");
 
@@ -4855,7 +4855,7 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
             mediaURL ? mediaURL.lastPathComponent : @"nil"]};
     }
 
-    FCPBridge_log(@"[Stabilize] Clip: %@ (start:%.2f dur:%.2f trim:%.2f playhead:%.2f fps:%.1f)",
+    SpliceKit_log(@"[Stabilize] Clip: %@ (start:%.2f dur:%.2f trim:%.2f playhead:%.2f fps:%.1f)",
         mediaURL.lastPathComponent, clipStart, clipDuration, trimStart, playheadTime, frameRate);
 
     // Step 2: Use Vision framework to track subject
@@ -4903,7 +4903,7 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
             id obs = results[0];
             CGRect bbox = ((CGRect (*)(id, SEL))STRET_MSG)(obs, NSSelectorFromString(@"boundingBox"));
             initialBBox = bbox;
-            FCPBridge_log(@"[Stabilize] Detected human at (%.2f, %.2f, %.2f, %.2f)",
+            SpliceKit_log(@"[Stabilize] Detected human at (%.2f, %.2f, %.2f, %.2f)",
                 bbox.origin.x, bbox.origin.y, bbox.size.width, bbox.size.height);
         }
     }
@@ -4911,7 +4911,7 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
     CGImageRelease(refImage);
 
     // Step 3: Track the subject across all frames using VNTrackObjectRequest
-    FCPBridge_log(@"[Stabilize] Tracking subject across %.1fs of video...", clipDuration);
+    SpliceKit_log(@"[Stabilize] Tracking subject across %.1fs of video...", clipDuration);
 
     // Track center of initial bbox as reference point
     double refCenterX = initialBBox.origin.x + initialBBox.size.width / 2.0;
@@ -5014,14 +5014,14 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
             frameCount++;
 
             if (frameCount % 30 == 0) {
-                FCPBridge_log(@"[Stabilize] Tracked frame %d/%d", frameCount, totalFrames);
+                SpliceKit_log(@"[Stabilize] Tracked frame %d/%d", frameCount, totalFrames);
             }
         }
     }
 
     [reader cancelReading];
 
-    FCPBridge_log(@"[Stabilize] Tracked %d frames, got %lu position deltas",
+    SpliceKit_log(@"[Stabilize] Tracked %d frames, got %lu position deltas",
         frameCount, (unsigned long)frameDeltas.count);
 
     if (frameDeltas.count == 0) {
@@ -5032,7 +5032,7 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
     __block NSUInteger keyframesSet = 0;
 
     // Step 4: Apply position keyframes through FCP's undo system
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // Use FFUndoHandler for proper undo registration
             id toolObj = selectedClip;
@@ -5126,7 +5126,7 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
                 GetPosFn getPos = (GetPosFn)objc_msgSend;
                 double rx = 9999, ry = 9999, rz = 9999;
                 getPos(hexFormEffect, getPosSel, checkTime, &rx, &ry, &rz);
-                FCPBridge_log(@"[Stabilize] Verify: position at t=%.2f is (%.1f, %.1f, %.1f)", t0, rx, ry, rz);
+                SpliceKit_log(@"[Stabilize] Verify: position at t=%.2f is (%.1f, %.1f, %.1f)", t0, rx, ry, rz);
                 // Store for response
                 objc_setAssociatedObject(hexFormEffect, "verifyX", @(rx), OBJC_ASSOCIATION_RETAIN);
                 objc_setAssociatedObject(hexFormEffect, "verifyY", @(ry), OBJC_ASSOCIATION_RETAIN);
@@ -5145,7 +5145,7 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
 
     if (result) return result;
 
-    FCPBridge_log(@"[Stabilize] Applied %lu position keyframes + 105%% scale",
+    SpliceKit_log(@"[Stabilize] Applied %lu position keyframes + 105%% scale",
         (unsigned long)keyframesSet);
 
     // Collect some debug info about the deltas
@@ -5191,13 +5191,13 @@ NSDictionary *FCPBridge_handleSubjectStabilize(NSDictionary *params) {
 #pragma mark - Viewer Pinch-to-Zoom
 
 // Injects magnifyWithEvent: into FFPlayerView so trackpad pinch gestures zoom the viewer.
-// Gated by NSUserDefaults key "FCPBridgeViewerPinchZoom".
+// Gated by NSUserDefaults key "SpliceKitViewerPinchZoom".
 
-static NSString * const kFCPBridgeViewerPinchZoom = @"FCPBridgeViewerPinchZoom";
+static NSString * const kSpliceKitViewerPinchZoom = @"SpliceKitViewerPinchZoom";
 static BOOL sViewerPinchZoomInstalled = NO;
 
 // The injected magnifyWithEvent: handler for FFPlayerView
-static void FCPBridge_FFPlayerView_magnifyWithEvent(id self, SEL _cmd, NSEvent *event) {
+static void SpliceKit_FFPlayerView_magnifyWithEvent(id self, SEL _cmd, NSEvent *event) {
     // Get playerVideoModule from the view
     SEL pvmSel = NSSelectorFromString(@"playerVideoModule");
     if (![self respondsToSelector:pvmSel]) return;
@@ -5236,7 +5236,7 @@ static void FCPBridge_FFPlayerView_magnifyWithEvent(id self, SEL _cmd, NSEvent *
 // Swizzled scrollWheel: — pans the viewer when zoomed in, falls through to original otherwise
 static IMP sOrigScrollWheel = NULL;
 
-static void FCPBridge_FFPlayerView_scrollWheel(id self, SEL _cmd, NSEvent *event) {
+static void SpliceKit_FFPlayerView_scrollWheel(id self, SEL _cmd, NSEvent *event) {
     // Get playerVideoModule
     SEL pvmSel = NSSelectorFromString(@"playerVideoModule");
     id videoModule = [self respondsToSelector:pvmSel]
@@ -5284,12 +5284,12 @@ static void FCPBridge_FFPlayerView_scrollWheel(id self, SEL _cmd, NSEvent *event
 
 static IMP sOrigMagnifyWithEvent = NULL;
 
-void FCPBridge_installViewerPinchZoom(void) {
+void SpliceKit_installViewerPinchZoom(void) {
     if (sViewerPinchZoomInstalled) return;
 
     Class playerView = objc_getClass("FFPlayerView");
     if (!playerView) {
-        FCPBridge_log(@"[ViewerZoom] FFPlayerView not found — skipping pinch-to-zoom install");
+        SpliceKit_log(@"[ViewerZoom] FFPlayerView not found — skipping pinch-to-zoom install");
         return;
     }
 
@@ -5298,18 +5298,18 @@ void FCPBridge_installViewerPinchZoom(void) {
     // class_addMethod only adds if the class itself doesn't directly implement it
     // (it won't be fooled by superclass methods like NSResponder's default)
     BOOL added = class_addMethod(playerView, magnifySel,
-                                 (IMP)FCPBridge_FFPlayerView_magnifyWithEvent,
+                                 (IMP)SpliceKit_FFPlayerView_magnifyWithEvent,
                                  "v@:@"); // void, self, _cmd, NSEvent*
     if (added) {
-        FCPBridge_log(@"[ViewerZoom] Added magnifyWithEvent: to FFPlayerView — pinch-to-zoom enabled");
+        SpliceKit_log(@"[ViewerZoom] Added magnifyWithEvent: to FFPlayerView — pinch-to-zoom enabled");
     } else {
         // FFPlayerView directly implements magnifyWithEvent: — swizzle it
         Method m = class_getInstanceMethod(playerView, magnifySel);
         if (m) {
-            sOrigMagnifyWithEvent = method_setImplementation(m, (IMP)FCPBridge_FFPlayerView_magnifyWithEvent);
-            FCPBridge_log(@"[ViewerZoom] Swizzled magnifyWithEvent: on FFPlayerView — pinch-to-zoom enabled");
+            sOrigMagnifyWithEvent = method_setImplementation(m, (IMP)SpliceKit_FFPlayerView_magnifyWithEvent);
+            SpliceKit_log(@"[ViewerZoom] Swizzled magnifyWithEvent: on FFPlayerView — pinch-to-zoom enabled");
         } else {
-            FCPBridge_log(@"[ViewerZoom] Failed to install magnifyWithEvent: on FFPlayerView");
+            SpliceKit_log(@"[ViewerZoom] Failed to install magnifyWithEvent: on FFPlayerView");
         }
     }
 
@@ -5317,14 +5317,14 @@ void FCPBridge_installViewerPinchZoom(void) {
     SEL scrollSel = @selector(scrollWheel:);
     Method scrollMethod = class_getInstanceMethod(playerView, scrollSel);
     if (scrollMethod) {
-        sOrigScrollWheel = method_setImplementation(scrollMethod, (IMP)FCPBridge_FFPlayerView_scrollWheel);
-        FCPBridge_log(@"[ViewerZoom] Swizzled scrollWheel: on FFPlayerView — two-finger pan enabled");
+        sOrigScrollWheel = method_setImplementation(scrollMethod, (IMP)SpliceKit_FFPlayerView_scrollWheel);
+        SpliceKit_log(@"[ViewerZoom] Swizzled scrollWheel: on FFPlayerView — two-finger pan enabled");
     }
 
     sViewerPinchZoomInstalled = YES;
 }
 
-void FCPBridge_removeViewerPinchZoom(void) {
+void SpliceKit_removeViewerPinchZoom(void) {
     if (!sViewerPinchZoomInstalled) return;
 
     Class playerView = objc_getClass("FFPlayerView");
@@ -5357,29 +5357,29 @@ void FCPBridge_removeViewerPinchZoom(void) {
     }
 
     sViewerPinchZoomInstalled = NO;
-    FCPBridge_log(@"[ViewerZoom] Disabled pinch-to-zoom and pan on FFPlayerView");
+    SpliceKit_log(@"[ViewerZoom] Disabled pinch-to-zoom and pan on FFPlayerView");
 }
 
-void FCPBridge_setViewerPinchZoomEnabled(BOOL enabled) {
-    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kFCPBridgeViewerPinchZoom];
+void SpliceKit_setViewerPinchZoomEnabled(BOOL enabled) {
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kSpliceKitViewerPinchZoom];
     if (enabled) {
-        FCPBridge_installViewerPinchZoom();
+        SpliceKit_installViewerPinchZoom();
     } else {
-        FCPBridge_removeViewerPinchZoom();
+        SpliceKit_removeViewerPinchZoom();
     }
 }
 
-BOOL FCPBridge_isViewerPinchZoomEnabled(void) {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:kFCPBridgeViewerPinchZoom];
+BOOL SpliceKit_isViewerPinchZoomEnabled(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:kSpliceKitViewerPinchZoom];
 }
 
 #pragma mark - Viewer Zoom RPC Handlers
 
-static NSDictionary *FCPBridge_handleViewerGetZoom(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleViewerGetZoom(NSDictionary *params) {
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id player = FCPBridge_getPlayerModule();
+            id player = SpliceKit_getPlayerModule();
             if (!player) { result = @{@"error": @"No player module found"}; return; }
 
             SEL vmSel = NSSelectorFromString(@"videoModule");
@@ -5409,15 +5409,15 @@ static NSDictionary *FCPBridge_handleViewerGetZoom(NSDictionary *params) {
     return result;
 }
 
-static NSDictionary *FCPBridge_handleViewerSetZoom(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleViewerSetZoom(NSDictionary *params) {
     NSNumber *zoomNum = params[@"zoom"];
     if (!zoomNum) return @{@"error": @"'zoom' parameter required (float: 0.0=fit, 1.0=100%, etc.)"};
     float zoom = [zoomNum floatValue];
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id player = FCPBridge_getPlayerModule();
+            id player = SpliceKit_getPlayerModule();
             if (!player) { result = @{@"error": @"No player module found"}; return; }
 
             SEL vmSel = NSSelectorFromString(@"videoModule");
@@ -5442,35 +5442,35 @@ static NSDictionary *FCPBridge_handleViewerSetZoom(NSDictionary *params) {
     return result;
 }
 
-static NSDictionary *FCPBridge_handleOptionsGet(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleOptionsGet(NSDictionary *params) {
     return @{
-        @"effectDragAsAdjustmentClip": @(FCPBridge_isEffectDragAsAdjustmentClipEnabled()),
-        @"viewerPinchZoom": @(FCPBridge_isViewerPinchZoomEnabled()),
-        @"videoOnlyKeepsAudioDisabled": @(FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled()),
+        @"effectDragAsAdjustmentClip": @(SpliceKit_isEffectDragAsAdjustmentClipEnabled()),
+        @"viewerPinchZoom": @(SpliceKit_isViewerPinchZoomEnabled()),
+        @"videoOnlyKeepsAudioDisabled": @(SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled()),
     };
 }
 
-static NSDictionary *FCPBridge_handleOptionsSet(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleOptionsSet(NSDictionary *params) {
     NSString *option = params[@"option"];
     if (!option) return @{@"error": @"'option' parameter required"};
 
     if ([option isEqualToString:@"viewerPinchZoom"]) {
         NSNumber *enabled = params[@"enabled"];
         if (!enabled) return @{@"error": @"'enabled' parameter required (true/false)"};
-        FCPBridge_setViewerPinchZoomEnabled([enabled boolValue]);
-        return @{@"status": @"ok", @"viewerPinchZoom": @(FCPBridge_isViewerPinchZoomEnabled())};
+        SpliceKit_setViewerPinchZoomEnabled([enabled boolValue]);
+        return @{@"status": @"ok", @"viewerPinchZoom": @(SpliceKit_isViewerPinchZoomEnabled())};
     } else if ([option isEqualToString:@"effectDragAsAdjustmentClip"]) {
         NSNumber *enabled = params[@"enabled"];
         if (!enabled) return @{@"error": @"'enabled' parameter required (true/false)"};
-        FCPBridge_setEffectDragAsAdjustmentClipEnabled([enabled boolValue]);
+        SpliceKit_setEffectDragAsAdjustmentClipEnabled([enabled boolValue]);
         return @{@"status": @"ok",
-                 @"effectDragAsAdjustmentClip": @(FCPBridge_isEffectDragAsAdjustmentClipEnabled())};
+                 @"effectDragAsAdjustmentClip": @(SpliceKit_isEffectDragAsAdjustmentClipEnabled())};
     } else if ([option isEqualToString:@"videoOnlyKeepsAudioDisabled"]) {
         NSNumber *enabled = params[@"enabled"];
         if (!enabled) return @{@"error": @"'enabled' parameter required (true/false)"};
-        FCPBridge_setVideoOnlyKeepsAudioDisabledEnabled([enabled boolValue]);
+        SpliceKit_setVideoOnlyKeepsAudioDisabledEnabled([enabled boolValue]);
         return @{@"status": @"ok",
-                 @"videoOnlyKeepsAudioDisabled": @(FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled())};
+                 @"videoOnlyKeepsAudioDisabled": @(SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled())};
     }
 
     return @{@"error": [NSString stringWithFormat:@"Unknown option: %@", option]};
@@ -5521,9 +5521,9 @@ static BOOL sFreezeExtendHasOperationReplay = NO;
 
 // Swizzled -[FFAnchoredSequence defaultTransitionOverlapType]
 // Original returns 1 (needs handles). We return 2 (overlap/use edge frames) when forced.
-static int FCPBridge_swizzled_defaultTransitionOverlapType(id self, SEL _cmd) {
+static int SpliceKit_swizzled_defaultTransitionOverlapType(id self, SEL _cmd) {
     if (sForceOverlap) {
-        FCPBridge_log(@"[FreezeExtend] defaultTransitionOverlapType -> 2 (freeze-frame overlap)");
+        SpliceKit_log(@"[FreezeExtend] defaultTransitionOverlapType -> 2 (freeze-frame overlap)");
         return 2;
     }
     return ((int (*)(id, SEL))sOrigDefaultOverlapType)(self, _cmd);
@@ -5531,14 +5531,14 @@ static int FCPBridge_swizzled_defaultTransitionOverlapType(id self, SEL _cmd) {
 
 static IMP sOrigDisplayTransitionAlert = NULL;
 
-static BOOL FCPBridge_isTransitionAvailableMediaAlert(NSAlert *alert) {
+static BOOL SpliceKit_isTransitionAvailableMediaAlert(NSAlert *alert) {
     if (![alert isKindOfClass:[NSAlert class]]) return NO;
     NSString *message = [alert messageText] ?: @"";
     return [message isEqualToString:
         @"There is not enough extra media beyond clip edges to create the transition."];
 }
 
-static void FCPBridge_prepareTransitionAlertButtons(NSAlert *alert) {
+static void SpliceKit_prepareTransitionAlertButtons(NSAlert *alert) {
     if (![alert isKindOfClass:[NSAlert class]]) return;
 
     NSArray<NSButton *> *buttons = [alert buttons];
@@ -5566,26 +5566,26 @@ static void FCPBridge_prepareTransitionAlertButtons(NSAlert *alert) {
     }
 }
 
-static BOOL FCPBridge_isFreezeFramesResponse(NSModalResponse response) {
+static BOOL SpliceKit_isFreezeFramesResponse(NSModalResponse response) {
     return response == NSAlertSecondButtonReturn || response == 0;
 }
 
-static BOOL FCPBridge_isCancelResponse(NSModalResponse response) {
+static BOOL SpliceKit_isCancelResponse(NSModalResponse response) {
     return response == NSAlertThirdButtonReturn || response == -1;
 }
 
-static BOOL FCPBridge_shouldForceFreezeOverlap(void) {
+static BOOL SpliceKit_shouldForceFreezeOverlap(void) {
     return sForceOverlap || sFreezeExtendUseFreezeFramesForCurrentAlert;
 }
 
-static double FCPBridge_transitionFrameDurationSeconds(id timeline) {
+static double SpliceKit_transitionFrameDurationSeconds(id timeline) {
     double seconds = 1.0 / 30.0;
     SEL seqSel = @selector(sequence);
     if ([timeline respondsToSelector:seqSel]) {
         id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, seqSel);
         SEL fdSel = NSSelectorFromString(@"frameDuration");
         if (sequence && [sequence respondsToSelector:fdSel]) {
-            FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
+            SpliceKit_CMTime fd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
             if (fd.timescale > 0 && fd.value > 0) {
                 seconds = (double)fd.value / (double)fd.timescale;
             }
@@ -5594,15 +5594,15 @@ static double FCPBridge_transitionFrameDurationSeconds(id timeline) {
     return MAX(seconds, 1.0 / 120.0);
 }
 
-static double FCPBridge_transitionCurrentTimeSeconds(id timeline) {
+static double SpliceKit_transitionCurrentTimeSeconds(id timeline) {
     SEL currentTimeSel = NSSelectorFromString(@"currentSequenceTime");
     if (![timeline respondsToSelector:currentTimeSel]) return 0.0;
-    FCPBridge_CMTime t = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(timeline, currentTimeSel);
+    SpliceKit_CMTime t = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(timeline, currentTimeSel);
     if (t.timescale <= 0) return 0.0;
     return (double)t.value / (double)t.timescale;
 }
 
-static BOOL FCPBridge_transitionSeekToSeconds(id timeline, double seconds) {
+static BOOL SpliceKit_transitionSeekToSeconds(id timeline, double seconds) {
     if (!timeline) return NO;
 
     int32_t timescale = 24000;
@@ -5611,7 +5611,7 @@ static BOOL FCPBridge_transitionSeekToSeconds(id timeline, double seconds) {
         id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, seqSel);
         SEL fdSel = NSSelectorFromString(@"frameDuration");
         if (sequence && [sequence respondsToSelector:fdSel]) {
-            FCPBridge_CMTime fd = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
+            SpliceKit_CMTime fd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
             if (fd.timescale > 0) timescale = fd.timescale;
         }
     }
@@ -5619,16 +5619,16 @@ static BOOL FCPBridge_transitionSeekToSeconds(id timeline, double seconds) {
     SEL setSel = @selector(setPlayheadTime:);
     if (![timeline respondsToSelector:setSel]) return NO;
 
-    FCPBridge_CMTime targetTime;
+    SpliceKit_CMTime targetTime;
     targetTime.value = (int64_t)llround(seconds * (double)timescale);
     targetTime.timescale = timescale;
     targetTime.flags = 1;
     targetTime.epoch = 0;
-    ((void (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(timeline, setSel, targetTime);
+    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(timeline, setSel, targetTime);
     return YES;
 }
 
-static BOOL FCPBridge_sendTimelineSimpleAction(id timeline, NSString *selectorName) {
+static BOOL SpliceKit_sendTimelineSimpleAction(id timeline, NSString *selectorName) {
     if (!timeline || selectorName.length == 0) return NO;
     SEL sel = NSSelectorFromString(selectorName);
     if (![timeline respondsToSelector:sel]) return NO;
@@ -5636,15 +5636,15 @@ static BOOL FCPBridge_sendTimelineSimpleAction(id timeline, NSString *selectorNa
     return YES;
 }
 
-static BOOL FCPBridge_transitionGetItemBounds(id item, double *outStart, double *outEnd) {
+static BOOL SpliceKit_transitionGetItemBounds(id item, double *outStart, double *outEnd) {
     if (!item || !outStart || !outEnd) return NO;
 
     SEL startSel = @selector(timelineStartTime);
     SEL durSel = @selector(duration);
     if (![item respondsToSelector:startSel] || ![item respondsToSelector:durSel]) return NO;
 
-    FCPBridge_CMTime start = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, startSel);
-    FCPBridge_CMTime duration = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, durSel);
+    SpliceKit_CMTime start = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, startSel);
+    SpliceKit_CMTime duration = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, durSel);
     if (start.timescale <= 0 || duration.timescale <= 0) return NO;
 
     *outStart = (double)start.value / (double)start.timescale;
@@ -5652,16 +5652,16 @@ static BOOL FCPBridge_transitionGetItemBounds(id item, double *outStart, double 
     return YES;
 }
 
-static BOOL FCPBridge_transitionGetItemBoundsInContext(id context, id item,
+static BOOL SpliceKit_transitionGetItemBoundsInContext(id context, id item,
                                                        double *outStart, double *outEnd) {
     if (!item || !outStart || !outEnd) return NO;
-    if (FCPBridge_transitionGetItemBounds(item, outStart, outEnd)) return YES;
+    if (SpliceKit_transitionGetItemBounds(item, outStart, outEnd)) return YES;
 
     SEL rangeSel = NSSelectorFromString(@"effectiveRangeOfObject:");
     if (![context respondsToSelector:rangeSel]) return NO;
 
-    FCPBridge_CMTimeRange range =
-        ((FCPBridge_CMTimeRange (*)(id, SEL, id))STRET_MSG)(context, rangeSel, item);
+    SpliceKit_CMTimeRange range =
+        ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(context, rangeSel, item);
     if (range.start.timescale <= 0 || range.duration.timescale <= 0) return NO;
 
     *outStart = (double)range.start.value / (double)range.start.timescale;
@@ -5669,7 +5669,7 @@ static BOOL FCPBridge_transitionGetItemBoundsInContext(id context, id item,
     return YES;
 }
 
-static NSArray *FCPBridge_transitionSelectedItems(id timeline) {
+static NSArray *SpliceKit_transitionSelectedItems(id timeline) {
     if (!timeline) return nil;
 
     SEL richSel = NSSelectorFromString(@"selectedItems:includeItemBeforePlayheadIfLast:");
@@ -5691,7 +5691,7 @@ static NSArray *FCPBridge_transitionSelectedItems(id timeline) {
     return nil;
 }
 
-static BOOL FCPBridge_transitionSelectItem(id timeline, id item) {
+static BOOL SpliceKit_transitionSelectItem(id timeline, id item) {
     if (!timeline || !item) return NO;
 
     SEL setSel = NSSelectorFromString(@"setSelectedItems:");
@@ -5704,7 +5704,7 @@ static BOOL FCPBridge_transitionSelectItem(id timeline, id item) {
     return YES;
 }
 
-static NSArray *FCPBridge_transitionRangeContexts(id timeline) {
+static NSArray *SpliceKit_transitionRangeContexts(id timeline) {
     if (!timeline) return @[];
 
     NSMutableArray *contexts = [NSMutableArray array];
@@ -5726,17 +5726,17 @@ static NSArray *FCPBridge_transitionRangeContexts(id timeline) {
     return contexts;
 }
 
-static BOOL FCPBridge_transitionGetSelectedClipBounds(id timeline, double *outStart, double *outEnd) {
+static BOOL SpliceKit_transitionGetSelectedClipBounds(id timeline, double *outStart, double *outEnd) {
     if (!timeline || !outStart || !outEnd) return NO;
 
-    NSArray *items = FCPBridge_transitionSelectedItems(timeline);
+    NSArray *items = SpliceKit_transitionSelectedItems(timeline);
     if (![items isKindOfClass:[NSArray class]] || items.count == 0) return NO;
 
     id selectedItem = [items objectAtIndex:0];
-    if (FCPBridge_transitionGetItemBounds(selectedItem, outStart, outEnd)) return YES;
+    if (SpliceKit_transitionGetItemBounds(selectedItem, outStart, outEnd)) return YES;
 
-    for (id context in FCPBridge_transitionRangeContexts(timeline)) {
-        if (FCPBridge_transitionGetItemBoundsInContext(context, selectedItem, outStart, outEnd)) {
+    for (id context in SpliceKit_transitionRangeContexts(timeline)) {
+        if (SpliceKit_transitionGetItemBoundsInContext(context, selectedItem, outStart, outEnd)) {
             return YES;
         }
     }
@@ -5744,7 +5744,7 @@ static BOOL FCPBridge_transitionGetSelectedClipBounds(id timeline, double *outSt
     return NO;
 }
 
-static NSArray *FCPBridge_transitionContainedItemsForSequence(id sequence) {
+static NSArray *SpliceKit_transitionContainedItemsForSequence(id sequence) {
     if (!sequence) return nil;
 
     id itemsSource = nil;
@@ -5761,17 +5761,17 @@ static NSArray *FCPBridge_transitionContainedItemsForSequence(id sequence) {
     return [itemsSource isKindOfClass:[NSArray class]] ? itemsSource : nil;
 }
 
-static NSArray *FCPBridge_transitionContainedItems(id timeline) {
+static NSArray *SpliceKit_transitionContainedItems(id timeline) {
     if (!timeline) return nil;
 
     SEL seqSel = @selector(sequence);
     id sequence = [timeline respondsToSelector:seqSel]
         ? ((id (*)(id, SEL))objc_msgSend)(timeline, seqSel)
         : nil;
-    return FCPBridge_transitionContainedItemsForSequence(sequence);
+    return SpliceKit_transitionContainedItemsForSequence(sequence);
 }
 
-static id FCPBridge_transitionFindRightClipInItems(NSArray *items, double timeSeconds, double frame) {
+static id SpliceKit_transitionFindRightClipInItems(NSArray *items, double timeSeconds, double frame) {
     if (![items isKindOfClass:[NSArray class]] || items.count == 0) return nil;
     Class transitionClass = objc_getClass("FFAnchoredTransition");
     id bestItem = nil;
@@ -5784,7 +5784,7 @@ static id FCPBridge_transitionFindRightClipInItems(NSArray *items, double timeSe
 
         double start = 0.0;
         double end = 0.0;
-        if (!FCPBridge_transitionGetItemBounds(item, &start, &end)) continue;
+        if (!SpliceKit_transitionGetItemBounds(item, &start, &end)) continue;
         if (end < timeSeconds - (frame * 2.0)) continue;
         if (start > timeSeconds + (frame * 2.0)) continue;
         if (start > bestStart) {
@@ -5796,12 +5796,12 @@ static id FCPBridge_transitionFindRightClipInItems(NSArray *items, double timeSe
     return bestItem;
 }
 
-static id FCPBridge_transitionFindRightClipNearTime(id timeline, double timeSeconds, double frame) {
-    return FCPBridge_transitionFindRightClipInItems(
-        FCPBridge_transitionContainedItems(timeline), timeSeconds, frame);
+static id SpliceKit_transitionFindRightClipNearTime(id timeline, double timeSeconds, double frame) {
+    return SpliceKit_transitionFindRightClipInItems(
+        SpliceKit_transitionContainedItems(timeline), timeSeconds, frame);
 }
 
-static id FCPBridge_transitionFindLeftClipInItems(NSArray *items, double timeSeconds, double frame) {
+static id SpliceKit_transitionFindLeftClipInItems(NSArray *items, double timeSeconds, double frame) {
     if (![items isKindOfClass:[NSArray class]] || items.count == 0) return nil;
     Class transitionClass = objc_getClass("FFAnchoredTransition");
     id bestItem = nil;
@@ -5814,7 +5814,7 @@ static id FCPBridge_transitionFindLeftClipInItems(NSArray *items, double timeSec
 
         double start = 0.0;
         double end = 0.0;
-        if (!FCPBridge_transitionGetItemBounds(item, &start, &end)) continue;
+        if (!SpliceKit_transitionGetItemBounds(item, &start, &end)) continue;
         if (start > timeSeconds + (frame * 2.0)) continue;
         if (end > timeSeconds + (frame * 2.0)) continue;
         if (end > bestEnd) {
@@ -5826,12 +5826,12 @@ static id FCPBridge_transitionFindLeftClipInItems(NSArray *items, double timeSec
     return bestItem;
 }
 
-static id FCPBridge_transitionFindLeftClipNearTime(id timeline, double timeSeconds, double frame) {
-    return FCPBridge_transitionFindLeftClipInItems(
-        FCPBridge_transitionContainedItems(timeline), timeSeconds, frame);
+static id SpliceKit_transitionFindLeftClipNearTime(id timeline, double timeSeconds, double frame) {
+    return SpliceKit_transitionFindLeftClipInItems(
+        SpliceKit_transitionContainedItems(timeline), timeSeconds, frame);
 }
 
-static NSArray *FCPBridge_transitionCandidateItems(id objects) {
+static NSArray *SpliceKit_transitionCandidateItems(id objects) {
     if (!objects) return @[];
     if ([objects isKindOfClass:[NSArray class]]) return (NSArray *)objects;
     if ([objects respondsToSelector:@selector(allObjects)]) {
@@ -5841,10 +5841,10 @@ static NSArray *FCPBridge_transitionCandidateItems(id objects) {
     return @[objects];
 }
 
-static void FCPBridge_transitionCaptureTargetFromObjects(id objects, id context, NSString *source) {
+static void SpliceKit_transitionCaptureTargetFromObjects(id objects, id context, NSString *source) {
     if (sFreezeExtendRepairInProgress) return;
 
-    NSArray *items = FCPBridge_transitionCandidateItems(objects);
+    NSArray *items = SpliceKit_transitionCandidateItems(objects);
     if (items.count == 0) return;
 
     Class transitionClass = objc_getClass("FFAnchoredTransition");
@@ -5858,7 +5858,7 @@ static void FCPBridge_transitionCaptureTargetFromObjects(id objects, id context,
         NSString *className = NSStringFromClass([item class]) ?: @"<unknown>";
         double start = 0.0;
         double end = 0.0;
-        BOOL hasBounds = FCPBridge_transitionGetItemBoundsInContext(context, item, &start, &end);
+        BOOL hasBounds = SpliceKit_transitionGetItemBoundsInContext(context, item, &start, &end);
         [summaries addObject:hasBounds
             ? [NSString stringWithFormat:@"%@ %.4f-%.4f", className, start, end]
             : className];
@@ -5871,23 +5871,23 @@ static void FCPBridge_transitionCaptureTargetFromObjects(id objects, id context,
         }
     }
 
-    FCPBridge_log(@"[FreezeExtend] %@ candidates: %@", source ?: @"transition",
+    SpliceKit_log(@"[FreezeExtend] %@ candidates: %@", source ?: @"transition",
         [summaries componentsJoinedByString:@", "]);
 
     if (!bestItem) return;
 
     double start = 0.0;
     double end = 0.0;
-    if (!FCPBridge_transitionGetItemBoundsInContext(context, bestItem, &start, &end)) return;
+    if (!SpliceKit_transitionGetItemBoundsInContext(context, bestItem, &start, &end)) return;
 
-    id timeline = FCPBridge_getActiveTimelineModule();
-    double frame = timeline ? FCPBridge_transitionFrameDurationSeconds(timeline) : (1.0 / 60.0);
-    NSArray *timelineItems = FCPBridge_transitionContainedItems(timeline);
-    id rightNeighbor = FCPBridge_transitionFindRightClipInItems(timelineItems, end + (frame * 0.25), frame);
+    id timeline = SpliceKit_getActiveTimelineModule();
+    double frame = timeline ? SpliceKit_transitionFrameDurationSeconds(timeline) : (1.0 / 60.0);
+    NSArray *timelineItems = SpliceKit_transitionContainedItems(timeline);
+    id rightNeighbor = SpliceKit_transitionFindRightClipInItems(timelineItems, end + (frame * 0.25), frame);
     if (rightNeighbor && rightNeighbor != bestItem) {
         double neighborStart = 0.0;
         double neighborEnd = 0.0;
-        if (FCPBridge_transitionGetItemBounds(rightNeighbor, &neighborStart, &neighborEnd) &&
+        if (SpliceKit_transitionGetItemBounds(rightNeighbor, &neighborStart, &neighborEnd) &&
             fabs(neighborStart - end) <= (frame * 4.0)) {
             bestItem = rightNeighbor;
             start = neighborStart;
@@ -5898,15 +5898,15 @@ static void FCPBridge_transitionCaptureTargetFromObjects(id objects, id context,
     sFreezeExtendTargetRightClip = bestItem;
     sFreezeExtendTargetClipStart = start;
     sFreezeExtendTargetClipEnd = end;
-    FCPBridge_log(@"[FreezeExtend] Captured target from %@ start=%.4f end=%.4f class=%@",
+    SpliceKit_log(@"[FreezeExtend] Captured target from %@ start=%.4f end=%.4f class=%@",
         source ?: @"transition",
         start,
         end,
         NSStringFromClass([bestItem class]) ?: @"<unknown>");
 }
 
-static NSUInteger FCPBridge_transitionCount(id timeline) {
-    NSArray *items = FCPBridge_transitionContainedItems(timeline);
+static NSUInteger SpliceKit_transitionCount(id timeline) {
+    NSArray *items = SpliceKit_transitionContainedItems(timeline);
     if (![items isKindOfClass:[NSArray class]]) return 0;
 
     Class transitionClass = objc_getClass("FFAnchoredTransition");
@@ -5919,8 +5919,8 @@ static NSUInteger FCPBridge_transitionCount(id timeline) {
     return count;
 }
 
-static BOOL FCPBridge_transitionExistsNearTime(id timeline, double timeSeconds, double tolerance) {
-    NSArray *items = FCPBridge_transitionContainedItems(timeline);
+static BOOL SpliceKit_transitionExistsNearTime(id timeline, double timeSeconds, double tolerance) {
+    NSArray *items = SpliceKit_transitionContainedItems(timeline);
     if (![items isKindOfClass:[NSArray class]] || items.count == 0) return NO;
 
     Class transitionClass = objc_getClass("FFAnchoredTransition");
@@ -5929,7 +5929,7 @@ static BOOL FCPBridge_transitionExistsNearTime(id timeline, double timeSeconds, 
 
         double start = 0.0;
         double end = 0.0;
-        if (!FCPBridge_transitionGetItemBounds(item, &start, &end)) continue;
+        if (!SpliceKit_transitionGetItemBounds(item, &start, &end)) continue;
         if (start <= timeSeconds + tolerance && end >= timeSeconds - tolerance) {
             return YES;
         }
@@ -5938,15 +5938,15 @@ static BOOL FCPBridge_transitionExistsNearTime(id timeline, double timeSeconds, 
     return NO;
 }
 
-static BOOL FCPBridge_failFreezeExtendRepair(NSString **outReason, NSString *reason);
+static BOOL SpliceKit_failFreezeExtendRepair(NSString **outReason, NSString *reason);
 
-static void FCPBridge_clearFreezeExtendTransientState(void) {
+static void SpliceKit_clearFreezeExtendTransientState(void) {
     sFreezeExtendPendingAutoAccept = NO;
     sFreezeExtendUseFreezeFramesForCurrentAlert = NO;
     sForceOverlap = NO;
 }
 
-static void FCPBridge_captureTransitionReplayRequest(id sequence, id spineObjects,
+static void SpliceKit_captureTransitionReplayRequest(id sequence, id spineObjects,
                                                      BOOL before, BOOL after, id effects,
                                                      id rootItem, BOOL reportErrors,
                                                      NSString *source) {
@@ -5961,7 +5961,7 @@ static void FCPBridge_captureTransitionReplayRequest(id sequence, id spineObject
     sFreezeExtendActionRootItem = rootItem;
     sFreezeExtendActionReportErrors = reportErrors;
 
-    FCPBridge_log([NSString stringWithFormat:
+    SpliceKit_log([NSString stringWithFormat:
         @"[FreezeExtend] Captured transition request from %@ before=%@ after=%@ reportErrors=%@ effects=%@ root=%@",
         source ?: @"transition",
         before ? @"YES" : @"NO",
@@ -5971,7 +5971,7 @@ static void FCPBridge_captureTransitionReplayRequest(id sequence, id spineObject
         NSStringFromClass([rootItem class]) ?: @"<nil>"]);
 }
 
-static void FCPBridge_captureOperationTransitionReplayRequest(
+static void SpliceKit_captureOperationTransitionReplayRequest(
     id sequence, id spineObject, id spineObjectsToAddTransition, BOOL before, BOOL after,
     id effects, CMTime transitionDuration, id spareTransition, int reportErrors,
     NSString *source) {
@@ -5994,7 +5994,7 @@ static void FCPBridge_captureOperationTransitionReplayRequest(
         durationSeconds = (double)transitionDuration.value / (double)transitionDuration.timescale;
     }
 
-    FCPBridge_log([NSString stringWithFormat:
+    SpliceKit_log([NSString stringWithFormat:
         @"[FreezeExtend] Captured operation replay from %@ before=%@ after=%@ reportErrors=%d duration=%.4f spare=%@",
         source ?: @"transition",
         before ? @"YES" : @"NO",
@@ -6004,7 +6004,7 @@ static void FCPBridge_captureOperationTransitionReplayRequest(
         NSStringFromClass([spareTransition class]) ?: @"<nil>"]);
 }
 
-static void FCPBridge_clearCapturedTransitionRequest(void) {
+static void SpliceKit_clearCapturedTransitionRequest(void) {
     sFreezeExtendActionSequence = nil;
     sFreezeExtendActionSpineObjects = nil;
     sFreezeExtendActionEffects = nil;
@@ -6024,7 +6024,7 @@ static void FCPBridge_clearCapturedTransitionRequest(void) {
     sFreezeExtendHasOperationReplay = NO;
 }
 
-static id FCPBridge_transitionSequenceForTimeline(id timeline) {
+static id SpliceKit_transitionSequenceForTimeline(id timeline) {
     if (!timeline) return nil;
     SEL seqSel = @selector(sequence);
     return [timeline respondsToSelector:seqSel]
@@ -6032,7 +6032,7 @@ static id FCPBridge_transitionSequenceForTimeline(id timeline) {
         : nil;
 }
 
-static id FCPBridge_transitionWrapReplayItemLikePrototype(id prototype, id item) {
+static id SpliceKit_transitionWrapReplayItemLikePrototype(id prototype, id item) {
     if (!item) return nil;
     if (!prototype) return item;
 
@@ -6049,24 +6049,24 @@ static id FCPBridge_transitionWrapReplayItemLikePrototype(id prototype, id item)
     return item;
 }
 
-static id FCPBridge_transitionResolveLiveRightClipForReplay(id timeline) {
+static id SpliceKit_transitionResolveLiveRightClipForReplay(id timeline) {
     if (!timeline) return nil;
-    double frame = FCPBridge_transitionFrameDurationSeconds(timeline);
+    double frame = SpliceKit_transitionFrameDurationSeconds(timeline);
     if (!(sFreezeExtendTargetClipEnd > sFreezeExtendTargetClipStart)) return nil;
-    return FCPBridge_transitionFindRightClipNearTime(timeline,
+    return SpliceKit_transitionFindRightClipNearTime(timeline,
         sFreezeExtendTargetClipStart, frame);
 }
 
-static BOOL FCPBridge_replayCapturedTransitionRequest(id timeline, NSString **outReason) {
+static BOOL SpliceKit_replayCapturedTransitionRequest(id timeline, NSString **outReason) {
     if (!sOrigActionAddTransitions || !sFreezeExtendActionSequence || !sFreezeExtendActionSpineObjects) {
-        return FCPBridge_failFreezeExtendRepair(outReason,
+        return SpliceKit_failFreezeExtendRepair(outReason,
             @"missing captured transition request for replay");
     }
 
-    id sequence = FCPBridge_transitionSequenceForTimeline(timeline) ?: sFreezeExtendActionSequence;
-    id liveRightClip = FCPBridge_transitionResolveLiveRightClipForReplay(timeline);
+    id sequence = SpliceKit_transitionSequenceForTimeline(timeline) ?: sFreezeExtendActionSequence;
+    id liveRightClip = SpliceKit_transitionResolveLiveRightClipForReplay(timeline);
     id spineObjects = liveRightClip
-        ? FCPBridge_transitionWrapReplayItemLikePrototype(
+        ? SpliceKit_transitionWrapReplayItemLikePrototype(
             sFreezeExtendActionSpineObjects, liveRightClip)
         : sFreezeExtendActionSpineObjects;
     id rootItem = sFreezeExtendActionRootItem;
@@ -6077,11 +6077,11 @@ static BOOL FCPBridge_replayCapturedTransitionRequest(id timeline, NSString **ou
     SEL actionSel = NSSelectorFromString(
         @"actionAddTransitionsToSpineObjects:before:after:effects:transitionOverlapType:transitionsCreated:rootItem:reportErrors:error:");
     if (![sequence respondsToSelector:actionSel]) {
-        return FCPBridge_failFreezeExtendRepair(outReason,
+        return SpliceKit_failFreezeExtendRepair(outReason,
             @"captured sequence no longer responds to actionAddTransitionsToSpineObjects");
     }
 
-    FCPBridge_log([NSString stringWithFormat:
+    SpliceKit_log([NSString stringWithFormat:
         @"[FreezeExtend] Action replay using sequence=%@ spineObjects=%@ root=%@ liveRight=%@",
         NSStringFromClass([sequence class]) ?: @"<nil>",
         NSStringFromClass([spineObjects class]) ?: @"<nil>",
@@ -6114,14 +6114,14 @@ static BOOL FCPBridge_replayCapturedTransitionRequest(id timeline, NSString **ou
         if (!reason && error) {
             reason = [error description];
         }
-        return FCPBridge_failFreezeExtendRepair(outReason,
+        return SpliceKit_failFreezeExtendRepair(outReason,
             reason ?: @"captured transition replay returned failure");
     }
 
     return YES;
 }
 
-static BOOL FCPBridge_callCapturedOperationTransitionRequest(id sequence, SEL selector,
+static BOOL SpliceKit_callCapturedOperationTransitionRequest(id sequence, SEL selector,
                                                              id spineObject, id objects,
                                                              id effects, CMTime duration,
                                                              id spareTransition,
@@ -6147,32 +6147,32 @@ static BOOL FCPBridge_callCapturedOperationTransitionRequest(id sequence, SEL se
             error);
 }
 
-static BOOL FCPBridge_replayCapturedOperationTransitionRequest(id timeline, NSString **outReason) {
+static BOOL SpliceKit_replayCapturedOperationTransitionRequest(id timeline, NSString **outReason) {
     if (!sOrigOperationAddTransitionsAskedRetry || !sFreezeExtendHasOperationReplay ||
         !sFreezeExtendOperationSequence || !sFreezeExtendOperationObjects) {
-        return FCPBridge_failFreezeExtendRepair(outReason,
+        return SpliceKit_failFreezeExtendRepair(outReason,
             @"missing captured operation transition request for replay");
     }
 
-    id sequence = FCPBridge_transitionSequenceForTimeline(timeline) ?: sFreezeExtendOperationSequence;
-    id liveRightClip = FCPBridge_transitionResolveLiveRightClipForReplay(timeline);
+    id sequence = SpliceKit_transitionSequenceForTimeline(timeline) ?: sFreezeExtendOperationSequence;
+    id liveRightClip = SpliceKit_transitionResolveLiveRightClipForReplay(timeline);
     id spineObject = sFreezeExtendOperationSpineObject;
     if (liveRightClip && (!spineObject || [spineObject isKindOfClass:[liveRightClip class]])) {
         spineObject = liveRightClip;
     }
     id objects = liveRightClip
-        ? FCPBridge_transitionWrapReplayItemLikePrototype(
+        ? SpliceKit_transitionWrapReplayItemLikePrototype(
             sFreezeExtendOperationObjects, liveRightClip)
         : sFreezeExtendOperationObjects;
 
     SEL opAddRetrySel = NSSelectorFromString(
         @"operationAddTransitionsToObjectsOnSpineObject:spineObjectsToAddTransition:before:after:spineTransitionClipsCreated:effects:transitionDuration:transitionOverlapType:spareTransition:reportErrors:askedRetry:error:");
     if (![sequence respondsToSelector:opAddRetrySel]) {
-        return FCPBridge_failFreezeExtendRepair(outReason,
+        return SpliceKit_failFreezeExtendRepair(outReason,
             @"captured sequence no longer responds to operationAddTransitions...askedRetry");
     }
 
-    FCPBridge_log([NSString stringWithFormat:
+    SpliceKit_log([NSString stringWithFormat:
         @"[FreezeExtend] Operation replay using sequence=%@ spineObject=%@ objects=%@ liveRight=%@ spare=%@",
         NSStringFromClass([sequence class]) ?: @"<nil>",
         NSStringFromClass([spineObject class]) ?: @"<nil>",
@@ -6182,15 +6182,15 @@ static BOOL FCPBridge_replayCapturedOperationTransitionRequest(id timeline, NSSt
 
     int askedRetry = 0;
     __autoreleasing id error = nil;
-    BOOL ok = FCPBridge_callCapturedOperationTransitionRequest(
+    BOOL ok = SpliceKit_callCapturedOperationTransitionRequest(
         sequence, opAddRetrySel, spineObject, objects, sFreezeExtendOperationEffects,
         sFreezeExtendOperationDuration, sFreezeExtendOperationSpareTransition,
         sFreezeExtendOperationReportErrors, &askedRetry, &error);
     if (!ok && sFreezeExtendOperationSpareTransition) {
-        FCPBridge_log(@"[FreezeExtend] Operation replay failed with captured spareTransition; retrying with nil spareTransition");
+        SpliceKit_log(@"[FreezeExtend] Operation replay failed with captured spareTransition; retrying with nil spareTransition");
         askedRetry = 0;
         error = nil;
-        ok = FCPBridge_callCapturedOperationTransitionRequest(
+        ok = SpliceKit_callCapturedOperationTransitionRequest(
             sequence, opAddRetrySel, spineObject, objects, sFreezeExtendOperationEffects,
             sFreezeExtendOperationDuration, nil,
             sFreezeExtendOperationReportErrors, &askedRetry, &error);
@@ -6208,20 +6208,20 @@ static BOOL FCPBridge_replayCapturedOperationTransitionRequest(id timeline, NSSt
             reason = [NSString stringWithFormat:
                 @"captured operation replay returned failure with askedRetry=%d", askedRetry];
         }
-        return FCPBridge_failFreezeExtendRepair(outReason,
+        return SpliceKit_failFreezeExtendRepair(outReason,
             reason ?: @"captured operation transition replay returned failure");
     }
 
     return YES;
 }
 
-static BOOL FCPBridge_waitForTransitionInsertion(id timeline, NSUInteger previousCount,
+static BOOL SpliceKit_waitForTransitionInsertion(id timeline, NSUInteger previousCount,
                                                  NSTimeInterval timeoutSeconds) {
     if (!timeline) return NO;
 
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:MAX(timeoutSeconds, 0.0)];
     while ([deadline timeIntervalSinceNow] > 0.0) {
-        if (FCPBridge_transitionCount(timeline) > previousCount) {
+        if (SpliceKit_transitionCount(timeline) > previousCount) {
             return YES;
         }
 
@@ -6229,29 +6229,29 @@ static BOOL FCPBridge_waitForTransitionInsertion(id timeline, NSUInteger previou
             [NSDate dateWithTimeIntervalSinceNow:0.02]];
     }
 
-    return FCPBridge_transitionCount(timeline) > previousCount;
+    return SpliceKit_transitionCount(timeline) > previousCount;
 }
 
-static BOOL FCPBridge_waitForTransitionNearTime(id timeline, NSUInteger previousCount,
+static BOOL SpliceKit_waitForTransitionNearTime(id timeline, NSUInteger previousCount,
                                                 double timeSeconds, double tolerance,
                                                 NSTimeInterval timeoutSeconds) {
     if (!timeline) return NO;
 
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:MAX(timeoutSeconds, 0.0)];
     while ([deadline timeIntervalSinceNow] > 0.0) {
-        BOOL inserted = FCPBridge_transitionCount(timeline) > previousCount;
-        BOOL placed = FCPBridge_transitionExistsNearTime(timeline, timeSeconds, tolerance);
+        BOOL inserted = SpliceKit_transitionCount(timeline) > previousCount;
+        BOOL placed = SpliceKit_transitionExistsNearTime(timeline, timeSeconds, tolerance);
         if (inserted && placed) return YES;
 
         [[NSRunLoop currentRunLoop] runUntilDate:
             [NSDate dateWithTimeIntervalSinceNow:0.02]];
     }
 
-    return FCPBridge_transitionCount(timeline) > previousCount &&
-        FCPBridge_transitionExistsNearTime(timeline, timeSeconds, tolerance);
+    return SpliceKit_transitionCount(timeline) > previousCount &&
+        SpliceKit_transitionExistsNearTime(timeline, timeSeconds, tolerance);
 }
 
-static double FCPBridge_defaultTransitionDurationSeconds(id timeline) {
+static double SpliceKit_defaultTransitionDurationSeconds(id timeline) {
     double seconds = 1.0;
     SEL seqSel = @selector(sequence);
     if (![timeline respondsToSelector:seqSel]) return seconds;
@@ -6262,38 +6262,38 @@ static double FCPBridge_defaultTransitionDurationSeconds(id timeline) {
     SEL durSel = NSSelectorFromString(@"defaultTransitionDurationForVideo");
     if (![sequence respondsToSelector:durSel]) return seconds;
 
-    FCPBridge_CMTime duration = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(sequence, durSel);
+    SpliceKit_CMTime duration = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, durSel);
     if (duration.timescale > 0 && duration.value > 0) {
         seconds = (double)duration.value / (double)duration.timescale;
     }
     return MAX(seconds, 0.1);
 }
 
-static BOOL FCPBridge_failFreezeExtendRepair(NSString **outReason, NSString *reason) {
+static BOOL SpliceKit_failFreezeExtendRepair(NSString **outReason, NSString *reason) {
     NSString *message = reason ?: @"unknown reason";
     if (outReason) *outReason = message;
-    FCPBridge_log([NSString stringWithFormat:
+    SpliceKit_log([NSString stringWithFormat:
         @"[FreezeExtend] Synthetic repair step failed: %@", message]);
     return NO;
 }
 
-static void FCPBridge_undoTimelineSteps(id timeline, NSUInteger steps) {
+static void SpliceKit_undoTimelineSteps(id timeline, NSUInteger steps) {
     for (NSUInteger idx = 0; idx < steps; idx++) {
-        FCPBridge_sendTimelineSimpleAction(timeline, @"undo");
+        SpliceKit_sendTimelineSimpleAction(timeline, @"undo");
     }
 }
 
-static BOOL FCPBridge_attemptFreezeExtendRepairRightSide(NSString **outReason) {
-    id timeline = FCPBridge_getActiveTimelineModule();
+static BOOL SpliceKit_attemptFreezeExtendRepairRightSide(NSString **outReason) {
+    id timeline = SpliceKit_getActiveTimelineModule();
     if (!timeline) {
-        return FCPBridge_failFreezeExtendRepair(outReason, @"no active timeline module");
+        return SpliceKit_failFreezeExtendRepair(outReason, @"no active timeline module");
     }
 
-    double frame = FCPBridge_transitionFrameDurationSeconds(timeline);
+    double frame = SpliceKit_transitionFrameDurationSeconds(timeline);
     double targetStart = sFreezeExtendTargetClipStart;
     double targetEnd = sFreezeExtendTargetClipEnd;
     if (!(targetEnd > targetStart)) {
-        return FCPBridge_failFreezeExtendRepair(outReason,
+        return SpliceKit_failFreezeExtendRepair(outReason,
             @"missing captured target clip bounds");
     }
 
@@ -6303,9 +6303,9 @@ static BOOL FCPBridge_attemptFreezeExtendRepairRightSide(NSString **outReason) {
     BOOL hasTransition = NO;
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.8];
     while ([deadline timeIntervalSinceNow] > 0.0) {
-        hasTransition = FCPBridge_transitionExistsNearTime(timeline, targetStart, frame * 4.0);
-        rightClip = FCPBridge_transitionFindRightClipNearTime(timeline, targetStart, frame);
-        if (rightClip && FCPBridge_transitionGetItemBounds(rightClip, &rightStart, &rightEnd)) {
+        hasTransition = SpliceKit_transitionExistsNearTime(timeline, targetStart, frame * 4.0);
+        rightClip = SpliceKit_transitionFindRightClipNearTime(timeline, targetStart, frame);
+        if (rightClip && SpliceKit_transitionGetItemBounds(rightClip, &rightStart, &rightEnd)) {
             if (hasTransition) break;
         }
         [[NSRunLoop currentRunLoop] runUntilDate:
@@ -6313,15 +6313,15 @@ static BOOL FCPBridge_attemptFreezeExtendRepairRightSide(NSString **outReason) {
     }
 
     // Compute a reduced transition duration that fits the shortest adjacent clip.
-    // This mirrors the logic in FCPBridge_handleTransitionsApply but uses the
+    // This mirrors the logic in SpliceKit_handleTransitionsApply but uses the
     // captured target bounds (which may have shifted after the first attempt).
     double targetDuration = targetEnd - targetStart;
-    double defaultDur = FCPBridge_defaultTransitionDurationSeconds(timeline);
-    id leftClipForDur = FCPBridge_transitionFindLeftClipNearTime(timeline, targetStart, frame);
+    double defaultDur = SpliceKit_defaultTransitionDurationSeconds(timeline);
+    id leftClipForDur = SpliceKit_transitionFindLeftClipNearTime(timeline, targetStart, frame);
     double leftDurForRepair = DBL_MAX;
     if (leftClipForDur) {
         double ls = 0, le = 0;
-        if (FCPBridge_transitionGetItemBounds(leftClipForDur, &ls, &le))
+        if (SpliceKit_transitionGetItemBounds(leftClipForDur, &ls, &le))
             leftDurForRepair = le - ls;
     }
     double minClipDur = MIN(leftDurForRepair, targetDuration);
@@ -6347,65 +6347,65 @@ static BOOL FCPBridge_attemptFreezeExtendRepairRightSide(NSString **outReason) {
             }
         }
         sForceOverlap = YES;
-        FCPBridge_log([NSString stringWithFormat:
+        SpliceKit_log([NSString stringWithFormat:
             @"[FreezeExtend] Repair: reduced duration from %.4f to %.4f "
             @"(left=%.4f target=%.4f minClip=%.4f)",
             defaultDur, maxFeasible, leftDurForRepair, targetDuration, minClipDur]);
     }
 
     if (!hasTransition) {
-        NSUInteger transitionsBefore = FCPBridge_transitionCount(timeline);
+        NSUInteger transitionsBefore = SpliceKit_transitionCount(timeline);
         NSString *opReplayReason = nil;
-        FCPBridge_log(@"[FreezeExtend] No transition after alert; replaying captured operation with forced overlap");
-        BOOL opReplayed = FCPBridge_replayCapturedOperationTransitionRequest(timeline, &opReplayReason);
+        SpliceKit_log(@"[FreezeExtend] No transition after alert; replaying captured operation with forced overlap");
+        BOOL opReplayed = SpliceKit_replayCapturedOperationTransitionRequest(timeline, &opReplayReason);
         if (opReplayed) {
-            hasTransition = FCPBridge_waitForTransitionNearTime(
+            hasTransition = SpliceKit_waitForTransitionNearTime(
                 timeline, transitionsBefore, targetStart, frame * 4.0, 0.8);
             if (hasTransition) {
-                rightClip = FCPBridge_transitionFindRightClipNearTime(timeline, targetStart, frame);
+                rightClip = SpliceKit_transitionFindRightClipNearTime(timeline, targetStart, frame);
                 if (rightClip) {
-                    FCPBridge_transitionGetItemBounds(rightClip, &rightStart, &rightEnd);
+                    SpliceKit_transitionGetItemBounds(rightClip, &rightStart, &rightEnd);
                 }
             } else {
-                FCPBridge_log(@"[FreezeExtend] Captured operation replay returned success but no transition appeared");
+                SpliceKit_log(@"[FreezeExtend] Captured operation replay returned success but no transition appeared");
             }
         } else {
-            FCPBridge_log([NSString stringWithFormat:
+            SpliceKit_log([NSString stringWithFormat:
                 @"[FreezeExtend] Captured operation replay failed: %@",
                 opReplayReason ?: @"unknown reason"]);
         }
     }
 
     if (!hasTransition) {
-        NSUInteger transitionsBefore = FCPBridge_transitionCount(timeline);
+        NSUInteger transitionsBefore = SpliceKit_transitionCount(timeline);
         NSString *replayReason = nil;
-        FCPBridge_log(@"[FreezeExtend] No transition after alert; replaying captured request with forced overlap");
-        BOOL replayed = FCPBridge_replayCapturedTransitionRequest(timeline, &replayReason);
+        SpliceKit_log(@"[FreezeExtend] No transition after alert; replaying captured request with forced overlap");
+        BOOL replayed = SpliceKit_replayCapturedTransitionRequest(timeline, &replayReason);
         if (replayed) {
-            hasTransition = FCPBridge_waitForTransitionNearTime(
+            hasTransition = SpliceKit_waitForTransitionNearTime(
                 timeline, transitionsBefore, targetStart, frame * 4.0, 0.8);
             if (hasTransition) {
-                rightClip = FCPBridge_transitionFindRightClipNearTime(timeline, targetStart, frame);
+                rightClip = SpliceKit_transitionFindRightClipNearTime(timeline, targetStart, frame);
                 if (rightClip) {
-                    FCPBridge_transitionGetItemBounds(rightClip, &rightStart, &rightEnd);
+                    SpliceKit_transitionGetItemBounds(rightClip, &rightStart, &rightEnd);
                 }
             } else {
-                FCPBridge_log(@"[FreezeExtend] Captured replay returned success but no transition appeared");
+                SpliceKit_log(@"[FreezeExtend] Captured replay returned success but no transition appeared");
             }
         } else {
-            FCPBridge_log([NSString stringWithFormat:
+            SpliceKit_log([NSString stringWithFormat:
                 @"[FreezeExtend] Captured replay failed: %@",
                 replayReason ?: @"unknown reason"]);
         }
     }
 
     if (!hasTransition) {
-        FCPBridge_log(@"[FreezeExtend] No transition after alert; retrying addTransition once during repair");
+        SpliceKit_log(@"[FreezeExtend] No transition after alert; retrying addTransition once during repair");
         // `nextEdit:` advances strictly forward, so seeking to the exact cut can
         // skip past the intended edit and land on a newly created trailing split.
         double retrySeek = MAX(0.0, targetStart - (frame * 0.5));
-        FCPBridge_transitionSeekToSeconds(timeline, retrySeek);
-        FCPBridge_sendTimelineSimpleAction(timeline, @"nextEdit:");
+        SpliceKit_transitionSeekToSeconds(timeline, retrySeek);
+        SpliceKit_sendTimelineSimpleAction(timeline, @"nextEdit:");
         sFreezeExtendPendingAutoAccept = YES;
         SEL addSel = @selector(addTransition:);
         if ([timeline respondsToSelector:addSel]) {
@@ -6416,9 +6416,9 @@ static BOOL FCPBridge_attemptFreezeExtendRepairRightSide(NSString **outReason) {
 
         deadline = [NSDate dateWithTimeIntervalSinceNow:1.0];
         while ([deadline timeIntervalSinceNow] > 0.0) {
-            hasTransition = FCPBridge_transitionExistsNearTime(timeline, targetStart, frame * 4.0);
-            rightClip = FCPBridge_transitionFindRightClipNearTime(timeline, targetStart, frame);
-            if (rightClip && FCPBridge_transitionGetItemBounds(rightClip, &rightStart, &rightEnd)) {
+            hasTransition = SpliceKit_transitionExistsNearTime(timeline, targetStart, frame * 4.0);
+            rightClip = SpliceKit_transitionFindRightClipNearTime(timeline, targetStart, frame);
+            if (rightClip && SpliceKit_transitionGetItemBounds(rightClip, &rightStart, &rightEnd)) {
                 if (hasTransition) break;
             }
             [[NSRunLoop currentRunLoop] runUntilDate:
@@ -6442,7 +6442,7 @@ static BOOL FCPBridge_attemptFreezeExtendRepairRightSide(NSString **outReason) {
     }
 
     if (rightEnd <= targetEnd + (frame * 4.0)) {
-        FCPBridge_log([NSString stringWithFormat:
+        SpliceKit_log([NSString stringWithFormat:
             @"[FreezeExtend] Right clip already within captured bounds start=%.4f end=%.4f targetEnd=%.4f",
             rightStart, rightEnd, targetEnd]);
         repairResult = YES;
@@ -6450,7 +6450,7 @@ static BOOL FCPBridge_attemptFreezeExtendRepairRightSide(NSString **outReason) {
     }
 
     {
-        id leftClip = FCPBridge_transitionFindLeftClipNearTime(timeline, targetStart, frame);
+        id leftClip = SpliceKit_transitionFindLeftClipNearTime(timeline, targetStart, frame);
         if (!leftClip) {
             repairFailReason = @"failed to resolve left clip for corrective trim";
             goto repair_cleanup;
@@ -6458,29 +6458,29 @@ static BOOL FCPBridge_attemptFreezeExtendRepairRightSide(NSString **outReason) {
 
         double leftStart = 0.0;
         double leftEnd = 0.0;
-        FCPBridge_transitionGetItemBounds(leftClip, &leftStart, &leftEnd);
-        FCPBridge_log([NSString stringWithFormat:
+        SpliceKit_transitionGetItemBounds(leftClip, &leftStart, &leftEnd);
+        SpliceKit_log([NSString stringWithFormat:
             @"[FreezeExtend] Corrective trim left=%.4f-%.4f right=%.4f-%.4f targetCut=%.4f targetEnd=%.4f",
             leftStart, leftEnd, rightStart, rightEnd, targetStart, targetEnd]);
 
-        if (!FCPBridge_transitionSelectItem(timeline, leftClip)) {
+        if (!SpliceKit_transitionSelectItem(timeline, leftClip)) {
             repairFailReason = @"failed to select left clip for corrective trim";
             goto repair_cleanup;
         }
-        if (!FCPBridge_transitionSeekToSeconds(timeline, targetStart)) {
+        if (!SpliceKit_transitionSeekToSeconds(timeline, targetStart)) {
             repairFailReason = @"failed to seek to captured cut time";
             goto repair_cleanup;
         }
-        if (!FCPBridge_sendTimelineSimpleAction(timeline, @"trimEnd:")) {
+        if (!SpliceKit_sendTimelineSimpleAction(timeline, @"trimEnd:")) {
             repairFailReason = @"timeline missing trimEnd: for corrective trim";
             goto repair_cleanup;
         }
 
-        id correctedRightClip = FCPBridge_transitionFindRightClipNearTime(timeline, targetStart, frame);
+        id correctedRightClip = SpliceKit_transitionFindRightClipNearTime(timeline, targetStart, frame);
         double correctedRightStart = 0.0;
         double correctedRightEnd = 0.0;
         if (!correctedRightClip ||
-            !FCPBridge_transitionGetItemBounds(correctedRightClip,
+            !SpliceKit_transitionGetItemBounds(correctedRightClip,
                 &correctedRightStart, &correctedRightEnd)) {
             repairFailReason = @"failed to resolve right clip after corrective trim";
             goto repair_cleanup;
@@ -6492,10 +6492,10 @@ static BOOL FCPBridge_attemptFreezeExtendRepairRightSide(NSString **outReason) {
             goto repair_cleanup;
         }
 
-        FCPBridge_log([NSString stringWithFormat:
+        SpliceKit_log([NSString stringWithFormat:
             @"[FreezeExtend] Corrective trim completed right=%.4f-%.4f",
             correctedRightStart, correctedRightEnd]);
-        FCPBridge_sendTimelineSimpleAction(timeline, @"deselectAll:");
+        SpliceKit_sendTimelineSimpleAction(timeline, @"deselectAll:");
         repairResult = YES;
     }
 
@@ -6514,61 +6514,61 @@ repair_cleanup:
     }
 
     if (!repairResult && repairFailReason) {
-        return FCPBridge_failFreezeExtendRepair(outReason, repairFailReason);
+        return SpliceKit_failFreezeExtendRepair(outReason, repairFailReason);
     }
     return repairResult;
 }
 
-static void FCPBridge_scheduleFreezeExtendRepairAttempt(NSInteger attemptNumber) {
+static void SpliceKit_scheduleFreezeExtendRepairAttempt(NSInteger attemptNumber) {
     double delaySeconds = 0.25 * MAX((NSInteger)1, attemptNumber);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delaySeconds * NSEC_PER_SEC)),
         dispatch_get_main_queue(), ^{
             NSString *reason = nil;
-            BOOL ok = FCPBridge_attemptFreezeExtendRepairRightSide(&reason);
+            BOOL ok = SpliceKit_attemptFreezeExtendRepairRightSide(&reason);
             if (ok) {
                 sFreezeExtendDidApply = YES;
-                FCPBridge_log([NSString stringWithFormat:
+                SpliceKit_log([NSString stringWithFormat:
                     @"[FreezeExtend] Synthetic repair completed on attempt %ld",
                     (long)attemptNumber]);
-                FCPBridge_clearCapturedTransitionRequest();
+                SpliceKit_clearCapturedTransitionRequest();
                 sFreezeExtendTargetRightClip = nil;
                 sFreezeExtendTargetClipStart = 0.0;
                 sFreezeExtendTargetClipEnd = 0.0;
-                FCPBridge_clearFreezeExtendTransientState();
+                SpliceKit_clearFreezeExtendTransientState();
                 sFreezeExtendRepairInProgress = NO;
                 return;
             }
 
             sFreezeExtendDidApply = NO;
-            FCPBridge_log([NSString stringWithFormat:
+            SpliceKit_log([NSString stringWithFormat:
                 @"[FreezeExtend] Synthetic repair failed on attempt %ld: %@",
                 (long)attemptNumber, reason ?: @"unknown reason"]);
-            FCPBridge_clearCapturedTransitionRequest();
+            SpliceKit_clearCapturedTransitionRequest();
             sFreezeExtendTargetRightClip = nil;
             sFreezeExtendTargetClipStart = 0.0;
             sFreezeExtendTargetClipEnd = 0.0;
-            FCPBridge_clearFreezeExtendTransientState();
+            SpliceKit_clearFreezeExtendTransientState();
             sFreezeExtendRepairInProgress = NO;
         });
 }
 
-static void FCPBridge_scheduleFreezeExtendRepair(void) {
+static void SpliceKit_scheduleFreezeExtendRepair(void) {
     if (sFreezeExtendRepairInProgress) return;
 
     sFreezeExtendRepairInProgress = YES;
     sFreezeExtendDidApply = NO;
-    FCPBridge_scheduleFreezeExtendRepairAttempt(1);
+    SpliceKit_scheduleFreezeExtendRepairAttempt(1);
 }
 
-static int FCPBridge_effectiveTransitionOverlapType(int overlapType, NSString *source) {
-    if (!FCPBridge_shouldForceFreezeOverlap()) {
+static int SpliceKit_effectiveTransitionOverlapType(int overlapType, NSString *source) {
+    if (!SpliceKit_shouldForceFreezeOverlap()) {
         return overlapType;
     }
 
     if (overlapType != 2) {
-        FCPBridge_log(@"[FreezeExtend] Forcing transitionOverlapType -> 2");
+        SpliceKit_log(@"[FreezeExtend] Forcing transitionOverlapType -> 2");
         if (source.length > 0) {
-            FCPBridge_log([NSString stringWithFormat:
+            SpliceKit_log([NSString stringWithFormat:
                 @"[FreezeExtend] Source=%@ original transitionOverlapType=%d",
                 source, overlapType]);
         }
@@ -6576,7 +6576,7 @@ static int FCPBridge_effectiveTransitionOverlapType(int overlapType, NSString *s
     return 2;
 }
 
-static NSModalResponse FCPBridge_swizzled_NSAlert_runModal(id self, SEL _cmd) {
+static NSModalResponse SpliceKit_swizzled_NSAlert_runModal(id self, SEL _cmd) {
     // Only intercept when a freeze_extend API call is in progress.
     // All other alerts (including FCP's native transition dialog) pass through
     // completely unmodified so the user sees the original FCP behavior.
@@ -6585,7 +6585,7 @@ static NSModalResponse FCPBridge_swizzled_NSAlert_runModal(id self, SEL _cmd) {
     }
 
     if (sFreezeExtendPendingAutoAccept) {
-        FCPBridge_log(@"[FreezeExtend] Auto-accepting NSAlert");
+        SpliceKit_log(@"[FreezeExtend] Auto-accepting NSAlert");
         sFreezeExtendUseFreezeFramesForCurrentAlert = YES;
         return 0;
     }
@@ -6593,32 +6593,32 @@ static NSModalResponse FCPBridge_swizzled_NSAlert_runModal(id self, SEL _cmd) {
     return ((NSModalResponse (*)(id, SEL))sOrigNSAlertRunModal)(self, _cmd);
 }
 
-static BOOL FCPBridge_swizzled_actionAddTransitions(id self, SEL _cmd, id spineObjects,
+static BOOL SpliceKit_swizzled_actionAddTransitions(id self, SEL _cmd, id spineObjects,
                                                     BOOL before, BOOL after, id effects,
                                                     int transitionOverlapType,
                                                     id *transitionsCreated, id rootItem,
                                                     BOOL reportErrors, id *error) {
-    FCPBridge_captureTransitionReplayRequest(self, spineObjects, before, after, effects,
+    SpliceKit_captureTransitionReplayRequest(self, spineObjects, before, after, effects,
         rootItem, reportErrors, @"actionAddTransitionsToSpineObjects");
-    FCPBridge_transitionCaptureTargetFromObjects(spineObjects, rootItem ?: self,
+    SpliceKit_transitionCaptureTargetFromObjects(spineObjects, rootItem ?: self,
         @"actionAddTransitionsToSpineObjects");
-    int effectiveType = FCPBridge_effectiveTransitionOverlapType(transitionOverlapType,
+    int effectiveType = SpliceKit_effectiveTransitionOverlapType(transitionOverlapType,
         @"actionAddTransitionsToSpineObjects");
     return ((BOOL (*)(id, SEL, id, BOOL, BOOL, id, int, id *, id, BOOL, id *))
         sOrigActionAddTransitions)(self, _cmd, spineObjects, before, after, effects,
             effectiveType, transitionsCreated, rootItem, reportErrors, error);
 }
 
-static BOOL FCPBridge_swizzled_operationAddTransitions(id self, SEL _cmd, id spineObject,
+static BOOL SpliceKit_swizzled_operationAddTransitions(id self, SEL _cmd, id spineObject,
                                                        id spineObjectsToAddTransition,
                                                        BOOL before, BOOL after,
                                                        id *spineTransitionClipsCreated,
                                                        id effects, CMTime transitionDuration,
                                                        int transitionOverlapType,
                                                        BOOL reportErrors, id *error) {
-    FCPBridge_transitionCaptureTargetFromObjects(spineObjectsToAddTransition, spineObject ?: self,
+    SpliceKit_transitionCaptureTargetFromObjects(spineObjectsToAddTransition, spineObject ?: self,
         @"operationAddTransitionsToObjectsOnSpineObject");
-    int effectiveType = FCPBridge_effectiveTransitionOverlapType(transitionOverlapType,
+    int effectiveType = SpliceKit_effectiveTransitionOverlapType(transitionOverlapType,
         @"operationAddTransitionsToObjectsOnSpineObject");
     return ((BOOL (*)(id, SEL, id, id, BOOL, BOOL, id *, id, CMTime, int, BOOL, id *))
         sOrigOperationAddTransitions)(self, _cmd, spineObject, spineObjectsToAddTransition,
@@ -6626,18 +6626,18 @@ static BOOL FCPBridge_swizzled_operationAddTransitions(id self, SEL _cmd, id spi
             effectiveType, reportErrors, error);
 }
 
-static BOOL FCPBridge_swizzled_operationAddTransitionsAskedRetry(
+static BOOL SpliceKit_swizzled_operationAddTransitionsAskedRetry(
     id self, SEL _cmd, id spineObject, id spineObjectsToAddTransition, BOOL before,
     BOOL after, id *spineTransitionClipsCreated, id effects, CMTime transitionDuration,
     int transitionOverlapType, id spareTransition, int reportErrors, int *askedRetry,
     id *error) {
-    FCPBridge_captureOperationTransitionReplayRequest(
+    SpliceKit_captureOperationTransitionReplayRequest(
         self, spineObject, spineObjectsToAddTransition, before, after, effects,
         transitionDuration, spareTransition, reportErrors,
         @"operationAddTransitionsToObjectsOnSpineObject askedRetry");
-    FCPBridge_transitionCaptureTargetFromObjects(spineObjectsToAddTransition, spineObject ?: self,
+    SpliceKit_transitionCaptureTargetFromObjects(spineObjectsToAddTransition, spineObject ?: self,
         @"operationAddTransitionsToObjectsOnSpineObject askedRetry");
-    int effectiveType = FCPBridge_effectiveTransitionOverlapType(transitionOverlapType,
+    int effectiveType = SpliceKit_effectiveTransitionOverlapType(transitionOverlapType,
         @"operationAddTransitionsToObjectsOnSpineObject askedRetry");
     return ((BOOL (*)(id, SEL, id, id, BOOL, BOOL, id *, id, CMTime, int, id, int, int *, id *))
         sOrigOperationAddTransitionsAskedRetry)(self, _cmd, spineObject,
@@ -6646,12 +6646,12 @@ static BOOL FCPBridge_swizzled_operationAddTransitionsAskedRetry(
             askedRetry, error);
 }
 
-static void FCPBridge_swizzled_NSApp_stopModalWithCode(id self, SEL _cmd, NSModalResponse code) {
+static void SpliceKit_swizzled_NSApp_stopModalWithCode(id self, SEL _cmd, NSModalResponse code) {
     if (sFreezeExtendInTransitionAlert) {
-        FCPBridge_log([NSString stringWithFormat:
+        SpliceKit_log([NSString stringWithFormat:
             @"[FreezeExtend] stopModalWithCode raw=%ld", (long)code]);
-        if (FCPBridge_isFreezeFramesResponse(code)) {
-            FCPBridge_log(@"[FreezeExtend] stopModalWithCode detected 'Use Freeze Frames'");
+        if (SpliceKit_isFreezeFramesResponse(code)) {
+            SpliceKit_log(@"[FreezeExtend] stopModalWithCode detected 'Use Freeze Frames'");
             sForceOverlap = YES;
             sFreezeExtendUseFreezeFramesForCurrentAlert = YES;
         }
@@ -6661,7 +6661,7 @@ static void FCPBridge_swizzled_NSApp_stopModalWithCode(id self, SEL _cmd, NSModa
 }
 
 // Helper: get all clip info from the timeline for debugging
-static void FCPBridge_logTimelineClips(id timelineModule, NSString *label) {
+static void SpliceKit_logTimelineClips(id timelineModule, NSString *label) {
     if (!timelineModule) return;
     id sequence = [timelineModule respondsToSelector:@selector(sequence)]
         ? ((id (*)(id, SEL))objc_msgSend)(timelineModule, @selector(sequence))
@@ -6684,8 +6684,8 @@ static void FCPBridge_logTimelineClips(id timelineModule, NSString *label) {
         NSString *cls = NSStringFromClass([item class]) ?: @"?";
         if (canGetRange) {
             @try {
-                FCPBridge_CMTimeRange range =
-                    ((FCPBridge_CMTimeRange (*)(id, SEL, id))STRET_MSG)(primaryObj, erSel, item);
+                SpliceKit_CMTimeRange range =
+                    ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(primaryObj, erSel, item);
                 double s = (range.start.timescale > 0) ? (double)range.start.value / (double)range.start.timescale : 0;
                 double d = (range.duration.timescale > 0) ? (double)range.duration.value / (double)range.duration.timescale : 0;
                 [desc appendFormat:@" [%@ %.4f+%.4f]", cls, s, d];
@@ -6696,19 +6696,19 @@ static void FCPBridge_logTimelineClips(id timelineModule, NSString *label) {
             [desc appendFormat:@" [%@]", cls];
         }
     }
-    FCPBridge_log(@"%@", desc);
+    SpliceKit_log(@"%@", desc);
 }
 
 // Helper: apply retimeHold to a clip to create hidden media handles.
 // retimeHold: (Shift+H) adds a hold segment at the playhead
 // position, extending the clip's total duration. We DON'T trim back — the
 // hold extension gives FCP the extra media it needs for the transition.
-static BOOL FCPBridge_applyHoldFrameExtension(id timelineModule, double clipStart,
+static BOOL SpliceKit_applyHoldFrameExtension(id timelineModule, double clipStart,
                                                double clipEnd, double frame,
                                                BOOL holdAtStart, double holdDuration) {
     if (!timelineModule) return NO;
     double clipDur = clipEnd - clipStart;
-    FCPBridge_log(@"[FreezeExtend] === applyHold === clip=%.4f-%.4f holdAtStart=%@",
+    SpliceKit_log(@"[FreezeExtend] === applyHold === clip=%.4f-%.4f holdAtStart=%@",
         clipStart, clipEnd, holdAtStart ? @"YES" : @"NO");
 
     id seq = [timelineModule respondsToSelector:@selector(sequence)]
@@ -6724,14 +6724,14 @@ static BOOL FCPBridge_applyHoldFrameExtension(id timelineModule, double clipStar
             for (id item in items) {
                 if (transCls && [item isKindOfClass:transCls]) continue;
                 @try {
-                    FCPBridge_CMTimeRange range = ((FCPBridge_CMTimeRange (*)(id, SEL, id))STRET_MSG)(prim, erSel, item);
+                    SpliceKit_CMTimeRange range = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(prim, erSel, item);
                     double s = (range.start.timescale > 0) ? (double)range.start.value/(double)range.start.timescale : -1;
                     if (fabs(s - clipStart) < frame * 2.0) { targetClip = item; break; }
                 } @catch (NSException *ex) { continue; }
             }
         }
     }
-    if (!targetClip) { FCPBridge_log(@"[FreezeExtend] applyHold: CLIP NOT FOUND"); return NO; }
+    if (!targetClip) { SpliceKit_log(@"[FreezeExtend] applyHold: CLIP NOT FOUND"); return NO; }
 
     // Step 1: Apply retimeHold: to extend the clip.
     // For holdAtStart (right clip): select by seeking INTO the clip first,
@@ -6740,20 +6740,20 @@ static BOOL FCPBridge_applyHoldFrameExtension(id timelineModule, double clipStar
     // For !holdAtStart (left clip): seek to the last frame of the clip.
     if (holdAtStart) {
         // Select the right clip by seeking into its midpoint
-        FCPBridge_transitionSeekToSeconds(timelineModule, clipStart + (clipDur * 0.5));
-        FCPBridge_sendTimelineSimpleAction(timelineModule, @"selectClipAtPlayhead:");
+        SpliceKit_transitionSeekToSeconds(timelineModule, clipStart + (clipDur * 0.5));
+        SpliceKit_sendTimelineSimpleAction(timelineModule, @"selectClipAtPlayhead:");
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.15]];
         // Navigate playhead to the edit point (clip's start) via prevEdit
-        FCPBridge_transitionSeekToSeconds(timelineModule, clipEnd);
-        FCPBridge_sendTimelineSimpleAction(timelineModule, @"previousEdit:");
+        SpliceKit_transitionSeekToSeconds(timelineModule, clipEnd);
+        SpliceKit_sendTimelineSimpleAction(timelineModule, @"previousEdit:");
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.15]];
     } else {
-        FCPBridge_transitionSeekToSeconds(timelineModule, clipEnd - frame);
-        FCPBridge_transitionSelectItem(timelineModule, targetClip);
+        SpliceKit_transitionSeekToSeconds(timelineModule, clipEnd - frame);
+        SpliceKit_transitionSelectItem(timelineModule, targetClip);
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
     }
-    double actualPos = FCPBridge_transitionCurrentTimeSeconds(timelineModule);
-    FCPBridge_log(@"[FreezeExtend] applyHold: playhead=%.4f holdAtStart=%@", actualPos, holdAtStart ? @"YES" : @"NO");
+    double actualPos = SpliceKit_transitionCurrentTimeSeconds(timelineModule);
+    SpliceKit_log(@"[FreezeExtend] applyHold: playhead=%.4f holdAtStart=%@", actualPos, holdAtStart ? @"YES" : @"NO");
 
     SEL holdSel = NSSelectorFromString(@"retimeHold:");
     if ([timelineModule respondsToSelector:holdSel])
@@ -6766,14 +6766,14 @@ static BOOL FCPBridge_applyHoldFrameExtension(id timelineModule, double clipStar
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
         if (prim && [prim respondsToSelector:erSel]) {
             @try {
-                FCPBridge_CMTimeRange curRange = ((FCPBridge_CMTimeRange (*)(id, SEL, id))STRET_MSG)(prim, erSel, targetClip);
+                SpliceKit_CMTimeRange curRange = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(prim, erSel, targetClip);
                 newDur = (curRange.duration.timescale > 0) ? (double)curRange.duration.value / (double)curRange.duration.timescale : 0;
                 if (newDur > clipDur + frame) { holdWorked = YES; break; }
             } @catch (NSException *ex) {}
         }
     }
-    if (!holdWorked) { FCPBridge_log(@"[FreezeExtend] applyHold: hold failed"); return NO; }
-    FCPBridge_log(@"[FreezeExtend] applyHold: hold confirmed dur=%.4f (was %.4f)", newDur, clipDur);
+    if (!holdWorked) { SpliceKit_log(@"[FreezeExtend] applyHold: hold failed"); return NO; }
+    SpliceKit_log(@"[FreezeExtend] applyHold: hold confirmed dur=%.4f (was %.4f)", newDur, clipDur);
 
     // Step 2: Trim back to original size.
     // For !holdAtStart (left clip): hold is at the END. Trim END back.
@@ -6781,9 +6781,9 @@ static BOOL FCPBridge_applyHoldFrameExtension(id timelineModule, double clipStar
     //   to the right. DON'T trim — the hold on the left edge is what the
     //   transition needs. We'll trim the excess after the transition.
     if (holdAtStart) {
-        FCPBridge_log(@"[FreezeExtend] applyHold: skipping trim for holdAtStart (hold is on left edge)");
-        FCPBridge_logTimelineClips(timelineModule, @"applyHold:done");
-        FCPBridge_sendTimelineSimpleAction(timelineModule, @"deselectAll:");
+        SpliceKit_log(@"[FreezeExtend] applyHold: skipping trim for holdAtStart (hold is on left edge)");
+        SpliceKit_logTimelineClips(timelineModule, @"applyHold:done");
+        SpliceKit_sendTimelineSimpleAction(timelineModule, @"deselectAll:");
         return holdWorked;
     }
 
@@ -6812,13 +6812,13 @@ static BOOL FCPBridge_applyHoldFrameExtension(id timelineModule, double clipStar
 
             // The hold always extends the END of the clip on the timeline.
             // Trim the END back by the hold amount (negative delta).
-            FCPBridge_CMTime delta;
+            SpliceKit_CMTime delta;
             delta.timescale = 60000;
             delta.flags = 1;
             delta.epoch = 0;
             delta.value = -(int64_t)llround(holdAmount * 60000.0);
 
-            FCPBridge_log(@"[FreezeExtend] applyHold: trimming end by delta=%.4f via operationTrimEdit (with beginEditing)", -holdAmount);
+            SpliceKit_log(@"[FreezeExtend] applyHold: trimming end by delta=%.4f via operationTrimEdit (with beginEditing)", -holdAmount);
 
             // Wrap in beginEditing/endEditing like the manual drag does
             if ([seq respondsToSelector:@selector(beginEditing)])
@@ -6839,9 +6839,9 @@ static BOOL FCPBridge_applyHoldFrameExtension(id timelineModule, double clipStar
                 [inv invoke];
                 BOOL ok = NO;
                 [inv getReturnValue:&ok];
-                FCPBridge_log(@"[FreezeExtend] applyHold: operationTrimEdit result=%@", ok ? @"YES" : @"NO");
+                SpliceKit_log(@"[FreezeExtend] applyHold: operationTrimEdit result=%@", ok ? @"YES" : @"NO");
             } @catch (NSException *e) {
-                FCPBridge_log(@"[FreezeExtend] applyHold: operationTrimEdit exception: %@", e.reason);
+                SpliceKit_log(@"[FreezeExtend] applyHold: operationTrimEdit exception: %@", e.reason);
             }
 
             if ([seq respondsToSelector:@selector(endEditing)])
@@ -6851,8 +6851,8 @@ static BOOL FCPBridge_applyHoldFrameExtension(id timelineModule, double clipStar
         }
     }
 
-    FCPBridge_logTimelineClips(timelineModule, @"applyHold:done");
-    FCPBridge_sendTimelineSimpleAction(timelineModule, @"deselectAll:");
+    SpliceKit_logTimelineClips(timelineModule, @"applyHold:done");
+    SpliceKit_sendTimelineSimpleAction(timelineModule, @"deselectAll:");
     return holdWorked;
 }
 
@@ -6879,22 +6879,22 @@ static BOOL sFreezeExtendAsyncPending = NO;
 // Instead of showing the "not enough extra media" dialog, cancel the current
 // transition attempt, schedule hold-frame extensions on the short clips, then
 // retry the transition on the next run-loop iteration.
-static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *result) {
+static char SpliceKit_swizzled_displayTransitionAlert(id self, SEL _cmd, char *result) {
     // Freeze-extend auto-hold is disabled pending further development.
     // Pass through to FCP's original dialog.
     if (!sFreezeExtendPendingAutoAccept) {
         return ((char (*)(id, SEL, char *))sOrigDisplayTransitionAlert)(self, _cmd, result);
     }
 
-    FCPBridge_log(@"[FreezeExtend] Intercepted 'not enough media' dialog");
+    SpliceKit_log(@"[FreezeExtend] Intercepted 'not enough media' dialog");
 
-    id timeline = FCPBridge_getActiveTimelineModule();
+    id timeline = SpliceKit_getActiveTimelineModule();
     if (!timeline) {
         return ((char (*)(id, SEL, char *))sOrigDisplayTransitionAlert)(self, _cmd, result);
     }
 
-    double frame = FCPBridge_transitionFrameDurationSeconds(timeline);
-    double defaultDur = FCPBridge_defaultTransitionDurationSeconds(timeline);
+    double frame = SpliceKit_transitionFrameDurationSeconds(timeline);
+    double defaultDur = SpliceKit_defaultTransitionDurationSeconds(timeline);
     double halfTransition = defaultDur / 2.0;
 
     // Use the captured target clip start as the edit point — the playhead may
@@ -6902,7 +6902,7 @@ static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *r
     // Fall back to currentSequenceTime if no capture is available.
     double editPointTime = (sFreezeExtendTargetClipStart > 0)
         ? sFreezeExtendTargetClipStart
-        : FCPBridge_transitionCurrentTimeSeconds(timeline);
+        : SpliceKit_transitionCurrentTimeSeconds(timeline);
 
     // Scan ALL clips via the sequence (self) -> primaryObject and find the
     // two clips adjacent to the edit point.
@@ -6925,8 +6925,8 @@ static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *r
         for (id item in items) {
             if (transCls && [item isKindOfClass:transCls]) continue;
             @try {
-                FCPBridge_CMTimeRange range =
-                    ((FCPBridge_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                SpliceKit_CMTimeRange range =
+                    ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
                         primaryObj, erSel, item);
                 if (range.duration.timescale <= 0 || range.duration.value <= 0) continue;
                 double s = (double)range.start.value / (double)range.start.timescale;
@@ -6944,7 +6944,7 @@ static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *r
         }
     }
 
-    FCPBridge_log(@"[FreezeExtend] Edit point=%.4f left=%@ (%.4f-%.4f, dur=%.4f) right=%@ (%.4f-%.4f, dur=%.4f) halfTrans=%.4f",
+    SpliceKit_log(@"[FreezeExtend] Edit point=%.4f left=%@ (%.4f-%.4f, dur=%.4f) right=%@ (%.4f-%.4f, dur=%.4f) halfTrans=%.4f",
         editPointTime,
         leftClip.found ? @"YES" : @"NO", leftClip.start, leftClip.end, leftClip.dur,
         rightClip.found ? @"YES" : @"NO", rightClip.start, rightClip.end, rightClip.dur,
@@ -6956,11 +6956,11 @@ static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *r
     if (!needsExtension || sFreezeExtendAsyncPending) {
         if (sFreezeExtendPendingAutoAccept) {
             // Hold frames were already applied — just auto-accept
-            FCPBridge_log(@"[FreezeExtend] Auto-accepting after hold extension");
+            SpliceKit_log(@"[FreezeExtend] Auto-accepting after hold extension");
             if (result) *result = 1;
             return 1;
         }
-        FCPBridge_log(@"[FreezeExtend] No clips need extension (or retry pending), showing original dialog");
+        SpliceKit_log(@"[FreezeExtend] No clips need extension (or retry pending), showing original dialog");
         return ((char (*)(id, SEL, char *))sOrigDisplayTransitionAlert)(self, _cmd, result);
     }
 
@@ -6978,30 +6978,30 @@ static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *r
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         @try {
-            id tl = FCPBridge_getActiveTimelineModule();
+            id tl = SpliceKit_getActiveTimelineModule();
             if (!tl) {
-                FCPBridge_log(@"[FreezeExtend] Async: no timeline module");
+                SpliceKit_log(@"[FreezeExtend] Async: no timeline module");
                 sFreezeExtendAsyncPending = NO;
                 return;
             }
 
-            FCPBridge_log(@"[FreezeExtend] Async: starting hold extension workflow");
-            FCPBridge_logTimelineClips(tl, @"Async start");
+            SpliceKit_log(@"[FreezeExtend] Async: starting hold extension workflow");
+            SpliceKit_logTimelineClips(tl, @"Async start");
 
             // Undo the failed/cancelled transition attempt
-            FCPBridge_log(@"[FreezeExtend] Async: undoing cancelled transition");
-            FCPBridge_sendTimelineSimpleAction(tl, @"undo");
+            SpliceKit_log(@"[FreezeExtend] Async: undoing cancelled transition");
+            SpliceKit_sendTimelineSimpleAction(tl, @"undo");
             [[NSRunLoop currentRunLoop] runUntilDate:
                 [NSDate dateWithTimeIntervalSinceNow:0.3]];
-            FCPBridge_logTimelineClips(tl, @"After undo");
+            SpliceKit_logTimelineClips(tl, @"After undo");
 
             // Extend LEFT clip first — the right clip extension shifts timeline
             // positions, making it hard to select the left clip afterward.
             if (asyncLeft.found && asyncLeft.dur < asyncHalf) {
-                FCPBridge_log(@"[FreezeExtend] Async: extending left clip (%.4f-%.4f, dur=%.4fs)",
+                SpliceKit_log(@"[FreezeExtend] Async: extending left clip (%.4f-%.4f, dur=%.4fs)",
                     asyncLeft.start, asyncLeft.end, asyncLeft.dur);
-                FCPBridge_applyHoldFrameExtension(tl, asyncLeft.start, asyncLeft.end, asyncFrame, NO, asyncHalf);
-                FCPBridge_logTimelineClips(tl, @"After left hold");
+                SpliceKit_applyHoldFrameExtension(tl, asyncLeft.start, asyncLeft.end, asyncFrame, NO, asyncHalf);
+                SpliceKit_logTimelineClips(tl, @"After left hold");
             }
 
             // Extend right clip — after left extension, the right clip's start
@@ -7025,14 +7025,14 @@ static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *r
                             clipIdx++;
                             if (clipIdx == 2) {
                                 @try {
-                                    FCPBridge_CMTimeRange r =
-                                        ((FCPBridge_CMTimeRange (*)(id, SEL, id))STRET_MSG)(prim, erS, itm);
+                                    SpliceKit_CMTimeRange r =
+                                        ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(prim, erS, itm);
                                     if (r.duration.timescale > 0) {
                                         double s = (double)r.start.value / (double)r.start.timescale;
                                         double d = (double)r.duration.value / (double)r.duration.timescale;
                                         double e = s + d;
                                         newEditPoint = s;
-                                        FCPBridge_log(@"[FreezeExtend] Async: right clip now at %.4f-%.4f (dur=%.4f)", s, e, d);
+                                        SpliceKit_log(@"[FreezeExtend] Async: right clip now at %.4f-%.4f (dur=%.4f)", s, e, d);
                                         asyncRight = (ClipInfo){s, e, d, YES};
                                     }
                                 } @catch (NSException *ex) {}
@@ -7042,23 +7042,23 @@ static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *r
                     }
                 }
                 sFreezeExtendEditPointTime = newEditPoint;
-                FCPBridge_log(@"[FreezeExtend] Async: extending right clip (%.4f-%.4f, dur=%.4fs)",
+                SpliceKit_log(@"[FreezeExtend] Async: extending right clip (%.4f-%.4f, dur=%.4fs)",
                     asyncRight.start, asyncRight.end, asyncRight.dur);
-                FCPBridge_applyHoldFrameExtension(tl, asyncRight.start, asyncRight.end, asyncFrame, YES, asyncHalf);
-                FCPBridge_logTimelineClips(tl, @"After right hold");
+                SpliceKit_applyHoldFrameExtension(tl, asyncRight.start, asyncRight.end, asyncFrame, YES, asyncHalf);
+                SpliceKit_logTimelineClips(tl, @"After right hold");
             }
 
             // Navigate to edit point and retry the transition
             double seekTarget = MAX(0, sFreezeExtendEditPointTime - asyncFrame);
-            FCPBridge_log(@"[FreezeExtend] Async: seeking to %.4f then nextEdit", seekTarget);
-            FCPBridge_transitionSeekToSeconds(tl, seekTarget);
-            FCPBridge_sendTimelineSimpleAction(tl, @"nextEdit:");
+            SpliceKit_log(@"[FreezeExtend] Async: seeking to %.4f then nextEdit", seekTarget);
+            SpliceKit_transitionSeekToSeconds(tl, seekTarget);
+            SpliceKit_sendTimelineSimpleAction(tl, @"nextEdit:");
             [[NSRunLoop currentRunLoop] runUntilDate:
                 [NSDate dateWithTimeIntervalSinceNow:0.2]];
 
-            double retryPos = FCPBridge_transitionCurrentTimeSeconds(tl);
-            FCPBridge_log(@"[FreezeExtend] Async: retrying addTransition at playhead=%.4f", retryPos);
-            FCPBridge_logTimelineClips(tl, @"Before retry");
+            double retryPos = SpliceKit_transitionCurrentTimeSeconds(tl);
+            SpliceKit_log(@"[FreezeExtend] Async: retrying addTransition at playhead=%.4f", retryPos);
+            SpliceKit_logTimelineClips(tl, @"Before retry");
 
             // Temporarily reduce the default transition duration to fit within
             // the available hold handles. The holds are ~2s but we want the
@@ -7071,7 +7071,7 @@ static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *r
             [[NSUserDefaults standardUserDefaults]
                 setFloat:(float)fitDuration
                 forKey:@"FFSequenceTransDefaultDuration"];
-            FCPBridge_log(@"[FreezeExtend] Async: set transition duration to %.4f (2 x %.4f)", fitDuration, minClipDur);
+            SpliceKit_log(@"[FreezeExtend] Async: set transition duration to %.4f (2 x %.4f)", fitDuration, minClipDur);
 
             // Auto-accept if the dialog still appears
             sFreezeExtendPendingAutoAccept = YES;
@@ -7093,25 +7093,25 @@ static char FCPBridge_swizzled_displayTransitionAlert(id self, SEL _cmd, char *r
                     removeObjectForKey:@"FFSequenceTransDefaultDuration"];
             }
 
-            FCPBridge_logTimelineClips(tl, @"After transition added");
+            SpliceKit_logTimelineClips(tl, @"After transition added");
 
-            FCPBridge_sendTimelineSimpleAction(tl, @"deselectAll:");
-            FCPBridge_logTimelineClips(tl, @"Final result");
+            SpliceKit_sendTimelineSimpleAction(tl, @"deselectAll:");
+            SpliceKit_logTimelineClips(tl, @"Final result");
         } @catch (NSException *e) {
-            FCPBridge_log(@"[FreezeExtend] Async hold+retry exception: %@", e.reason);
+            SpliceKit_log(@"[FreezeExtend] Async hold+retry exception: %@", e.reason);
         }
         sFreezeExtendAsyncPending = NO;
     });
 
-    FCPBridge_log(@"[FreezeExtend] Cancelled transition, scheduled async hold+retry");
+    SpliceKit_log(@"[FreezeExtend] Cancelled transition, scheduled async hold+retry");
     return 1;
 }
 
 // Install the swizzles (called once at startup)
-void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
+void SpliceKit_installTransitionFreezeExtendSwizzle(void) {
     Class seqClass = objc_getClass("FFAnchoredSequence");
     if (!seqClass) {
-        FCPBridge_log(@"[FreezeExtend] WARNING: FFAnchoredSequence class not found");
+        SpliceKit_log(@"[FreezeExtend] WARNING: FFAnchoredSequence class not found");
         return;
     }
 
@@ -7120,8 +7120,8 @@ void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
     Method overlapMethod = class_getInstanceMethod(seqClass, overlapSel);
     if (overlapMethod) {
         sOrigDefaultOverlapType = method_setImplementation(overlapMethod,
-            (IMP)FCPBridge_swizzled_defaultTransitionOverlapType);
-        FCPBridge_log(@"[FreezeExtend] Swizzled -[FFAnchoredSequence defaultTransitionOverlapType]");
+            (IMP)SpliceKit_swizzled_defaultTransitionOverlapType);
+        SpliceKit_log(@"[FreezeExtend] Swizzled -[FFAnchoredSequence defaultTransitionOverlapType]");
     }
 
     // Swizzle displayTransitionAvailableMediaAlertDialog: to add our button
@@ -7129,23 +7129,23 @@ void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
     Method alertMethod = class_getInstanceMethod(seqClass, alertSel);
     if (alertMethod) {
         sOrigDisplayTransitionAlert = method_setImplementation(alertMethod,
-            (IMP)FCPBridge_swizzled_displayTransitionAlert);
-        FCPBridge_log(@"[FreezeExtend] Swizzled -[FFAnchoredSequence displayTransitionAvailableMediaAlertDialog:]");
+            (IMP)SpliceKit_swizzled_displayTransitionAlert);
+        SpliceKit_log(@"[FreezeExtend] Swizzled -[FFAnchoredSequence displayTransitionAvailableMediaAlertDialog:]");
     }
 
     Method runModalMethod = class_getInstanceMethod([NSAlert class], @selector(runModal));
     if (runModalMethod) {
         sOrigNSAlertRunModal = method_setImplementation(runModalMethod,
-            (IMP)FCPBridge_swizzled_NSAlert_runModal);
-        FCPBridge_log(@"[FreezeExtend] Swizzled -[NSAlert runModal]");
+            (IMP)SpliceKit_swizzled_NSAlert_runModal);
+        SpliceKit_log(@"[FreezeExtend] Swizzled -[NSAlert runModal]");
     }
 
     Method stopModalMethod = class_getInstanceMethod([NSApplication class],
         @selector(stopModalWithCode:));
     if (stopModalMethod) {
         sOrigNSAppStopModalWithCode = method_setImplementation(stopModalMethod,
-            (IMP)FCPBridge_swizzled_NSApp_stopModalWithCode);
-        FCPBridge_log(@"[FreezeExtend] Swizzled -[NSApplication stopModalWithCode:]");
+            (IMP)SpliceKit_swizzled_NSApp_stopModalWithCode);
+        SpliceKit_log(@"[FreezeExtend] Swizzled -[NSApplication stopModalWithCode:]");
     }
 
     SEL actionAddSel = NSSelectorFromString(
@@ -7153,8 +7153,8 @@ void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
     Method actionAddMethod = class_getInstanceMethod(seqClass, actionAddSel);
     if (actionAddMethod) {
         sOrigActionAddTransitions = method_setImplementation(actionAddMethod,
-            (IMP)FCPBridge_swizzled_actionAddTransitions);
-        FCPBridge_log(@"[FreezeExtend] Swizzled actionAddTransitionsToSpineObjects...");
+            (IMP)SpliceKit_swizzled_actionAddTransitions);
+        SpliceKit_log(@"[FreezeExtend] Swizzled actionAddTransitionsToSpineObjects...");
     }
 
     SEL opAddSel = NSSelectorFromString(
@@ -7162,8 +7162,8 @@ void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
     Method opAddMethod = class_getInstanceMethod(seqClass, opAddSel);
     if (opAddMethod) {
         sOrigOperationAddTransitions = method_setImplementation(opAddMethod,
-            (IMP)FCPBridge_swizzled_operationAddTransitions);
-        FCPBridge_log(@"[FreezeExtend] Swizzled operationAddTransitionsToObjectsOnSpineObject...");
+            (IMP)SpliceKit_swizzled_operationAddTransitions);
+        SpliceKit_log(@"[FreezeExtend] Swizzled operationAddTransitionsToObjectsOnSpineObject...");
     }
 
     SEL opAddRetrySel = NSSelectorFromString(
@@ -7171,8 +7171,8 @@ void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
     Method opAddRetryMethod = class_getInstanceMethod(seqClass, opAddRetrySel);
     if (opAddRetryMethod) {
         sOrigOperationAddTransitionsAskedRetry = method_setImplementation(opAddRetryMethod,
-            (IMP)FCPBridge_swizzled_operationAddTransitionsAskedRetry);
-        FCPBridge_log(@"[FreezeExtend] Swizzled operationAddTransitionsToObjectsOnSpineObject...askedRetry...");
+            (IMP)SpliceKit_swizzled_operationAddTransitionsAskedRetry);
+        SpliceKit_log(@"[FreezeExtend] Swizzled operationAddTransitionsToObjectsOnSpineObject...askedRetry...");
     }
 
     // Temporarily log all trim operations to understand what FCP does when
@@ -7185,19 +7185,19 @@ void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
         static IMP sOrigTrimEdit = NULL;
         sOrigTrimEdit = method_getImplementation(trimMethod);
         IMP newImp = imp_implementationWithBlock(^BOOL(id self, id startEdits, id endEdits,
-            int edgeType, FCPBridge_CMTime delta, int trimCommand, int trimFlags,
+            int edgeType, SpliceKit_CMTime delta, int trimCommand, int trimFlags,
             int temporalResMode, id animHint, id *error) {
             double deltaSeconds = (delta.timescale > 0) ? (double)delta.value / (double)delta.timescale : 0;
-            FCPBridge_log(@"[TrimLog] operationTrimEdit edgeType=%d delta=%.4fs trimCommand=%d trimFlags=%d temporalRes=%d startEdits=%@ endEdits=%@",
+            SpliceKit_log(@"[TrimLog] operationTrimEdit edgeType=%d delta=%.4fs trimCommand=%d trimFlags=%d temporalRes=%d startEdits=%@ endEdits=%@",
                 edgeType, deltaSeconds, trimCommand, trimFlags, temporalResMode,
                 startEdits ? [startEdits description] : @"nil",
                 endEdits ? [endEdits description] : @"nil");
-            return ((BOOL (*)(id, SEL, id, id, int, FCPBridge_CMTime, int, int, int, id, id *))
+            return ((BOOL (*)(id, SEL, id, id, int, SpliceKit_CMTime, int, int, int, id, id *))
                 sOrigTrimEdit)(self, trimSel, startEdits, endEdits, edgeType, delta,
                     trimCommand, trimFlags, temporalResMode, animHint, error);
         });
         method_setImplementation(trimMethod, newImp);
-        FCPBridge_log(@"[FreezeExtend] Swizzled operationTrimEdit for logging");
+        SpliceKit_log(@"[FreezeExtend] Swizzled operationTrimEdit for logging");
     }
 
     // Also log setClippedRange: calls
@@ -7206,15 +7206,15 @@ void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
     if (setCRMethod) {
         static IMP sOrigSetCR = NULL;
         sOrigSetCR = method_getImplementation(setCRMethod);
-        IMP newImp = imp_implementationWithBlock(^void(id self, FCPBridge_CMTimeRange range) {
+        IMP newImp = imp_implementationWithBlock(^void(id self, SpliceKit_CMTimeRange range) {
             double start = (range.start.timescale > 0) ? (double)range.start.value / (double)range.start.timescale : 0;
             double dur = (range.duration.timescale > 0) ? (double)range.duration.value / (double)range.duration.timescale : 0;
-            FCPBridge_log(@"[TrimLog] setClippedRange: start=%.4f dur=%.4f on %@ %p",
+            SpliceKit_log(@"[TrimLog] setClippedRange: start=%.4f dur=%.4f on %@ %p",
                 start, dur, NSStringFromClass([self class]), self);
-            ((void (*)(id, SEL, FCPBridge_CMTimeRange))sOrigSetCR)(self, setCRSel, range);
+            ((void (*)(id, SEL, SpliceKit_CMTimeRange))sOrigSetCR)(self, setCRSel, range);
         });
         method_setImplementation(setCRMethod, newImp);
-        FCPBridge_log(@"[FreezeExtend] Swizzled setClippedRange: for logging");
+        SpliceKit_log(@"[FreezeExtend] Swizzled setClippedRange: for logging");
     }
 }
 
@@ -7226,7 +7226,7 @@ void FCPBridge_installTransitionFreezeExtendSwizzle(void) {
 // active-browser selection is unreliable, so we capture the dragged effect ID
 // ourselves and apply/rename the new clip after it is created.
 
-static NSString * const kFCPBridgeEffectDragAsAdjustmentClip = @"FCPBridgeEffectDragAsAdjustmentClip";
+static NSString * const kSpliceKitEffectDragAsAdjustmentClip = @"SpliceKitEffectDragAsAdjustmentClip";
 static BOOL sEffectDropOnEmptySpace = NO;
 static IMP sOrigValidateEffectsDrop = NULL;
 static IMP sOrigTLKPerformDragOp = NULL;
@@ -7237,18 +7237,18 @@ static NSString *sEffectDragKeyWindowSelectedEffectID = nil;
 static BOOL sEffectDragInstallRetryScheduled = NO;
 static NSInteger sEffectDragInstallAttempts = 0;
 
-static void FCPBridge_scheduleEffectDragInstallRetry(void);
+static void SpliceKit_scheduleEffectDragInstallRetry(void);
 
-@interface FCPBridgeEffectDragModuleProxy : NSProxy {
+@interface SpliceKitEffectDragModuleProxy : NSProxy {
     id _target;
 }
 + (instancetype)proxyWithTarget:(id)target;
 - (id)selectedEffectID;
 @end
 
-@implementation FCPBridgeEffectDragModuleProxy
+@implementation SpliceKitEffectDragModuleProxy
 + (instancetype)proxyWithTarget:(id)target {
-    FCPBridgeEffectDragModuleProxy *proxy = [FCPBridgeEffectDragModuleProxy alloc];
+    SpliceKitEffectDragModuleProxy *proxy = [SpliceKitEffectDragModuleProxy alloc];
     proxy->_target = target;
     return proxy;
 }
@@ -7284,50 +7284,50 @@ static void FCPBridge_scheduleEffectDragInstallRetry(void);
 }
 
 - (NSString *)description {
-    return _target ? [_target description] : @"<FCPBridgeEffectDragModuleProxy>";
+    return _target ? [_target description] : @"<SpliceKitEffectDragModuleProxy>";
 }
 @end
 
-static id FCPBridge_swizzled_keyWindowActiveModule(id self, SEL _cmd) {
+static id SpliceKit_swizzled_keyWindowActiveModule(id self, SEL _cmd) {
     id original = sOrigKeyWindowActiveModule
         ? ((id (*)(id, SEL))sOrigKeyWindowActiveModule)(self, _cmd)
         : nil;
 
     if (sEffectDragKeyWindowSelectedEffectID.length > 0) {
-        return [FCPBridgeEffectDragModuleProxy proxyWithTarget:original];
+        return [SpliceKitEffectDragModuleProxy proxyWithTarget:original];
     }
 
     return original;
 }
 
-static void FCPBridge_clearDraggedEffectState(void) {
+static void SpliceKit_clearDraggedEffectState(void) {
     sEffectDropOnEmptySpace = NO;
     sDraggedEffectID = nil;
     sDraggedEffectName = nil;
 }
 
-BOOL FCPBridge_isEffectDragAsAdjustmentClipEnabled(void) {
+BOOL SpliceKit_isEffectDragAsAdjustmentClipEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    id storedValue = [defaults objectForKey:kFCPBridgeEffectDragAsAdjustmentClip];
+    id storedValue = [defaults objectForKey:kSpliceKitEffectDragAsAdjustmentClip];
     if (!storedValue) {
         return YES;
     }
-    return [defaults boolForKey:kFCPBridgeEffectDragAsAdjustmentClip];
+    return [defaults boolForKey:kSpliceKitEffectDragAsAdjustmentClip];
 }
 
-void FCPBridge_setEffectDragAsAdjustmentClipEnabled(BOOL enabled) {
-    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kFCPBridgeEffectDragAsAdjustmentClip];
+void SpliceKit_setEffectDragAsAdjustmentClipEnabled(BOOL enabled) {
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kSpliceKitEffectDragAsAdjustmentClip];
     if (enabled) {
-        FCPBridge_log(@"[EffectDrag] Enabled");
-        FCPBridge_installEffectDragAsAdjustmentClip();
+        SpliceKit_log(@"[EffectDrag] Enabled");
+        SpliceKit_installEffectDragAsAdjustmentClip();
     } else {
-        FCPBridge_log(@"[EffectDrag] Disabled");
+        SpliceKit_log(@"[EffectDrag] Disabled");
         sEffectDragKeyWindowSelectedEffectID = nil;
-        FCPBridge_clearDraggedEffectState();
+        SpliceKit_clearDraggedEffectState();
     }
 }
 
-static Class FCPBridge_findLoadedClassNamed(const char *wantedName) {
+static Class SpliceKit_findLoadedClassNamed(const char *wantedName) {
     if (!wantedName) return Nil;
 
     unsigned int classCount = 0;
@@ -7347,7 +7347,7 @@ static Class FCPBridge_findLoadedClassNamed(const char *wantedName) {
     return foundClass;
 }
 
-static NSArray *FCPBridge_effectDragSelectedItems(id timelineModule) {
+static NSArray *SpliceKit_effectDragSelectedItems(id timelineModule) {
     if (!timelineModule) return nil;
 
     SEL selSel = NSSelectorFromString(@"selectedItems:includeItemBeforePlayheadIfLast:");
@@ -7357,7 +7357,7 @@ static NSArray *FCPBridge_effectDragSelectedItems(id timelineModule) {
     return [selected isKindOfClass:[NSArray class]] ? [(NSArray *)selected copy] : nil;
 }
 
-static NSArray *FCPBridge_effectDragContainedItems(id timelineModule) {
+static NSArray *SpliceKit_effectDragContainedItems(id timelineModule) {
     if (!timelineModule) return nil;
 
     SEL seqSel = NSSelectorFromString(@"sequence");
@@ -7380,7 +7380,7 @@ static NSArray *FCPBridge_effectDragContainedItems(id timelineModule) {
     return [itemsSource isKindOfClass:[NSArray class]] ? [(NSArray *)itemsSource copy] : nil;
 }
 
-static NSSet *FCPBridge_effectDragPointerSet(NSArray *objects) {
+static NSSet *SpliceKit_effectDragPointerSet(NSArray *objects) {
     NSMutableSet *result = [NSMutableSet setWithCapacity:objects.count];
     for (id object in objects) {
         if (object) {
@@ -7390,7 +7390,7 @@ static NSSet *FCPBridge_effectDragPointerSet(NSArray *objects) {
     return result;
 }
 
-static BOOL FCPBridge_effectDragLooksLikeAdjustmentClip(id clip) {
+static BOOL SpliceKit_effectDragLooksLikeAdjustmentClip(id clip) {
     if (!clip) return NO;
 
     NSString *className = NSStringFromClass([clip class]) ?: @"";
@@ -7409,7 +7409,7 @@ static BOOL FCPBridge_effectDragLooksLikeAdjustmentClip(id clip) {
     return NO;
 }
 
-static void FCPBridge_effectDragExtractEffectInfo(
+static void SpliceKit_effectDragExtractEffectInfo(
     id pasteboard, id timelineModule, NSString **outEffectID, NSString **outEffectName)
 {
     NSString *effectID = nil;
@@ -7458,7 +7458,7 @@ static void FCPBridge_effectDragExtractEffectInfo(
     if (outEffectName) *outEffectName = effectName;
 }
 
-static id FCPBridge_effectDragVideoEffectsTarget(id clip) {
+static id SpliceKit_effectDragVideoEffectsTarget(id clip) {
     if (!clip) return nil;
 
     SEL veSel = NSSelectorFromString(@"videoEffects");
@@ -7478,7 +7478,7 @@ static id FCPBridge_effectDragVideoEffectsTarget(id clip) {
     return nil;
 }
 
-static BOOL FCPBridge_effectDragClipHasEffectID(id clip, NSString *effectID) {
+static BOOL SpliceKit_effectDragClipHasEffectID(id clip, NSString *effectID) {
     if (!clip || effectID.length == 0) return NO;
 
     SEL effectsSel = NSSelectorFromString(@"effects");
@@ -7500,28 +7500,28 @@ static BOOL FCPBridge_effectDragClipHasEffectID(id clip, NSString *effectID) {
     return NO;
 }
 
-static id FCPBridge_effectDragFindCreatedClip(
+static id SpliceKit_effectDragFindCreatedClip(
     id timelineModule, NSArray *itemsBefore, NSArray *selectedBefore)
 {
-    NSSet *selectedBeforePointers = FCPBridge_effectDragPointerSet(selectedBefore ?: @[]);
-    NSArray *selectedAfter = FCPBridge_effectDragSelectedItems(timelineModule) ?: @[];
+    NSSet *selectedBeforePointers = SpliceKit_effectDragPointerSet(selectedBefore ?: @[]);
+    NSArray *selectedAfter = SpliceKit_effectDragSelectedItems(timelineModule) ?: @[];
 
     id firstNewSelected = nil;
     for (id item in selectedAfter) {
         if (![selectedBeforePointers containsObject:[NSValue valueWithNonretainedObject:item]]) {
-            if (FCPBridge_effectDragLooksLikeAdjustmentClip(item)) {
+            if (SpliceKit_effectDragLooksLikeAdjustmentClip(item)) {
                 return item;
             }
             if (!firstNewSelected) firstNewSelected = item;
         }
     }
 
-    NSSet *beforePointers = FCPBridge_effectDragPointerSet(itemsBefore ?: @[]);
-    NSArray *itemsAfter = FCPBridge_effectDragContainedItems(timelineModule) ?: @[];
+    NSSet *beforePointers = SpliceKit_effectDragPointerSet(itemsBefore ?: @[]);
+    NSArray *itemsAfter = SpliceKit_effectDragContainedItems(timelineModule) ?: @[];
     id firstNewItem = nil;
     for (id item in itemsAfter) {
         if (![beforePointers containsObject:[NSValue valueWithNonretainedObject:item]]) {
-            if (FCPBridge_effectDragLooksLikeAdjustmentClip(item)) {
+            if (SpliceKit_effectDragLooksLikeAdjustmentClip(item)) {
                 return item;
             }
             if (!firstNewItem) firstNewItem = item;
@@ -7540,57 +7540,57 @@ static id FCPBridge_effectDragFindCreatedClip(
 // Swizzled -[FFAnchoredTimelineModule _validateEffectsDrop:onItem:atIndex:]
 // Original rejects drops when item is the root (empty space). We accept those
 // for video filters so the user gets a green "+" cursor.
-static unsigned long long FCPBridge_swizzled_validateEffectsDrop(
+static unsigned long long SpliceKit_swizzled_validateEffectsDrop(
     id self, SEL _cmd, id pasteboard, id item, long long index)
 {
     unsigned long long result = ((unsigned long long (*)(id, SEL, id, id, long long))
         sOrigValidateEffectsDrop)(self, _cmd, pasteboard, item, index);
 
-    if (!FCPBridge_isEffectDragAsAdjustmentClipEnabled()) {
-        FCPBridge_clearDraggedEffectState();
+    if (!SpliceKit_isEffectDragAsAdjustmentClipEnabled()) {
+        SpliceKit_clearDraggedEffectState();
         return result;
     }
 
     if (result != 0) {
         // Original accepted (drop on a valid clip) — normal behavior
-        FCPBridge_clearDraggedEffectState();
+        SpliceKit_clearDraggedEffectState();
         return result;
     }
 
     // Original rejected. Check if this is a video filter over empty space.
     SEL hasTypeSel = NSSelectorFromString(@"hasEffectsWithType:");
     if (![pasteboard respondsToSelector:hasTypeSel]) {
-        FCPBridge_clearDraggedEffectState();
+        SpliceKit_clearDraggedEffectState();
         return 0;
     }
     BOOL hasVideoFilter = ((BOOL (*)(id, SEL, id))objc_msgSend)(
         pasteboard, hasTypeSel, @"effect.video.filter");
     if (!hasVideoFilter) {
-        FCPBridge_clearDraggedEffectState();
+        SpliceKit_clearDraggedEffectState();
         return 0;
     }
 
     // Check if item is the root item (empty timeline space)
     SEL rootSel = NSSelectorFromString(@"rootItem");
     if (![self respondsToSelector:rootSel]) {
-        FCPBridge_clearDraggedEffectState();
+        SpliceKit_clearDraggedEffectState();
         return 0;
     }
     id rootItem = ((id (*)(id, SEL))objc_msgSend)(self, rootSel);
     if (item != rootItem) {
-        FCPBridge_clearDraggedEffectState();
+        SpliceKit_clearDraggedEffectState();
         return 0;
     }
 
     NSString *effectID = nil;
     NSString *effectName = nil;
-    FCPBridge_effectDragExtractEffectInfo(pasteboard, self, &effectID, &effectName);
+    SpliceKit_effectDragExtractEffectInfo(pasteboard, self, &effectID, &effectName);
 
     // Accept the drop — we'll create an adjustment clip in performDragOperation:
     sEffectDropOnEmptySpace = YES;
     sDraggedEffectID = [effectID copy];
     sDraggedEffectName = [effectName copy];
-    FCPBridge_log(@"[EffectDrag] Accepting empty-space drop for %@ (%@) at index %lld",
+    SpliceKit_log(@"[EffectDrag] Accepting empty-space drop for %@ (%@) at index %lld",
                   sDraggedEffectName ?: @"<unknown effect>",
                   sDraggedEffectID ?: @"<no effect id>",
                   index);
@@ -7601,16 +7601,16 @@ static unsigned long long FCPBridge_swizzled_validateEffectsDrop(
 // Intercepts the drop before FCP's normal handling. When our flag is set,
 // temporarily overrides NSApp.keyWindowActiveModule.selectedEffectID so
 // connectAdjustmentClip: takes FCP's normal "effect browser selection" path.
-static char FCPBridge_swizzled_TLKPerformDragOp(id self, SEL _cmd, id draggingInfo) {
-    if (!FCPBridge_isEffectDragAsAdjustmentClipEnabled()) {
-        FCPBridge_clearDraggedEffectState();
+static char SpliceKit_swizzled_TLKPerformDragOp(id self, SEL _cmd, id draggingInfo) {
+    if (!SpliceKit_isEffectDragAsAdjustmentClipEnabled()) {
+        SpliceKit_clearDraggedEffectState();
         goto fallback;
     }
 
     if (sEffectDropOnEmptySpace) {
-        id timelineModule = FCPBridge_getActiveTimelineModule();
+        id timelineModule = SpliceKit_getActiveTimelineModule();
         if (!timelineModule) {
-            FCPBridge_clearDraggedEffectState();
+            SpliceKit_clearDraggedEffectState();
             goto fallback;
         }
 
@@ -7619,16 +7619,16 @@ static char FCPBridge_swizzled_TLKPerformDragOp(id self, SEL _cmd, id draggingIn
         if (effectID.length == 0) {
             id handlerPb = nil;
             @try { handlerPb = [timelineModule valueForKey:@"handlerPasteboard"]; } @catch (NSException *e) {}
-            FCPBridge_effectDragExtractEffectInfo(handlerPb, timelineModule, &effectID, &effectName);
+            SpliceKit_effectDragExtractEffectInfo(handlerPb, timelineModule, &effectID, &effectName);
         }
 
-        FCPBridge_log(@"[EffectDrag] Creating adjustment clip with effect: %@ (%@)",
+        SpliceKit_log(@"[EffectDrag] Creating adjustment clip with effect: %@ (%@)",
                       effectName ?: @"<none>", effectID ?: @"<none>");
 
         // Step 1: Create the adjustment clip at the validated drop position.
         SEL adjSel = NSSelectorFromString(@"connectAdjustmentClip:");
         if (![timelineModule respondsToSelector:adjSel]) {
-            FCPBridge_clearDraggedEffectState();
+            SpliceKit_clearDraggedEffectState();
             goto fallback;
         }
         if (effectID.length > 0) {
@@ -7638,7 +7638,7 @@ static char FCPBridge_swizzled_TLKPerformDragOp(id self, SEL _cmd, id draggingIn
         sEffectDragKeyWindowSelectedEffectID = nil;
 
         // FCP's native path should have applied the effect and set the clip name.
-        FCPBridge_clearDraggedEffectState();
+        SpliceKit_clearDraggedEffectState();
         return 1; // YES — drop handled
     }
 
@@ -7649,13 +7649,13 @@ fallback:
     return ((char (*)(id, SEL, id))sOrigTLKPerformDragOp)(self, _cmd, draggingInfo);
 }
 
-static void FCPBridge_scheduleEffectDragInstallRetry(void) {
+static void SpliceKit_scheduleEffectDragInstallRetry(void) {
     if ((sOrigValidateEffectsDrop && sOrigTLKPerformDragOp) || sEffectDragInstallRetryScheduled) {
         return;
     }
     if (sEffectDragInstallAttempts >= 30) {
         if (sEffectDragInstallAttempts == 30) {
-            FCPBridge_log(@"[EffectDrag] Giving up on swizzle install after %ld attempts",
+            SpliceKit_log(@"[EffectDrag] Giving up on swizzle install after %ld attempts",
                           (long)sEffectDragInstallAttempts);
             sEffectDragInstallAttempts++;
         }
@@ -7667,16 +7667,16 @@ static void FCPBridge_scheduleEffectDragInstallRetry(void) {
                    dispatch_get_main_queue(), ^{
         sEffectDragInstallRetryScheduled = NO;
         sEffectDragInstallAttempts++;
-        FCPBridge_installEffectDragSwizzlesNow();
+        SpliceKit_installEffectDragSwizzlesNow();
     });
 }
 
-void FCPBridge_installEffectDragSwizzlesNow(void) {
+void SpliceKit_installEffectDragSwizzlesNow(void) {
     // Use async dispatch to avoid deadlocking the bridge when the main thread
     // is busy (e.g., loading CompressorKit during startup). The swizzles will
     // be installed on the next main thread run loop iteration.
     if (sOrigValidateEffectsDrop && sOrigTLKPerformDragOp) return; // Already installed
-    FCPBridge_executeOnMainThreadAsync(^{
+    SpliceKit_executeOnMainThreadAsync(^{
         if (sOrigValidateEffectsDrop && sOrigTLKPerformDragOp) {
             sEffectDragInstallRetryScheduled = NO;
             return;
@@ -7685,7 +7685,7 @@ void FCPBridge_installEffectDragSwizzlesNow(void) {
         Class tlmClass = Nil;
         Class tlkClass = Nil;
 
-        id activeModule = FCPBridge_getActiveTimelineModule();
+        id activeModule = SpliceKit_getActiveTimelineModule();
         if (activeModule) {
             tlmClass = [activeModule class];
             SEL tvSel = NSSelectorFromString(@"timelineView");
@@ -7697,14 +7697,14 @@ void FCPBridge_installEffectDragSwizzlesNow(void) {
             }
         }
 
-        if (!tlmClass) tlmClass = FCPBridge_findLoadedClassNamed("FFAnchoredTimelineModule");
-        if (!tlkClass) tlkClass = FCPBridge_findLoadedClassNamed("TLKTimelineView");
+        if (!tlmClass) tlmClass = SpliceKit_findLoadedClassNamed("FFAnchoredTimelineModule");
+        if (!tlkClass) tlkClass = SpliceKit_findLoadedClassNamed("TLKTimelineView");
 
         if (!tlmClass || !tlkClass) {
             if (sEffectDragInstallAttempts == 0) {
-                FCPBridge_log(@"[EffectDrag] Timeline classes not available yet; waiting to install swizzles");
+                SpliceKit_log(@"[EffectDrag] Timeline classes not available yet; waiting to install swizzles");
             }
-            FCPBridge_scheduleEffectDragInstallRetry();
+            SpliceKit_scheduleEffectDragInstallRetry();
             return;
         }
 
@@ -7712,8 +7712,8 @@ void FCPBridge_installEffectDragSwizzlesNow(void) {
         Method valMethod = class_getInstanceMethod(tlmClass, valSel);
         if (!sOrigValidateEffectsDrop && valMethod) {
             sOrigValidateEffectsDrop = method_setImplementation(
-                valMethod, (IMP)FCPBridge_swizzled_validateEffectsDrop);
-            FCPBridge_log(@"[EffectDrag] Swizzled -[%@ _validateEffectsDrop:onItem:atIndex:]",
+                valMethod, (IMP)SpliceKit_swizzled_validateEffectsDrop);
+            SpliceKit_log(@"[EffectDrag] Swizzled -[%@ _validateEffectsDrop:onItem:atIndex:]",
                           NSStringFromClass(tlmClass));
         }
 
@@ -7721,8 +7721,8 @@ void FCPBridge_installEffectDragSwizzlesNow(void) {
         Method perfMethod = class_getInstanceMethod(tlkClass, perfSel);
         if (!sOrigTLKPerformDragOp && perfMethod) {
             sOrigTLKPerformDragOp = method_setImplementation(
-                perfMethod, (IMP)FCPBridge_swizzled_TLKPerformDragOp);
-            FCPBridge_log(@"[EffectDrag] Swizzled -[%@ performDragOperation:]",
+                perfMethod, (IMP)SpliceKit_swizzled_TLKPerformDragOp);
+            SpliceKit_log(@"[EffectDrag] Swizzled -[%@ performDragOperation:]",
                           NSStringFromClass(tlkClass));
         }
 
@@ -7731,16 +7731,16 @@ void FCPBridge_installEffectDragSwizzlesNow(void) {
         Method keyWindowActiveModuleMethod = class_getInstanceMethod(appClass, keyWindowActiveModuleSel);
         if (!sOrigKeyWindowActiveModule && keyWindowActiveModuleMethod) {
             sOrigKeyWindowActiveModule = method_setImplementation(
-                keyWindowActiveModuleMethod, (IMP)FCPBridge_swizzled_keyWindowActiveModule);
-            FCPBridge_log(@"[EffectDrag] Swizzled -[NSApplication keyWindowActiveModule]");
+                keyWindowActiveModuleMethod, (IMP)SpliceKit_swizzled_keyWindowActiveModule);
+            SpliceKit_log(@"[EffectDrag] Swizzled -[NSApplication keyWindowActiveModule]");
         }
 
         if (!sOrigValidateEffectsDrop || !sOrigTLKPerformDragOp || !sOrigKeyWindowActiveModule) {
-            FCPBridge_log(@"[EffectDrag] Waiting for swizzles: validate=%@ perform=%@ keyWindowActiveModule=%@",
+            SpliceKit_log(@"[EffectDrag] Waiting for swizzles: validate=%@ perform=%@ keyWindowActiveModule=%@",
                           sOrigValidateEffectsDrop ? @"ok" : @"missing",
                           sOrigTLKPerformDragOp ? @"ok" : @"missing",
                           sOrigKeyWindowActiveModule ? @"ok" : @"missing");
-            FCPBridge_scheduleEffectDragInstallRetry();
+            SpliceKit_scheduleEffectDragInstallRetry();
             return;
         }
 
@@ -7749,14 +7749,14 @@ void FCPBridge_installEffectDragSwizzlesNow(void) {
     });
 }
 
-void FCPBridge_installEffectDragAsAdjustmentClip(void) {
-    if (!FCPBridge_isEffectDragAsAdjustmentClipEnabled()) {
-        FCPBridge_log(@"[EffectDrag] Install skipped because option is disabled");
+void SpliceKit_installEffectDragAsAdjustmentClip(void) {
+    if (!SpliceKit_isEffectDragAsAdjustmentClipEnabled()) {
+        SpliceKit_log(@"[EffectDrag] Install skipped because option is disabled");
         return;
     }
-    FCPBridge_log(@"[EffectDrag] Scheduling install");
-    FCPBridge_executeOnMainThreadAsync(^{
-        FCPBridge_installEffectDragSwizzlesNow();
+    SpliceKit_log(@"[EffectDrag] Scheduling install");
+    SpliceKit_executeOnMainThreadAsync(^{
+        SpliceKit_installEffectDragSwizzlesNow();
     });
 }
 
@@ -7768,7 +7768,7 @@ void FCPBridge_installEffectDragAsAdjustmentClip(void) {
 static IMP sOrigEffectLibraryItemViewMenu = NULL;
 static BOOL sEffectFavoritesSwizzleInstalled = NO;
 
-static id FCPBridge_swizzled_effectLibraryItemViewMenu(id self, SEL _cmd) {
+static id SpliceKit_swizzled_effectLibraryItemViewMenu(id self, SEL _cmd) {
     // Call original
     id menu = ((id (*)(id, SEL))sOrigEffectLibraryItemViewMenu)(self, _cmd);
 
@@ -7827,16 +7827,16 @@ static id FCPBridge_swizzled_effectLibraryItemViewMenu(id self, SEL _cmd) {
             [menu addItemWithTitle:title action:action keyEquivalent:@""];
         }
     } @catch (NSException *e) {
-        FCPBridge_log(@"[Favorites] Exception in menu swizzle: %@", e.reason);
+        SpliceKit_log(@"[Favorites] Exception in menu swizzle: %@", e.reason);
     }
 
     return menu;
 }
 
-void FCPBridge_installEffectFavoritesSwizzle(void) {
+void SpliceKit_installEffectFavoritesSwizzle(void) {
     if (sEffectFavoritesSwizzleInstalled) return;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         if (sEffectFavoritesSwizzleInstalled) return;
 
         // Try multiple class name variants — FCP may use different names across versions
@@ -7861,7 +7861,7 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
                 for (unsigned int i = 0; i < classCount; i++) {
                     const char *name = class_getName(allClasses[i]);
                     if (name && strstr(name, "EffectLibraryItemView")) {
-                        FCPBridge_log(@"[Favorites] Found candidate class: %s", name);
+                        SpliceKit_log(@"[Favorites] Found candidate class: %s", name);
                         cls = allClasses[i];
                         break;
                     }
@@ -7875,14 +7875,14 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
             if (retryCount < 15) {
                 retryCount++;
                 if (retryCount <= 2) {
-                    FCPBridge_log(@"[Favorites] EffectLibraryItemView not found, retrying... (%d)", retryCount);
+                    SpliceKit_log(@"[Favorites] EffectLibraryItemView not found, retrying... (%d)", retryCount);
                 }
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
                     dispatch_get_main_queue(), ^{
-                        FCPBridge_installEffectFavoritesSwizzle();
+                        SpliceKit_installEffectFavoritesSwizzle();
                     });
             } else {
-                FCPBridge_log(@"[Favorites] EffectLibraryItemView never loaded after %d attempts", retryCount);
+                SpliceKit_log(@"[Favorites] EffectLibraryItemView never loaded after %d attempts", retryCount);
             }
             return;
         }
@@ -7890,14 +7890,14 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
         SEL menuSel = @selector(menu);
         Method menuMethod = class_getInstanceMethod(cls, menuSel);
         if (!menuMethod) {
-            FCPBridge_log(@"[Favorites] -[%s menu] not found", class_getName(cls));
+            SpliceKit_log(@"[Favorites] -[%s menu] not found", class_getName(cls));
             return;
         }
 
         sOrigEffectLibraryItemViewMenu = method_setImplementation(
-            menuMethod, (IMP)FCPBridge_swizzled_effectLibraryItemViewMenu);
+            menuMethod, (IMP)SpliceKit_swizzled_effectLibraryItemViewMenu);
         sEffectFavoritesSwizzleInstalled = YES;
-        FCPBridge_log(@"[Favorites] Swizzled -[%s menu] for favorites context menu", class_getName(cls));
+        SpliceKit_log(@"[Favorites] Swizzled -[%s menu] for favorites context menu", class_getName(cls));
 
         // Swizzle add/remove favorite methods to refresh the view after changes
         NSArray *favSelNames = @[
@@ -7966,19 +7966,19 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
                                 v = [v superview];
                             }
                         } @catch (NSException *e) {
-                            FCPBridge_log(@"[Favorites] Refresh exception: %@", e.reason);
+                            SpliceKit_log(@"[Favorites] Refresh exception: %@", e.reason);
                         }
                     });
                 }));
         }
-        FCPBridge_log(@"[Favorites] Swizzled add/remove favorite methods for auto-refresh");
+        SpliceKit_log(@"[Favorites] Swizzled add/remove favorite methods for auto-refresh");
 
         // Also swizzle masterSubitems to inject "Favorites" category in sidebar
         Class folderClass = objc_getClass("FFBKEffectLibraryFolder");
-        if (!folderClass) folderClass = FCPBridge_findLoadedClassNamed("FFBKEffectLibraryFolder");
+        if (!folderClass) folderClass = SpliceKit_findLoadedClassNamed("FFBKEffectLibraryFolder");
         if (folderClass) {
             // Create a runtime subclass for the Favorites folder
-            Class favFolderClass = objc_allocateClassPair(folderClass, "FCPBridgeFavoritesFolder", 0);
+            Class favFolderClass = objc_allocateClassPair(folderClass, "SpliceKitFavoritesFolder", 0);
             if (favFolderClass) {
                 // Override -items to return favorited effects
                 IMP itemsImp = imp_implementationWithBlock(^id(id self_) {
@@ -7986,7 +7986,7 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
                         Class ffEffect = NSClassFromString(@"FFEffect");
                         Class itemClass = NSClassFromString(@"FFBKEffectLibraryItem");
                         if (!ffEffect || !itemClass) {
-                            FCPBridge_log(@"[Favorites] items: missing classes");
+                            SpliceKit_log(@"[Favorites] items: missing classes");
                             return @[];
                         }
 
@@ -8013,7 +8013,7 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
                         }
                         return items;
                     } @catch (NSException *e) {
-                        FCPBridge_log(@"[Favorites] Exception in favorites items: %@", e.reason);
+                        SpliceKit_log(@"[Favorites] Exception in favorites items: %@", e.reason);
                         return @[];
                     }
                 });
@@ -8049,7 +8049,7 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
                     noSubImp, "B@:");
 
                 objc_registerClassPair(favFolderClass);
-                FCPBridge_log(@"[Favorites] Created FCPBridgeFavoritesFolder runtime class");
+                SpliceKit_log(@"[Favorites] Created SpliceKitFavoritesFolder runtime class");
             }
 
             // Swizzle masterSubitems to inject favorites folder at position 0
@@ -8086,7 +8086,7 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
                             }
 
                             if (matchCount > 0) {
-                                Class favClass = objc_getClass("FCPBridgeFavoritesFolder");
+                                Class favClass = objc_getClass("SpliceKitFavoritesFolder");
                                 if (favClass) {
                                     id favFolder = ((id (*)(id, SEL))objc_msgSend)((id)favClass, @selector(alloc));
                                     favFolder = ((id (*)(id, SEL, id, id, BOOL, BOOL))objc_msgSend)(
@@ -8099,12 +8099,12 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
                                 }
                             }
                         } @catch (NSException *e) {
-                            FCPBridge_log(@"[Favorites] Exception injecting favorites folder: %@", e.reason);
+                            SpliceKit_log(@"[Favorites] Exception injecting favorites folder: %@", e.reason);
                         }
 
                         return result;
                     }));
-                FCPBridge_log(@"[Favorites] Swizzled -[FFBKEffectLibraryFolder masterSubitems] for sidebar");
+                SpliceKit_log(@"[Favorites] Swizzled -[FFBKEffectLibraryFolder masterSubitems] for sidebar");
             }
         }
     });
@@ -8118,27 +8118,27 @@ void FCPBridge_installEffectFavoritesSwizzle(void) {
 // on the newly-added clips. The result: clips land with audio present but disabled
 // in the inspector, so users can re-enable it later.
 
-static NSString * const kFCPBridgeVideoOnlyKeepsAudioDisabled = @"FCPBridgeVideoOnlyKeepsAudioDisabled";
+static NSString * const kSpliceKitVideoOnlyKeepsAudioDisabled = @"SpliceKitVideoOnlyKeepsAudioDisabled";
 static IMP sOrigInsertVideo = NULL;
 static IMP sOrigAppendVideo = NULL;
 static IMP sOrigOverwriteVideo = NULL;
 static IMP sOrigAnchorVideo = NULL;
 static BOOL sVideoOnlyKeepsAudioInstalled = NO;
 
-BOOL FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled(void) {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:kFCPBridgeVideoOnlyKeepsAudioDisabled];
+BOOL SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:kSpliceKitVideoOnlyKeepsAudioDisabled];
 }
 
-void FCPBridge_setVideoOnlyKeepsAudioDisabledEnabled(BOOL enabled) {
-    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kFCPBridgeVideoOnlyKeepsAudioDisabled];
+void SpliceKit_setVideoOnlyKeepsAudioDisabledEnabled(BOOL enabled) {
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kSpliceKitVideoOnlyKeepsAudioDisabled];
     if (enabled) {
-        FCPBridge_installVideoOnlyKeepsAudioDisabled();
+        SpliceKit_installVideoOnlyKeepsAudioDisabled();
     }
-    FCPBridge_log(@"[VideoOnlyKeepsAudio] %@", enabled ? @"Enabled" : @"Disabled");
+    SpliceKit_log(@"[VideoOnlyKeepsAudio] %@", enabled ? @"Enabled" : @"Disabled");
 }
 
 // Get selected items from the timeline module (snapshot for before/after comparison)
-static NSArray *FCPBridge_videoOnlyGetSelectedItems(id timelineModule) {
+static NSArray *SpliceKit_videoOnlyGetSelectedItems(id timelineModule) {
     if (!timelineModule) return @[];
     SEL sel = NSSelectorFromString(@"selectedItems");
     if (![timelineModule respondsToSelector:sel]) return @[];
@@ -8147,7 +8147,7 @@ static NSArray *FCPBridge_videoOnlyGetSelectedItems(id timelineModule) {
 }
 
 // Build a set of pointer values for fast identity comparison
-static NSSet *FCPBridge_videoOnlyPointerSet(NSArray *items) {
+static NSSet *SpliceKit_videoOnlyPointerSet(NSArray *items) {
     NSMutableSet *set = [NSMutableSet setWithCapacity:items.count];
     for (id item in items) {
         [set addObject:[NSValue valueWithNonretainedObject:item]];
@@ -8156,13 +8156,13 @@ static NSSet *FCPBridge_videoOnlyPointerSet(NSArray *items) {
 }
 
 // Disable audio component sources on clips that are in selectedAfter but not in selectedBefore
-static void FCPBridge_videoOnlyDisableNewClipAudio(id timelineModule, NSArray *selectedBefore) {
+static void SpliceKit_videoOnlyDisableNewClipAudio(id timelineModule, NSArray *selectedBefore) {
     if (!timelineModule) return;
 
-    NSArray *selectedAfter = FCPBridge_videoOnlyGetSelectedItems(timelineModule);
+    NSArray *selectedAfter = SpliceKit_videoOnlyGetSelectedItems(timelineModule);
     if (!selectedAfter.count) return;
 
-    NSSet *beforeSet = FCPBridge_videoOnlyPointerSet(selectedBefore);
+    NSSet *beforeSet = SpliceKit_videoOnlyPointerSet(selectedBefore);
 
     // Get the sequence for undo grouping
     id sequence = nil;
@@ -8218,7 +8218,7 @@ static void FCPBridge_videoOnlyDisableNewClipAudio(id timelineModule, NSArray *s
     }
 
     if (disabledCount > 0) {
-        FCPBridge_log(@"[VideoOnlyKeepsAudio] Disabled %ld audio component sources on new clips",
+        SpliceKit_log(@"[VideoOnlyKeepsAudio] Disabled %ld audio component sources on new clips",
                       (long)disabledCount);
     }
 }
@@ -8227,95 +8227,95 @@ static void FCPBridge_videoOnlyDisableNewClipAudio(id timelineModule, NSArray *s
 // Each intercepts the video-only variant, calls the "both" variant instead,
 // then disables audio on newly-added clips.
 
-static void FCPBridge_swizzled_insertWithSelectedMediaVideo(id self, SEL _cmd, id sender) {
-    if (!FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled()) {
+static void SpliceKit_swizzled_insertWithSelectedMediaVideo(id self, SEL _cmd, id sender) {
+    if (!SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled()) {
         ((void (*)(id, SEL, id))sOrigInsertVideo)(self, _cmd, sender);
         return;
     }
-    id timeline = FCPBridge_getActiveTimelineModule();
-    NSArray *before = FCPBridge_videoOnlyGetSelectedItems(timeline);
+    id timeline = SpliceKit_getActiveTimelineModule();
+    NSArray *before = SpliceKit_videoOnlyGetSelectedItems(timeline);
     ((void (*)(id, SEL, id))objc_msgSend)(self, NSSelectorFromString(@"insertWithSelectedMedia:"), sender);
-    FCPBridge_videoOnlyDisableNewClipAudio(timeline, before);
+    SpliceKit_videoOnlyDisableNewClipAudio(timeline, before);
 }
 
-static void FCPBridge_swizzled_appendWithSelectedMediaVideo(id self, SEL _cmd, id sender) {
-    if (!FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled()) {
+static void SpliceKit_swizzled_appendWithSelectedMediaVideo(id self, SEL _cmd, id sender) {
+    if (!SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled()) {
         ((void (*)(id, SEL, id))sOrigAppendVideo)(self, _cmd, sender);
         return;
     }
-    id timeline = FCPBridge_getActiveTimelineModule();
-    NSArray *before = FCPBridge_videoOnlyGetSelectedItems(timeline);
+    id timeline = SpliceKit_getActiveTimelineModule();
+    NSArray *before = SpliceKit_videoOnlyGetSelectedItems(timeline);
     ((void (*)(id, SEL, id))objc_msgSend)(self, NSSelectorFromString(@"appendWithSelectedMedia:"), sender);
-    FCPBridge_videoOnlyDisableNewClipAudio(timeline, before);
+    SpliceKit_videoOnlyDisableNewClipAudio(timeline, before);
 }
 
-static void FCPBridge_swizzled_overwriteWithSelectedMediaVideo(id self, SEL _cmd, id sender) {
-    if (!FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled()) {
+static void SpliceKit_swizzled_overwriteWithSelectedMediaVideo(id self, SEL _cmd, id sender) {
+    if (!SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled()) {
         ((void (*)(id, SEL, id))sOrigOverwriteVideo)(self, _cmd, sender);
         return;
     }
-    id timeline = FCPBridge_getActiveTimelineModule();
-    NSArray *before = FCPBridge_videoOnlyGetSelectedItems(timeline);
+    id timeline = SpliceKit_getActiveTimelineModule();
+    NSArray *before = SpliceKit_videoOnlyGetSelectedItems(timeline);
     ((void (*)(id, SEL, id))objc_msgSend)(self, NSSelectorFromString(@"overwriteWithSelectedMedia:"), sender);
-    FCPBridge_videoOnlyDisableNewClipAudio(timeline, before);
+    SpliceKit_videoOnlyDisableNewClipAudio(timeline, before);
 }
 
-static void FCPBridge_swizzled_anchorWithSelectedMediaVideo(id self, SEL _cmd, id sender) {
-    if (!FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled()) {
+static void SpliceKit_swizzled_anchorWithSelectedMediaVideo(id self, SEL _cmd, id sender) {
+    if (!SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled()) {
         ((void (*)(id, SEL, id))sOrigAnchorVideo)(self, _cmd, sender);
         return;
     }
-    id timeline = FCPBridge_getActiveTimelineModule();
-    NSArray *before = FCPBridge_videoOnlyGetSelectedItems(timeline);
+    id timeline = SpliceKit_getActiveTimelineModule();
+    NSArray *before = SpliceKit_videoOnlyGetSelectedItems(timeline);
     ((void (*)(id, SEL, id))objc_msgSend)(self, NSSelectorFromString(@"anchorWithSelectedMedia:"), sender);
-    FCPBridge_videoOnlyDisableNewClipAudio(timeline, before);
+    SpliceKit_videoOnlyDisableNewClipAudio(timeline, before);
 }
 
-void FCPBridge_installVideoOnlyKeepsAudioDisabled(void) {
+void SpliceKit_installVideoOnlyKeepsAudioDisabled(void) {
     if (sVideoOnlyKeepsAudioInstalled) return;
-    if (!FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled()) return;
+    if (!SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled()) return;
 
     Class cls = objc_getClass("FFEditActionMgr");
     if (!cls) {
-        FCPBridge_log(@"[VideoOnlyKeepsAudio] FFEditActionMgr class not found");
+        SpliceKit_log(@"[VideoOnlyKeepsAudio] FFEditActionMgr class not found");
         return;
     }
 
     struct { SEL sel; IMP *origPtr; IMP newImp; } swizzles[] = {
         { NSSelectorFromString(@"insertWithSelectedMediaVideo:"),
           &sOrigInsertVideo,
-          (IMP)FCPBridge_swizzled_insertWithSelectedMediaVideo },
+          (IMP)SpliceKit_swizzled_insertWithSelectedMediaVideo },
         { NSSelectorFromString(@"appendWithSelectedMediaVideo:"),
           &sOrigAppendVideo,
-          (IMP)FCPBridge_swizzled_appendWithSelectedMediaVideo },
+          (IMP)SpliceKit_swizzled_appendWithSelectedMediaVideo },
         { NSSelectorFromString(@"overwriteWithSelectedMediaVideo:"),
           &sOrigOverwriteVideo,
-          (IMP)FCPBridge_swizzled_overwriteWithSelectedMediaVideo },
+          (IMP)SpliceKit_swizzled_overwriteWithSelectedMediaVideo },
         { NSSelectorFromString(@"anchorWithSelectedMediaVideo:"),
           &sOrigAnchorVideo,
-          (IMP)FCPBridge_swizzled_anchorWithSelectedMediaVideo },
+          (IMP)SpliceKit_swizzled_anchorWithSelectedMediaVideo },
     };
 
     for (int i = 0; i < 4; i++) {
         Method m = class_getInstanceMethod(cls, swizzles[i].sel);
         if (m && !*swizzles[i].origPtr) {
             *swizzles[i].origPtr = method_setImplementation(m, swizzles[i].newImp);
-            FCPBridge_log(@"[VideoOnlyKeepsAudio] Swizzled -[FFEditActionMgr %@]",
+            SpliceKit_log(@"[VideoOnlyKeepsAudio] Swizzled -[FFEditActionMgr %@]",
                           NSStringFromSelector(swizzles[i].sel));
         }
     }
 
     sVideoOnlyKeepsAudioInstalled = YES;
-    FCPBridge_log(@"[VideoOnlyKeepsAudio] Swizzle installed");
+    SpliceKit_log(@"[VideoOnlyKeepsAudio] Swizzle installed");
 }
 
 #pragma mark - Transition Handlers
 
-NSDictionary *FCPBridge_handleTransitionsList(NSDictionary *params) {
+NSDictionary *SpliceKit_handleTransitionsList(NSDictionary *params) {
     NSString *filter = params[@"filter"];
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             Class ffEffect = objc_getClass("FFEffect");
             if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
@@ -8388,7 +8388,7 @@ NSDictionary *FCPBridge_handleTransitionsList(NSDictionary *params) {
     return result ?: @{@"error": @"Failed to list transitions"};
 }
 
-NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
+NSDictionary *SpliceKit_handleTransitionsApply(NSDictionary *params) {
     NSString *effectID = params[@"effectID"];
     NSString *name = params[@"name"];
     BOOL freezeExtend = params[@"freezeExtend"] ? [params[@"freezeExtend"] boolValue] : YES;
@@ -8400,7 +8400,7 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
     __block NSDictionary *result = nil;
     __block NSString *resolvedID = effectID;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             Class ffEffect = objc_getClass("FFEffect");
             if (!ffEffect) { result = @{@"error": @"FFEffect class not found"}; return; }
@@ -8454,7 +8454,7 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
                                                       forKey:@"FFDefaultVideoTransition"];
 
             // Call addTransition: on the timeline module
-            id timelineModule = FCPBridge_getActiveTimelineModule();
+            id timelineModule = SpliceKit_getActiveTimelineModule();
             if (!timelineModule) {
                 // Restore default
                 if (originalDefault) {
@@ -8465,7 +8465,7 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
                 return;
             }
 
-            NSUInteger transitionsBefore = FCPBridge_transitionCount(timelineModule);
+            NSUInteger transitionsBefore = SpliceKit_transitionCount(timelineModule);
 
             // When freezeExtend is enabled, detect whether the clips at the edit
             // point are shorter than the default transition duration.  If so,
@@ -8486,10 +8486,10 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
                 // with frozen edge frames. We then trim the clip back to its
                 // original duration — the hold frames become hidden handles that
                 // FCP uses for the transition overlap.
-                double frame = FCPBridge_transitionFrameDurationSeconds(timelineModule);
-                double defaultDur = FCPBridge_defaultTransitionDurationSeconds(timelineModule);
+                double frame = SpliceKit_transitionFrameDurationSeconds(timelineModule);
+                double defaultDur = SpliceKit_defaultTransitionDurationSeconds(timelineModule);
                 double halfTransition = defaultDur / 2.0;
-                double editPointTime = FCPBridge_transitionCurrentTimeSeconds(timelineModule);
+                double editPointTime = SpliceKit_transitionCurrentTimeSeconds(timelineModule);
 
                 // Scan adjacent clips via sequence->primaryObject->containedItems
                 id sequence = [timelineModule respondsToSelector:@selector(sequence)]
@@ -8517,8 +8517,8 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
                     for (id item in items) {
                         if (transCls && [item isKindOfClass:transCls]) continue;
                         @try {
-                            FCPBridge_CMTimeRange range =
-                                ((FCPBridge_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                            SpliceKit_CMTimeRange range =
+                                ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
                                     primaryObj, erSel, item);
                             if (range.duration.timescale <= 0 || range.duration.value <= 0) continue;
                             double s = (double)range.start.value / (double)range.start.timescale;
@@ -8544,16 +8544,16 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
 
                     // Position playhead inside the short clip
                     double seekTime = info.start + (info.dur / 2.0);
-                    FCPBridge_transitionSeekToSeconds(timelineModule, seekTime);
+                    SpliceKit_transitionSeekToSeconds(timelineModule, seekTime);
 
                     // Select the clip at the playhead
-                    FCPBridge_sendTimelineSimpleAction(timelineModule, @"selectClipAtPlayhead:");
+                    SpliceKit_sendTimelineSimpleAction(timelineModule, @"selectClipAtPlayhead:");
                     [[NSRunLoop currentRunLoop] runUntilDate:
                         [NSDate dateWithTimeIntervalSinceNow:0.1]];
 
                     // Apply retimeHold — adds hold-frame segment extending the
                     // clip's available media with frozen edge frames
-                    FCPBridge_log(@"[FreezeExtend] Applying retimeHold to %s clip "
+                    SpliceKit_log(@"[FreezeExtend] Applying retimeHold to %s clip "
                         @"(dur=%.4f < halfTransition=%.4f) at %.4fs",
                         side == 0 ? "right" : "left", info.dur, halfTransition, seekTime);
                     ((void (*)(id, SEL, id))objc_msgSend)(timelineModule, holdSel, nil);
@@ -8563,25 +8563,25 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
                     // Trim the clip back to its original end time so the hold
                     // frames become hidden media handles. Select the clip, seek
                     // to its original end, and trim.
-                    FCPBridge_sendTimelineSimpleAction(timelineModule, @"selectClipAtPlayhead:");
-                    FCPBridge_transitionSeekToSeconds(timelineModule, info.end);
-                    FCPBridge_sendTimelineSimpleAction(timelineModule, @"trimEnd:");
+                    SpliceKit_sendTimelineSimpleAction(timelineModule, @"selectClipAtPlayhead:");
+                    SpliceKit_transitionSeekToSeconds(timelineModule, info.end);
+                    SpliceKit_sendTimelineSimpleAction(timelineModule, @"trimEnd:");
                     [[NSRunLoop currentRunLoop] runUntilDate:
                         [NSDate dateWithTimeIntervalSinceNow:0.2]];
 
-                    FCPBridge_log(@"[FreezeExtend] Hold applied and trimmed back to %.4fs", info.end);
+                    SpliceKit_log(@"[FreezeExtend] Hold applied and trimmed back to %.4fs", info.end);
                     didExtend = YES;
                 }
 
                 if (didExtend) {
                     // Deselect and navigate back to the edit point
-                    FCPBridge_sendTimelineSimpleAction(timelineModule, @"deselectAll:");
-                    FCPBridge_transitionSeekToSeconds(timelineModule, MAX(0, editPointTime - frame));
-                    FCPBridge_sendTimelineSimpleAction(timelineModule, @"nextEdit:");
+                    SpliceKit_sendTimelineSimpleAction(timelineModule, @"deselectAll:");
+                    SpliceKit_transitionSeekToSeconds(timelineModule, MAX(0, editPointTime - frame));
+                    SpliceKit_sendTimelineSimpleAction(timelineModule, @"nextEdit:");
                     [[NSRunLoop currentRunLoop] runUntilDate:
                         [NSDate dateWithTimeIntervalSinceNow:0.2]];
-                    FCPBridge_log(@"[FreezeExtend] Repositioned at edit point");
-                    transitionsBefore = FCPBridge_transitionCount(timelineModule);
+                    SpliceKit_log(@"[FreezeExtend] Repositioned at edit point");
+                    transitionsBefore = SpliceKit_transitionCount(timelineModule);
                 }
 
                 // Fallback auto-accept in case FCP still shows the dialog
@@ -8596,11 +8596,11 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
                 [[NSApplication sharedApplication] sendAction:addSel to:nil from:nil];
             }
 
-            BOOL inserted = FCPBridge_waitForTransitionInsertion(
+            BOOL inserted = SpliceKit_waitForTransitionInsertion(
                 timelineModule, transitionsBefore, freezeExtend ? 2.0 : 0.5);
             BOOL freezeExtended = sFreezeExtendDidApply;
             sFreezeExtendDidApply = NO;
-            FCPBridge_clearFreezeExtendTransientState();
+            SpliceKit_clearFreezeExtendTransientState();
 
             // Restore the original default transition
             if (originalDefault) {
@@ -8625,7 +8625,7 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
             };
         } @catch (NSException *e) {
             sFreezeExtendDidApply = NO;
-            FCPBridge_clearFreezeExtendTransientState();
+            SpliceKit_clearFreezeExtendTransientState();
             result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
         }
     });
@@ -8635,27 +8635,27 @@ NSDictionary *FCPBridge_handleTransitionsApply(NSDictionary *params) {
 
 #pragma mark - Command Palette Handlers
 
-static NSDictionary *FCPBridge_handleCommandShow(NSDictionary *params) {
-    FCPBridge_executeOnMainThread(^{
-        [[FCPCommandPalette sharedPalette] showPalette];
+static NSDictionary *SpliceKit_handleCommandShow(NSDictionary *params) {
+    SpliceKit_executeOnMainThread(^{
+        [[SpliceKitCommandPalette sharedPalette] showPalette];
     });
     return @{@"status": @"ok"};
 }
 
-static NSDictionary *FCPBridge_handleCommandHide(NSDictionary *params) {
-    FCPBridge_executeOnMainThread(^{
-        [[FCPCommandPalette sharedPalette] hidePalette];
+static NSDictionary *SpliceKit_handleCommandHide(NSDictionary *params) {
+    SpliceKit_executeOnMainThread(^{
+        [[SpliceKitCommandPalette sharedPalette] hidePalette];
     });
     return @{@"status": @"ok"};
 }
 
-static NSDictionary *FCPBridge_handleCommandSearch(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleCommandSearch(NSDictionary *params) {
     NSString *query = params[@"query"] ?: @"";
-    NSArray<FCPCommand *> *results = [[FCPCommandPalette sharedPalette] searchCommands:query];
+    NSArray<SpliceKitCommand *> *results = [[SpliceKitCommandPalette sharedPalette] searchCommands:query];
     NSMutableArray *items = [NSMutableArray array];
     NSUInteger limit = [params[@"limit"] unsignedIntegerValue] ?: 20;
     for (NSUInteger i = 0; i < MIN(results.count, limit); i++) {
-        FCPCommand *cmd = results[i];
+        SpliceKitCommand *cmd = results[i];
         [items addObject:@{
             @"name": cmd.name ?: @"",
             @"action": cmd.action ?: @"",
@@ -8669,21 +8669,21 @@ static NSDictionary *FCPBridge_handleCommandSearch(NSDictionary *params) {
     return @{@"commands": items, @"total": @(results.count)};
 }
 
-static NSDictionary *FCPBridge_handleCommandExecute(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleCommandExecute(NSDictionary *params) {
     NSString *action = params[@"action"];
     NSString *type = params[@"type"] ?: @"timeline";
     if (!action) return @{@"error": @"action parameter required"};
-    return [[FCPCommandPalette sharedPalette] executeCommand:action type:type];
+    return [[SpliceKitCommandPalette sharedPalette] executeCommand:action type:type];
 }
 
-static NSDictionary *FCPBridge_handleCommandAI(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleCommandAI(NSDictionary *params) {
     NSString *query = params[@"query"];
     if (!query) return @{@"error": @"query parameter required"};
 
     __block NSDictionary *result = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 
-    [[FCPCommandPalette sharedPalette] executeNaturalLanguage:query
+    [[SpliceKitCommandPalette sharedPalette] executeNaturalLanguage:query
         completion:^(NSArray<NSDictionary *> *actions, NSString *error) {
             if (error) {
                 result = @{@"error": error};
@@ -8700,10 +8700,10 @@ static NSDictionary *FCPBridge_handleCommandAI(NSDictionary *params) {
 #pragma mark - Browser Clip Handlers
 
 // List clips available in the event browser
-static NSDictionary *FCPBridge_handleBrowserListClips(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleBrowserListClips(NSDictionary *params) {
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // Get active library -> events -> clips
             id libs = ((id (*)(id, SEL))objc_msgSend)(
@@ -8760,7 +8760,7 @@ static NSDictionary *FCPBridge_handleBrowserListClips(NSDictionary *params) {
                 }
 
                 NSUInteger clipCount = [clips isKindOfClass:[NSArray class]] ? [(NSArray *)clips count] : 0;
-                FCPBridge_log(@"[Browser] Event '%@' class=%@ clips=%@ count=%lu",
+                SpliceKit_log(@"[Browser] Event '%@' class=%@ clips=%@ count=%lu",
                     eventName, NSStringFromClass([event class]),
                     clips ? NSStringFromClass([clips class]) : @"nil",
                     (unsigned long)clipCount);
@@ -8778,11 +8778,11 @@ static NSDictionary *FCPBridge_handleBrowserListClips(NSDictionary *params) {
                         info[@"name"] = name ?: @"";
                     }
                     if ([clip respondsToSelector:@selector(duration)]) {
-                        FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(clip, @selector(duration));
-                        info[@"duration"] = FCPBridge_serializeCMTime(d);
+                        SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(clip, @selector(duration));
+                        info[@"duration"] = SpliceKit_serializeCMTime(d);
                     }
 
-                    NSString *handle = FCPBridge_storeHandle(clip);
+                    NSString *handle = SpliceKit_storeHandle(clip);
                     info[@"handle"] = handle;
                     [allClips addObject:info];
                 }
@@ -8797,20 +8797,20 @@ static NSDictionary *FCPBridge_handleBrowserListClips(NSDictionary *params) {
 }
 
 // Append a clip from the event browser to the timeline
-static NSDictionary *FCPBridge_handleBrowserAppendClip(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleBrowserAppendClip(NSDictionary *params) {
     NSString *handle = params[@"handle"];
     NSNumber *indexNum = params[@"index"];
     NSString *name = params[@"name"];
 
     __block NSDictionary *result = nil;
 
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id clip = nil;
 
             // Resolve clip by handle, index, or name
             if (handle) {
-                clip = FCPBridge_resolveHandle(handle);
+                clip = SpliceKit_resolveHandle(handle);
             }
 
             if (!clip && (indexNum || name)) {
@@ -8871,18 +8871,18 @@ static NSDictionary *FCPBridge_handleBrowserAppendClip(NSDictionary *params) {
             Class rangeObjClass = objc_getClass("FigTimeRangeAndObject");
             if (rangeObjClass && clip) {
                 // Get the clip's clipped range
-                FCPBridge_CMTimeRange clipRange = {0};
+                SpliceKit_CMTimeRange clipRange = {0};
                 if ([clip respondsToSelector:@selector(clippedRange)]) {
-                    clipRange = ((FCPBridge_CMTimeRange (*)(id, SEL))STRET_MSG)(clip, @selector(clippedRange));
+                    clipRange = ((SpliceKit_CMTimeRange (*)(id, SEL))STRET_MSG)(clip, @selector(clippedRange));
                 } else if ([clip respondsToSelector:@selector(duration)]) {
-                    FCPBridge_CMTime dur = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(clip, @selector(duration));
-                    clipRange.start = (FCPBridge_CMTime){0, dur.timescale, 1, 0};
+                    SpliceKit_CMTime dur = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(clip, @selector(duration));
+                    clipRange.start = (SpliceKit_CMTime){0, dur.timescale, 1, 0};
                     clipRange.duration = dur;
                 }
 
                 SEL rangeAndObjSel = NSSelectorFromString(@"rangeAndObjectWithRange:andObject:");
                 if ([(id)rangeObjClass respondsToSelector:rangeAndObjSel]) {
-                    id mediaRange = ((id (*)(id, SEL, FCPBridge_CMTimeRange, id))objc_msgSend)(
+                    id mediaRange = ((id (*)(id, SEL, SpliceKit_CMTimeRange, id))objc_msgSend)(
                         (id)rangeObjClass, rangeAndObjSel, clipRange, clip);
 
                     if (mediaRange) {
@@ -8941,14 +8941,14 @@ static NSDictionary *FCPBridge_handleBrowserAppendClip(NSDictionary *params) {
 
 #pragma mark - Menu Execute Handler
 
-static NSDictionary *FCPBridge_handleMenuExecute(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleMenuExecute(NSDictionary *params) {
     NSArray *menuPath = params[@"menuPath"];
     if (!menuPath || menuPath.count < 2) {
         return @{@"error": @"menuPath array required (e.g. [\"File\", \"New\", \"Project...\"])"};
     }
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id app = ((id (*)(id, SEL))objc_msgSend)(
                 objc_getClass("NSApplication"), @selector(sharedApplication));
@@ -9044,12 +9044,12 @@ static NSDictionary *FCPBridge_handleMenuExecute(NSDictionary *params) {
     return result ?: @{@"error": @"Menu execute failed"};
 }
 
-static NSDictionary *FCPBridge_handleMenuList(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleMenuList(NSDictionary *params) {
     NSString *menuName = params[@"menu"]; // optional: specific top-level menu
     NSNumber *depth = params[@"depth"] ?: @(2);
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id app = ((id (*)(id, SEL))objc_msgSend)(
                 objc_getClass("NSApplication"), @selector(sharedApplication));
@@ -9120,7 +9120,7 @@ static NSDictionary *FCPBridge_handleMenuList(NSDictionary *params) {
 #pragma mark - Effect Parameter Helpers
 
 // Get the selected clip's effect stack, creating it if needed
-static id FCPBridge_getSelectedClipEffectStack(id timeline, id *outClip) {
+static id SpliceKit_getSelectedClipEffectStack(id timeline, id *outClip) {
     if (!timeline) return nil;
 
     // Get selected items
@@ -9157,7 +9157,7 @@ static id FCPBridge_getSelectedClipEffectStack(id timeline, id *outClip) {
 }
 
 // Read a channel's value at a given time (seconds)
-static NSDictionary *FCPBridge_readChannel(id channel, double timeSeconds) {
+static NSDictionary *SpliceKit_readChannel(id channel, double timeSeconds) {
     if (!channel) return nil;
     NSMutableDictionary *info = [NSMutableDictionary dictionary];
     info[@"class"] = NSStringFromClass([channel class]);
@@ -9175,8 +9175,8 @@ static NSDictionary *FCPBridge_readChannel(id channel, double timeSeconds) {
     @try {
         SEL valSel = NSSelectorFromString(@"doubleValueAtTime:");
         if ([channel respondsToSelector:valSel]) {
-            FCPBridge_CMTime t = {(int64_t)(timeSeconds * 600), 600, 1, 0};
-            double val = ((double (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(channel, valSel, t);
+            SpliceKit_CMTime t = {(int64_t)(timeSeconds * 600), 600, 1, 0};
+            double val = ((double (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(channel, valSel, t);
             info[@"value"] = @(val);
         }
     } @catch (NSException *e) {}
@@ -9204,7 +9204,7 @@ static NSDictionary *FCPBridge_readChannel(id channel, double timeSeconds) {
 }
 
 // Get all channels from an effect recursively
-static void FCPBridge_collectChannels(id obj, NSMutableArray *channels, NSString *prefix, int depth) {
+static void SpliceKit_collectChannels(id obj, NSMutableArray *channels, NSString *prefix, int depth) {
     if (!obj || depth > 8) return;
 
     // If this is itself a channel with a double value, add it
@@ -9220,9 +9220,9 @@ static void FCPBridge_collectChannels(id obj, NSMutableArray *channels, NSString
 
         NSMutableDictionary *ch = [NSMutableDictionary dictionary];
         ch[@"name"] = name;
-        ch[@"handle"] = FCPBridge_storeHandle(obj);
+        ch[@"handle"] = SpliceKit_storeHandle(obj);
 
-        NSDictionary *vals = FCPBridge_readChannel(obj, 0);
+        NSDictionary *vals = SpliceKit_readChannel(obj, 0);
         if (vals[@"value"]) ch[@"value"] = vals[@"value"];
         if (vals[@"min"]) ch[@"min"] = vals[@"min"];
         if (vals[@"max"]) ch[@"max"] = vals[@"max"];
@@ -9237,7 +9237,7 @@ static void FCPBridge_collectChannels(id obj, NSMutableArray *channels, NSString
             id subs = ((id (*)(id, SEL))objc_msgSend)(obj, subSel);
             if ([subs isKindOfClass:[NSArray class]]) {
                 for (id sub in (NSArray *)subs) {
-                    FCPBridge_collectChannels(sub, channels, nil, depth + 1);
+                    SpliceKit_collectChannels(sub, channels, nil, depth + 1);
                 }
             }
         }
@@ -9247,31 +9247,31 @@ static void FCPBridge_collectChannels(id obj, NSMutableArray *channels, NSString
 #pragma mark - Inspector Handlers
 
 // Helper: read a double from a channel at time=0 (kCMTimeIndefinite for constant)
-static double FCPBridge_channelValue(id channel) {
+static double SpliceKit_channelValue(id channel) {
     if (!channel) return 0;
     @try {
         // Use kCMTimeIndefinite: {0, 0, 17, 0} for constant (non-keyframed) value
-        FCPBridge_CMTime t = {0, 0, 17, 0};
+        SpliceKit_CMTime t = {0, 0, 17, 0};
         SEL sel = NSSelectorFromString(@"curveDoubleValueAtTime:");
         if ([channel respondsToSelector:sel]) {
-            return ((double (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(channel, sel, t);
+            return ((double (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(channel, sel, t);
         }
         sel = NSSelectorFromString(@"doubleValueAtTime:");
         if ([channel respondsToSelector:sel]) {
-            return ((double (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(channel, sel, t);
+            return ((double (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(channel, sel, t);
         }
     } @catch (NSException *e) {}
     return 0;
 }
 
 // Helper: set a double on a channel
-static BOOL FCPBridge_setChannelValue(id channel, double value) {
+static BOOL SpliceKit_setChannelValue(id channel, double value) {
     if (!channel) return NO;
     @try {
-        FCPBridge_CMTime t = {0, 0, 17, 0}; // kCMTimeIndefinite
+        SpliceKit_CMTime t = {0, 0, 17, 0}; // kCMTimeIndefinite
         SEL sel = NSSelectorFromString(@"setCurveDoubleValue:atTime:options:");
         if ([channel respondsToSelector:sel]) {
-            ((void (*)(id, SEL, double, FCPBridge_CMTime, unsigned int))objc_msgSend)(
+            ((void (*)(id, SEL, double, SpliceKit_CMTime, unsigned int))objc_msgSend)(
                 channel, sel, value, t, 0);
             return YES;
         }
@@ -9280,7 +9280,7 @@ static BOOL FCPBridge_setChannelValue(id channel, double value) {
 }
 
 // Helper: get sub-channel by name (xChannel, yChannel, zChannel)
-static id FCPBridge_subChannel(id parentChannel, NSString *axis) {
+static id SpliceKit_subChannel(id parentChannel, NSString *axis) {
     if (!parentChannel) return nil;
     @try {
         NSString *selName = [NSString stringWithFormat:@"%@Channel", axis];
@@ -9292,17 +9292,17 @@ static id FCPBridge_subChannel(id parentChannel, NSString *axis) {
     return nil;
 }
 
-static NSDictionary *FCPBridge_handleInspectorGet(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleInspectorGet(NSDictionary *params) {
     NSString *property = params[@"property"]; // "all", "compositing", "transform", "audio", "crop", "info", "channels"
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) { result = @{@"error": @"No active timeline module"}; return; }
 
             id clip = nil;
-            id effectStack = FCPBridge_getSelectedClipEffectStack(timeline, &clip);
+            id effectStack = SpliceKit_getSelectedClipEffectStack(timeline, &clip);
             if (!clip) { result = @{@"error": @"No clips selected"}; return; }
 
             NSMutableDictionary *props = [NSMutableDictionary dictionary];
@@ -9324,7 +9324,7 @@ static NSDictionary *FCPBridge_handleInspectorGet(NSDictionary *params) {
                 return;
             }
 
-            NSString *esHandle = FCPBridge_storeHandle(effectStack);
+            NSString *esHandle = SpliceKit_storeHandle(effectStack);
             props[@"effectStackHandle"] = esHandle;
 
             // COMPOSITING (opacity, blend mode)
@@ -9338,10 +9338,10 @@ static NSDictionary *FCPBridge_handleInspectorGet(NSDictionary *params) {
                         id opChan = ((id (*)(id, SEL))objc_msgSend)(blendEffect, NSSelectorFromString(@"opacityChannel"));
                         id bmChan = ((id (*)(id, SEL))objc_msgSend)(blendEffect, NSSelectorFromString(@"blendModeChannel"));
                         if (opChan) {
-                            comp[@"opacity"] = @(FCPBridge_channelValue(opChan));
-                            comp[@"opacityHandle"] = FCPBridge_storeHandle(opChan);
+                            comp[@"opacity"] = @(SpliceKit_channelValue(opChan));
+                            comp[@"opacityHandle"] = SpliceKit_storeHandle(opChan);
                         }
-                        if (bmChan) comp[@"blendModeHandle"] = FCPBridge_storeHandle(bmChan);
+                        if (bmChan) comp[@"blendModeHandle"] = SpliceKit_storeHandle(bmChan);
                     } else {
                         comp[@"opacity"] = @(1.0); // default
                     }
@@ -9361,29 +9361,29 @@ static NSDictionary *FCPBridge_handleInspectorGet(NSDictionary *params) {
                         id posCh = nil;
                         @try { posCh = ((id (*)(id, SEL))objc_msgSend)(xfEffect, NSSelectorFromString(@"positionChannel3D")); } @catch(NSException *e) {}
                         if (posCh) {
-                            xform[@"positionX"] = @(FCPBridge_channelValue(FCPBridge_subChannel(posCh, @"x")));
-                            xform[@"positionY"] = @(FCPBridge_channelValue(FCPBridge_subChannel(posCh, @"y")));
-                            xform[@"positionZ"] = @(FCPBridge_channelValue(FCPBridge_subChannel(posCh, @"z")));
+                            xform[@"positionX"] = @(SpliceKit_channelValue(SpliceKit_subChannel(posCh, @"x")));
+                            xform[@"positionY"] = @(SpliceKit_channelValue(SpliceKit_subChannel(posCh, @"y")));
+                            xform[@"positionZ"] = @(SpliceKit_channelValue(SpliceKit_subChannel(posCh, @"z")));
                         }
                         // Scale
                         id scaCh = nil;
                         @try { scaCh = ((id (*)(id, SEL))objc_msgSend)(xfEffect, NSSelectorFromString(@"scaleChannel3D")); } @catch(NSException *e) {}
                         if (scaCh) {
-                            xform[@"scaleX"] = @(FCPBridge_channelValue(FCPBridge_subChannel(scaCh, @"x")));
-                            xform[@"scaleY"] = @(FCPBridge_channelValue(FCPBridge_subChannel(scaCh, @"y")));
+                            xform[@"scaleX"] = @(SpliceKit_channelValue(SpliceKit_subChannel(scaCh, @"x")));
+                            xform[@"scaleY"] = @(SpliceKit_channelValue(SpliceKit_subChannel(scaCh, @"y")));
                         }
                         // Rotation
                         id rotCh = nil;
                         @try { rotCh = ((id (*)(id, SEL))objc_msgSend)(xfEffect, NSSelectorFromString(@"rotationChannel3D")); } @catch(NSException *e) {}
                         if (rotCh) {
-                            xform[@"rotation"] = @(FCPBridge_channelValue(FCPBridge_subChannel(rotCh, @"z")));
+                            xform[@"rotation"] = @(SpliceKit_channelValue(SpliceKit_subChannel(rotCh, @"z")));
                         }
                         // Anchor
                         id ancCh = nil;
                         @try { ancCh = ((id (*)(id, SEL))objc_msgSend)(xfEffect, NSSelectorFromString(@"anchorChannel3D")); } @catch(NSException *e) {}
                         if (ancCh) {
-                            xform[@"anchorX"] = @(FCPBridge_channelValue(FCPBridge_subChannel(ancCh, @"x")));
-                            xform[@"anchorY"] = @(FCPBridge_channelValue(FCPBridge_subChannel(ancCh, @"y")));
+                            xform[@"anchorX"] = @(SpliceKit_channelValue(SpliceKit_subChannel(ancCh, @"x")));
+                            xform[@"anchorY"] = @(SpliceKit_channelValue(SpliceKit_subChannel(ancCh, @"y")));
                         }
                     } else {
                         xform[@"positionX"] = @(0); xform[@"positionY"] = @(0);
@@ -9402,8 +9402,8 @@ static NSDictionary *FCPBridge_handleInspectorGet(NSDictionary *params) {
                     id volChan = [effectStack respondsToSelector:volSel]
                         ? ((id (*)(id, SEL))objc_msgSend)(effectStack, volSel) : nil;
                     if (volChan) {
-                        audio[@"volume"] = @(FCPBridge_channelValue(volChan));
-                        audio[@"volumeHandle"] = FCPBridge_storeHandle(volChan);
+                        audio[@"volume"] = @(SpliceKit_channelValue(volChan));
+                        audio[@"volumeHandle"] = SpliceKit_storeHandle(volChan);
                     }
                 } @catch (NSException *e) { audio[@"error"] = e.reason; }
                 props[@"audio"] = audio;
@@ -9426,10 +9426,10 @@ static NSDictionary *FCPBridge_handleInspectorGet(NSDictionary *params) {
                             } @catch (NSException *e) {}
                             return nil;
                         };
-                        id lCh = getCh(@"left"); if (lCh) crop[@"left"] = @(FCPBridge_channelValue(lCh));
-                        id rCh = getCh(@"right"); if (rCh) crop[@"right"] = @(FCPBridge_channelValue(rCh));
-                        id tCh = getCh(@"top"); if (tCh) crop[@"top"] = @(FCPBridge_channelValue(tCh));
-                        id bCh = getCh(@"bottom"); if (bCh) crop[@"bottom"] = @(FCPBridge_channelValue(bCh));
+                        id lCh = getCh(@"left"); if (lCh) crop[@"left"] = @(SpliceKit_channelValue(lCh));
+                        id rCh = getCh(@"right"); if (rCh) crop[@"right"] = @(SpliceKit_channelValue(rCh));
+                        id tCh = getCh(@"top"); if (tCh) crop[@"top"] = @(SpliceKit_channelValue(tCh));
+                        id bCh = getCh(@"bottom"); if (bCh) crop[@"bottom"] = @(SpliceKit_channelValue(bCh));
                     }
                 } @catch (NSException *e) { crop[@"error"] = e.reason; }
                 props[@"crop"] = crop;
@@ -9444,14 +9444,14 @@ static NSDictionary *FCPBridge_handleInspectorGet(NSDictionary *params) {
                     if ([effectStack respondsToSelector:efSel]) {
                         NSArray *effects = ((id (*)(id, SEL))objc_msgSend)(effectStack, efSel);
                         for (id effect in effects) {
-                            FCPBridge_collectChannels(effect, channels, nil, 0);
+                            SpliceKit_collectChannels(effect, channels, nil, 0);
                         }
                     }
                     // Also get intrinsic channels
                     SEL icSel = NSSelectorFromString(@"intrinsicChannels");
                     if ([effectStack respondsToSelector:icSel]) {
                         id intrinsic = ((id (*)(id, SEL))objc_msgSend)(effectStack, icSel);
-                        if (intrinsic) FCPBridge_collectChannels(intrinsic, channels, @"intrinsic", 0);
+                        if (intrinsic) SpliceKit_collectChannels(intrinsic, channels, @"intrinsic", 0);
                     }
                 } @catch (NSException *e) {}
                 props[@"channels"] = channels;
@@ -9465,19 +9465,19 @@ static NSDictionary *FCPBridge_handleInspectorGet(NSDictionary *params) {
     return result ?: @{@"error": @"Inspector get failed"};
 }
 
-static NSDictionary *FCPBridge_handleInspectorSet(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleInspectorSet(NSDictionary *params) {
     NSString *property = params[@"property"]; // "opacity", "positionX", "positionY", "rotation", "scaleX", "scaleY", "volume", etc.
     NSNumber *value = params[@"value"];
     if (!property || !value) return @{@"error": @"property and value parameters required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id timeline = FCPBridge_getActiveTimelineModule();
+            id timeline = SpliceKit_getActiveTimelineModule();
             if (!timeline) { result = @{@"error": @"No active timeline module"}; return; }
 
             id clip = nil;
-            id effectStack = FCPBridge_getSelectedClipEffectStack(timeline, &clip);
+            id effectStack = SpliceKit_getSelectedClipEffectStack(timeline, &clip);
             if (!effectStack) { result = @{@"error": @"No clip selected or clip has no effect stack"}; return; }
 
             double val = [value doubleValue];
@@ -9499,7 +9499,7 @@ static NSDictionary *FCPBridge_handleInspectorSet(NSDictionary *params) {
                     SEL bSel = NSSelectorFromString(@"intrinsicCompositeEffectCreateIfAbsent:");
                     id blendEffect = ((id (*)(id, SEL, BOOL))objc_msgSend)(effectStack, bSel, YES);
                     id opChan = ((id (*)(id, SEL))objc_msgSend)(blendEffect, NSSelectorFromString(@"opacityChannel"));
-                    success = FCPBridge_setChannelValue(opChan, val);
+                    success = SpliceKit_setChannelValue(opChan, val);
                 } @catch (NSException *e) {}
             }
             // TRANSFORM: position, scale, rotation, anchor
@@ -9533,8 +9533,8 @@ static NSDictionary *FCPBridge_handleInspectorSet(NSDictionary *params) {
 
                         if (channelMethod && axis) {
                             id ch3d = ((id (*)(id, SEL))objc_msgSend)(xfEffect, NSSelectorFromString(channelMethod));
-                            id axisCh = FCPBridge_subChannel(ch3d, axis);
-                            success = FCPBridge_setChannelValue(axisCh, val);
+                            id axisCh = SpliceKit_subChannel(ch3d, axis);
+                            success = SpliceKit_setChannelValue(axisCh, val);
                         }
                     }
                 } @catch (NSException *e) {}
@@ -9545,14 +9545,14 @@ static NSDictionary *FCPBridge_handleInspectorSet(NSDictionary *params) {
                     SEL volSel = NSSelectorFromString(@"audioLevelChannel");
                     id volChan = [effectStack respondsToSelector:volSel]
                         ? ((id (*)(id, SEL))objc_msgSend)(effectStack, volSel) : nil;
-                    if (volChan) success = FCPBridge_setChannelValue(volChan, val);
+                    if (volChan) success = SpliceKit_setChannelValue(volChan, val);
                 } @catch (NSException *e) {}
             }
             // CHANNEL BY HANDLE (generic - set any channel by its handle)
             else if ([property hasPrefix:@"handle:"]) {
                 NSString *handle = [property substringFromIndex:7];
-                id channel = FCPBridge_resolveHandle(handle);
-                if (channel) success = FCPBridge_setChannelValue(channel, val);
+                id channel = SpliceKit_resolveHandle(handle);
+                if (channel) success = SpliceKit_setChannelValue(channel, val);
                 else result = @{@"error": @"Handle not found"};
             }
 
@@ -9579,7 +9579,7 @@ static NSDictionary *FCPBridge_handleInspectorSet(NSDictionary *params) {
 
 #pragma mark - View/Panel Toggle Handler
 
-static NSDictionary *FCPBridge_handleViewToggle(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleViewToggle(NSDictionary *params) {
     NSString *panel = params[@"panel"];
     if (!panel) return @{@"error": @"panel parameter required"};
 
@@ -9617,12 +9617,12 @@ static NSDictionary *FCPBridge_handleViewToggle(NSDictionary *params) {
                     panel, [[panelMap allKeys] componentsJoinedByString:@", "]]};
     }
 
-    return FCPBridge_sendAppAction(selector);
+    return SpliceKit_sendAppAction(selector);
 }
 
 #pragma mark - Workspace Handler
 
-static NSDictionary *FCPBridge_handleWorkspace(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleWorkspace(NSDictionary *params) {
     NSString *workspace = params[@"workspace"];
     if (!workspace) return @{@"error": @"workspace parameter required"};
 
@@ -9638,12 +9638,12 @@ static NSDictionary *FCPBridge_handleWorkspace(NSDictionary *params) {
         return @{@"error": [NSString stringWithFormat:@"Unknown workspace '%@'. Available: default, organize, colorEffects, dualDisplays", workspace]};
     }
 
-    return FCPBridge_handleMenuExecute(@{@"menuPath": @[@"Window", @"Workspaces", menuTitle]});
+    return SpliceKit_handleMenuExecute(@{@"menuPath": @[@"Window", @"Workspaces", menuTitle]});
 }
 
 #pragma mark - Roles Handler
 
-static NSDictionary *FCPBridge_handleRolesAssign(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleRolesAssign(NSDictionary *params) {
     NSString *roleType = params[@"type"]; // "audio", "video", "caption"
     NSString *roleName = params[@"role"]; // e.g. "Dialogue", "Music", "Effects"
     if (!roleType || !roleName) {
@@ -9657,41 +9657,41 @@ static NSDictionary *FCPBridge_handleRolesAssign(NSDictionary *params) {
     else if ([roleType isEqualToString:@"caption"]) menuCategory = @"Assign Caption Roles";
     else return @{@"error": @"type must be 'audio', 'video', or 'caption'"};
 
-    return FCPBridge_handleMenuExecute(@{@"menuPath": @[@"Modify", menuCategory, roleName]});
+    return SpliceKit_handleMenuExecute(@{@"menuPath": @[@"Modify", menuCategory, roleName]});
 }
 
 #pragma mark - Share/Export Handler
 
-static NSDictionary *FCPBridge_handleShareExport(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleShareExport(NSDictionary *params) {
     NSString *destination = params[@"destination"]; // optional: specific share destination
 
     if (destination) {
         // Try to use specific share destination via menu
-        return FCPBridge_handleMenuExecute(@{@"menuPath": @[@"File", @"Share", destination]});
+        return SpliceKit_handleMenuExecute(@{@"menuPath": @[@"File", @"Share", destination]});
     } else {
         // Use default share
-        return FCPBridge_sendAppAction(@"shareDefaultDestination:");
+        return SpliceKit_sendAppAction(@"shareDefaultDestination:");
     }
 }
 
 #pragma mark - Library/Project Management
 
-static NSDictionary *FCPBridge_handleProjectCreate(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleProjectCreate(NSDictionary *params) {
     // Trigger new project dialog - this opens the dialog
-    return FCPBridge_sendAppAction(@"newProject:");
+    return SpliceKit_sendAppAction(@"newProject:");
 }
 
-static NSDictionary *FCPBridge_handleEventCreate(NSDictionary *params) {
-    return FCPBridge_sendAppAction(@"newEvent:");
+static NSDictionary *SpliceKit_handleEventCreate(NSDictionary *params) {
+    return SpliceKit_sendAppAction(@"newEvent:");
 }
 
-static NSDictionary *FCPBridge_handleLibraryCreate(NSDictionary *params) {
-    return FCPBridge_sendAppAction(@"newLibrary:");
+static NSDictionary *SpliceKit_handleLibraryCreate(NSDictionary *params) {
+    return SpliceKit_sendAppAction(@"newLibrary:");
 }
 
 #pragma mark - Tool Selection Handler
 
-static NSDictionary *FCPBridge_handleToolSelect(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleToolSelect(NSDictionary *params) {
     NSString *tool = params[@"tool"];
     if (!tool) return @{@"error": @"tool parameter required"};
 
@@ -9711,17 +9711,17 @@ static NSDictionary *FCPBridge_handleToolSelect(NSDictionary *params) {
                     tool, [[toolMap allKeys] componentsJoinedByString:@", "]]};
     }
 
-    return FCPBridge_sendAppAction(selector);
+    return SpliceKit_sendAppAction(selector);
 }
 
 #pragma mark - Dialog Detection & Interaction
 
 // Recursively collect UI elements from a view hierarchy
 // Forward declarations for dialog helpers
-static NSArray<NSButton *> *FCPBridge_findButtonsInView(NSView *root);
+static NSArray<NSButton *> *SpliceKit_findButtonsInView(NSView *root);
 
 // Safe subview accessor - returns a COPY of the subviews array to avoid mutation crashes
-static NSArray *FCPBridge_safeSubviews(NSView *view) {
+static NSArray *SpliceKit_safeSubviews(NSView *view) {
     if (!view) return nil;
     @try {
         NSArray *subs = [view subviews];
@@ -9731,13 +9731,13 @@ static NSArray *FCPBridge_safeSubviews(NSView *view) {
     }
 }
 
-static void FCPBridge_collectUIElements(NSView *view, NSMutableArray *buttons,
+static void SpliceKit_collectUIElements(NSView *view, NSMutableArray *buttons,
                                          NSMutableArray *textFields, NSMutableArray *labels,
                                          NSMutableArray *checkboxes, NSMutableArray *popups,
                                          int depth) {
     if (!view || depth > 15) return;
 
-    NSArray *subviews = FCPBridge_safeSubviews(view);
+    NSArray *subviews = SpliceKit_safeSubviews(view);
     if (!subviews) return;
 
     for (NSView *subview in subviews) {
@@ -9824,12 +9824,12 @@ static void FCPBridge_collectUIElements(NSView *view, NSMutableArray *buttons,
         }
 
         // Recurse into subviews
-        FCPBridge_collectUIElements(subview, buttons, textFields, labels,
+        SpliceKit_collectUIElements(subview, buttons, textFields, labels,
                                     checkboxes, popups, depth + 1);
     }
 }
 
-static NSDictionary *FCPBridge_describeWindow(NSWindow *window) {
+static NSDictionary *SpliceKit_describeWindow(NSWindow *window) {
     NSMutableDictionary *info = [NSMutableDictionary dictionary];
     info[@"title"] = [window title] ?: @"";
     info[@"class"] = NSStringFromClass([window class]);
@@ -9844,7 +9844,7 @@ static NSDictionary *FCPBridge_describeWindow(NSWindow *window) {
     NSMutableArray *checkboxes = [NSMutableArray array];
     NSMutableArray *popups = [NSMutableArray array];
 
-    FCPBridge_collectUIElements([window contentView], buttons, textFields,
+    SpliceKit_collectUIElements([window contentView], buttons, textFields,
                                 labels, checkboxes, popups, 0);
 
     info[@"buttons"] = buttons;
@@ -9856,9 +9856,9 @@ static NSDictionary *FCPBridge_describeWindow(NSWindow *window) {
     return info;
 }
 
-static NSDictionary *FCPBridge_handleDialogDetect(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDialogDetect(NSDictionary *params) {
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id app = ((id (*)(id, SEL))objc_msgSend)(
                 objc_getClass("NSApplication"), @selector(sharedApplication));
@@ -9868,7 +9868,7 @@ static NSDictionary *FCPBridge_handleDialogDetect(NSDictionary *params) {
             // Check for modal window
             NSWindow *modalWindow = [NSApp modalWindow];
             if (modalWindow) {
-                NSMutableDictionary *d = [FCPBridge_describeWindow(modalWindow) mutableCopy];
+                NSMutableDictionary *d = [SpliceKit_describeWindow(modalWindow) mutableCopy];
                 d[@"type"] = @"modal";
                 [dialogs addObject:d];
             }
@@ -9877,7 +9877,7 @@ static NSDictionary *FCPBridge_handleDialogDetect(NSDictionary *params) {
             for (NSWindow *window in [NSApp windows]) {
                 NSWindow *sheet = [window attachedSheet];
                 if (sheet) {
-                    NSMutableDictionary *d = [FCPBridge_describeWindow(sheet) mutableCopy];
+                    NSMutableDictionary *d = [SpliceKit_describeWindow(sheet) mutableCopy];
                     d[@"type"] = @"sheet";
                     d[@"parentWindow"] = [window title] ?: @"";
                     [dialogs addObject:d];
@@ -9908,7 +9908,7 @@ static NSDictionary *FCPBridge_handleDialogDetect(NSDictionary *params) {
                 );
 
                 if (isAlert || isProgressPanel || isSharePanel || isFCPDialog) {
-                    NSMutableDictionary *d = [FCPBridge_describeWindow(window) mutableCopy];
+                    NSMutableDictionary *d = [SpliceKit_describeWindow(window) mutableCopy];
                     d[@"type"] = isAlert ? @"alert" : (isProgressPanel ? @"progress" :
                                   (isSharePanel ? @"share" : @"panel"));
                     // Avoid duplicates
@@ -9934,7 +9934,7 @@ static NSDictionary *FCPBridge_handleDialogDetect(NSDictionary *params) {
                         }
                     }
                     if (hasAlertButton) {
-                        NSMutableDictionary *d = [FCPBridge_describeWindow(window) mutableCopy];
+                        NSMutableDictionary *d = [SpliceKit_describeWindow(window) mutableCopy];
                         d[@"type"] = @"alert";
                         BOOL isDupe = NO;
                         for (NSDictionary *existing in dialogs) {
@@ -9959,7 +9959,7 @@ static NSDictionary *FCPBridge_handleDialogDetect(NSDictionary *params) {
     return result ?: @{@"error": @"Dialog detect failed"};
 }
 
-static NSDictionary *FCPBridge_handleDialogClick(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDialogClick(NSDictionary *params) {
     NSString *buttonTitle = params[@"button"]; // button title to click
     NSNumber *buttonIndex = params[@"index"];   // or button index (0-based)
     if (!buttonTitle && !buttonIndex) {
@@ -9967,7 +9967,7 @@ static NSDictionary *FCPBridge_handleDialogClick(NSDictionary *params) {
     }
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // Find the dialog window (modal > sheet > panel)
             NSWindow *dialogWindow = [NSApp modalWindow];
@@ -10000,7 +10000,7 @@ static NSDictionary *FCPBridge_handleDialogClick(NSDictionary *params) {
             }
 
             // Use BFS to safely find all buttons
-            NSArray<NSButton *> *buttonObjects = FCPBridge_findButtonsInView([dialogWindow contentView]);
+            NSArray<NSButton *> *buttonObjects = SpliceKit_findButtonsInView([dialogWindow contentView]);
 
             NSButton *targetButton = nil;
 
@@ -10056,13 +10056,13 @@ static NSDictionary *FCPBridge_handleDialogClick(NSDictionary *params) {
     return result ?: @{@"error": @"Dialog click failed"};
 }
 
-static NSDictionary *FCPBridge_handleDialogFill(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDialogFill(NSDictionary *params) {
     NSString *value = params[@"value"];
     NSNumber *fieldIndex = params[@"index"] ?: @(0);
     if (!value) return @{@"error": @"value parameter required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // Find dialog window
             NSWindow *dialogWindow = [NSApp modalWindow];
@@ -10086,7 +10086,7 @@ static NSDictionary *FCPBridge_handleDialogFill(NSDictionary *params) {
             NSMutableArray *checkboxes = [NSMutableArray array];
             NSMutableArray *popups = [NSMutableArray array];
 
-            FCPBridge_collectUIElements([dialogWindow contentView], buttons, textFields,
+            SpliceKit_collectUIElements([dialogWindow contentView], buttons, textFields,
                                         labels, checkboxes, popups, 0);
 
             // textFields array already contains only editable fields (from collectUIElements)
@@ -10118,7 +10118,7 @@ static NSDictionary *FCPBridge_handleDialogFill(NSDictionary *params) {
                     }
 
                     // Add child views to queue (BFS)
-                    NSArray *subs = FCPBridge_safeSubviews(current);
+                    NSArray *subs = SpliceKit_safeSubviews(current);
                     if (subs) {
                         [queue addObjectsFromArray:subs];
                     }
@@ -10147,13 +10147,13 @@ static NSDictionary *FCPBridge_handleDialogFill(NSDictionary *params) {
     return result ?: @{@"error": @"Dialog fill failed"};
 }
 
-static NSDictionary *FCPBridge_handleDialogCheckbox(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDialogCheckbox(NSDictionary *params) {
     NSString *checkboxTitle = params[@"checkbox"];
     NSNumber *checked = params[@"checked"]; // YES/NO
     if (!checkboxTitle) return @{@"error": @"checkbox (title) parameter required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             NSWindow *dialogWindow = [NSApp modalWindow];
             if (!dialogWindow) {
@@ -10169,7 +10169,7 @@ static NSDictionary *FCPBridge_handleDialogCheckbox(NSDictionary *params) {
             __weak void (^weakCB)(NSView *);
             weakCB = findCB = ^(NSView *view) {
                 if (!view) return;
-                NSArray *subs = FCPBridge_safeSubviews(view);
+                NSArray *subs = SpliceKit_safeSubviews(view);
                 if (!subs) return;
                 for (NSView *subview in subs) {
                     if (!subview) continue;
@@ -10206,13 +10206,13 @@ static NSDictionary *FCPBridge_handleDialogCheckbox(NSDictionary *params) {
     return result ?: @{@"error": @"Checkbox toggle failed"};
 }
 
-static NSDictionary *FCPBridge_handleDialogPopup(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDialogPopup(NSDictionary *params) {
     NSString *selection = params[@"select"]; // item title to select
     NSNumber *popupIndex = params[@"popupIndex"] ?: @(0); // which popup (if multiple)
     if (!selection) return @{@"error": @"select parameter required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             NSWindow *dialogWindow = [NSApp modalWindow];
             if (!dialogWindow) {
@@ -10228,7 +10228,7 @@ static NSDictionary *FCPBridge_handleDialogPopup(NSDictionary *params) {
             __weak void (^weakPU)(NSView *);
             weakPU = findPopups = ^(NSView *view) {
                 if (!view) return;
-                NSArray *subs = FCPBridge_safeSubviews(view);
+                NSArray *subs = SpliceKit_safeSubviews(view);
                 if (!subs) return;
                 for (NSView *subview in subs) {
                     if (!subview) continue;
@@ -10270,7 +10270,7 @@ static NSDictionary *FCPBridge_handleDialogPopup(NSDictionary *params) {
 }
 
 // BFS helper to find buttons safely in a view hierarchy
-static NSArray<NSButton *> *FCPBridge_findButtonsInView(NSView *root) {
+static NSArray<NSButton *> *SpliceKit_findButtonsInView(NSView *root) {
     NSMutableArray<NSButton *> *found = [NSMutableArray array];
     if (!root) return found;
     NSMutableArray<NSView *> *queue = [NSMutableArray arrayWithObject:root];
@@ -10285,18 +10285,18 @@ static NSArray<NSButton *> *FCPBridge_findButtonsInView(NSView *root) {
                     [found addObject:btn];
                 }
             }
-            NSArray *subs = FCPBridge_safeSubviews(current);
+            NSArray *subs = SpliceKit_safeSubviews(current);
             if (subs) [queue addObjectsFromArray:subs];
         } @catch (NSException *e) {}
     }
     return found;
 }
 
-static NSDictionary *FCPBridge_handleDialogDismiss(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDialogDismiss(NSDictionary *params) {
     NSString *action = params[@"action"] ?: @"default";
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             NSWindow *dialogWindow = [NSApp modalWindow];
             if (!dialogWindow) {
@@ -10312,7 +10312,7 @@ static NSDictionary *FCPBridge_handleDialogDismiss(NSDictionary *params) {
                 return;
             }
 
-            NSArray<NSButton *> *allButtons = FCPBridge_findButtonsInView([dialogWindow contentView]);
+            NSArray<NSButton *> *allButtons = SpliceKit_findButtonsInView([dialogWindow contentView]);
 
             if ([action isEqualToString:@"cancel"]) {
                 NSButton *cancelBtn = nil;
@@ -10378,7 +10378,7 @@ static NSDictionary *FCPBridge_handleDialogDismiss(NSDictionary *params) {
 // The MCP server runs the beat-detector tool directly as an external process.
 // This RPC endpoint accepts pre-computed beat data for passthrough.
 
-static NSDictionary *FCPBridge_handleBeatsDetect(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleBeatsDetect(NSDictionary *params) {
     // If called with pre-computed data (from MCP), just pass it through
     if (params[@"beats"] && params[@"bars"] && params[@"bpm"]) {
         return params; // Already has beat data
@@ -10457,7 +10457,7 @@ static NSDictionary *FCPBridge_handleBeatsDetect(NSDictionary *params) {
             NSUInteger sampleCount = pcmData.length / sizeof(float);
             double sampleRate = 44100.0;
 
-            FCPBridge_log(@"[BeatDetect] Read %lu samples (%.1fs) from %@",
+            SpliceKit_log(@"[BeatDetect] Read %lu samples (%.1fs) from %@",
                 (unsigned long)sampleCount, totalDuration, [filePath lastPathComponent]);
 
             // === Onset detection via spectral energy ===
@@ -10601,7 +10601,7 @@ static NSDictionary *FCPBridge_handleBeatsDetect(NSDictionary *params) {
                 [sections addObject:beats[i]];
             }
 
-            FCPBridge_log(@"[BeatDetect] Detected %.1f BPM, %lu beats, %lu bars, %lu sections in %.1fs",
+            SpliceKit_log(@"[BeatDetect] Detected %.1f BPM, %lu beats, %lu bars, %lu sections in %.1fs",
                 bpm, (unsigned long)beats.count, (unsigned long)bars.count,
                 (unsigned long)sections.count, totalDuration);
 
@@ -10630,9 +10630,9 @@ static NSDictionary *FCPBridge_handleBeatsDetect(NSDictionary *params) {
 
 // Helper: get the original media URL from a browser clip
 // NOTE: Many FFAsset/FFMediaRep methods deadlock when called from main thread
-// inside FCPBridge_executeOnMainThread. This helper runs on a background thread
+// inside SpliceKit_executeOnMainThread. This helper runs on a background thread
 // with a timeout to avoid hanging the RPC server.
-static NSString *FCPBridge_getMediaURLForClip(id clip) {
+static NSString *SpliceKit_getMediaURLForClip(id clip) {
     if (!clip) return nil;
 
     __block NSString *result = nil;
@@ -10661,7 +10661,7 @@ static NSString *FCPBridge_getMediaURLForClip(id clip) {
 // ---------- FlexMusic static state ----------
 static id sFMSongLibrary = nil; // FMSongLibrary singleton
 
-static id FCPBridge_getFlexMusicLibrary(void) {
+static id SpliceKit_getFlexMusicLibrary(void) {
     if (sFMSongLibrary) return sFMSongLibrary;
 
     Class fmLib = objc_getClass("FMSongLibrary");
@@ -10690,7 +10690,7 @@ static id FCPBridge_getFlexMusicLibrary(void) {
 }
 
 // Helper: look up an NSString* constant from FlexMusicKit by symbol name
-static NSString *FCPBridge_flexMusicConstant(const char *symbolName) {
+static NSString *SpliceKit_flexMusicConstant(const char *symbolName) {
     void *ptr = dlsym(RTLD_DEFAULT, symbolName);
     if (!ptr) return nil;
     CFStringRef *cfPtr = (CFStringRef *)ptr;
@@ -10698,8 +10698,8 @@ static NSString *FCPBridge_flexMusicConstant(const char *symbolName) {
 }
 
 // Helper: build a CMTime from seconds at timescale 600
-static FCPBridge_CMTime FCPBridge_cmtimeFromSeconds(double seconds) {
-    FCPBridge_CMTime t;
+static SpliceKit_CMTime SpliceKit_cmtimeFromSeconds(double seconds) {
+    SpliceKit_CMTime t;
     t.value = (int64_t)(seconds * 600.0);
     t.timescale = 600;
     t.flags = 1; // kCMTimeFlags_Valid
@@ -10708,20 +10708,20 @@ static FCPBridge_CMTime FCPBridge_cmtimeFromSeconds(double seconds) {
 }
 
 // Helper: convert CMTime to double seconds
-static double FCPBridge_cmtimeToSeconds(FCPBridge_CMTime t) {
+static double SpliceKit_cmtimeToSeconds(SpliceKit_CMTime t) {
     if (t.timescale <= 0) return 0.0;
     return (double)t.value / (double)t.timescale;
 }
 
 // ---------- 1. flexmusic.listSongs ----------
 
-static NSDictionary *FCPBridge_handleFlexMusicListSongs(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleFlexMusicListSongs(NSDictionary *params) {
     NSString *filter = params[@"filter"];
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
-            id library = FCPBridge_getFlexMusicLibrary();
+            id library = SpliceKit_getFlexMusicLibrary();
             if (!library) {
                 result = @{@"error": @"FMSongLibrary not available (FlexMusicKit framework not loaded)"};
                 return;
@@ -10842,8 +10842,8 @@ static NSDictionary *FCPBridge_handleFlexMusicListSongs(NSDictionary *params) {
                     // Duration
                     SEL durSel = NSSelectorFromString(@"naturalDuration");
                     if ([song respondsToSelector:durSel]) {
-                        FCPBridge_CMTime dur = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(song, durSel);
-                        info[@"durationSeconds"] = @(FCPBridge_cmtimeToSeconds(dur));
+                        SpliceKit_CMTime dur = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(song, durSel);
+                        info[@"durationSeconds"] = @(SpliceKit_cmtimeToSeconds(dur));
                     }
 
                     // Filter
@@ -10857,7 +10857,7 @@ static NSDictionary *FCPBridge_handleFlexMusicListSongs(NSDictionary *params) {
                     }
 
                     // Store handle
-                    NSString *handle = FCPBridge_storeHandle(song);
+                    NSString *handle = SpliceKit_storeHandle(song);
                     info[@"handle"] = handle;
 
                     [songList addObject:info];
@@ -10874,24 +10874,24 @@ static NSDictionary *FCPBridge_handleFlexMusicListSongs(NSDictionary *params) {
 
 // ---------- 2. flexmusic.getSong ----------
 
-static NSDictionary *FCPBridge_handleFlexMusicGetSong(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleFlexMusicGetSong(NSDictionary *params) {
     NSString *songUID = params[@"songUID"];
     NSString *handle = params[@"handle"];
     if (!songUID && !handle) return @{@"error": @"songUID or handle parameter required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             id song = nil;
 
             // Resolve by handle first
             if (handle) {
-                song = FCPBridge_resolveHandle(handle);
+                song = SpliceKit_resolveHandle(handle);
             }
 
             // Resolve by UID via library
             if (!song && songUID) {
-                id library = FCPBridge_getFlexMusicLibrary();
+                id library = SpliceKit_getFlexMusicLibrary();
                 if (library) {
                     SEL forUIDSel = NSSelectorFromString(@"songForUID:");
                     if ([library respondsToSelector:forUIDSel]) {
@@ -10987,13 +10987,13 @@ static NSDictionary *FCPBridge_handleFlexMusicGetSong(NSDictionary *params) {
             // Durations
             SEL natDurSel = NSSelectorFromString(@"naturalDuration");
             if ([song respondsToSelector:natDurSel]) {
-                FCPBridge_CMTime dur = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(song, natDurSel);
-                info[@"naturalDurationSeconds"] = @(FCPBridge_cmtimeToSeconds(dur));
+                SpliceKit_CMTime dur = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(song, natDurSel);
+                info[@"naturalDurationSeconds"] = @(SpliceKit_cmtimeToSeconds(dur));
             }
             SEL minDurSel = NSSelectorFromString(@"minimumDuration");
             if ([song respondsToSelector:minDurSel]) {
-                FCPBridge_CMTime dur = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(song, minDurSel);
-                info[@"minimumDurationSeconds"] = @(FCPBridge_cmtimeToSeconds(dur));
+                SpliceKit_CMTime dur = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(song, minDurSel);
+                info[@"minimumDurationSeconds"] = @(SpliceKit_cmtimeToSeconds(dur));
             }
             SEL idealSel = NSSelectorFromString(@"idealDurations");
             if ([song respondsToSelector:idealSel]) {
@@ -11011,7 +11011,7 @@ static NSDictionary *FCPBridge_handleFlexMusicGetSong(NSDictionary *params) {
             }
 
             // Store handle
-            NSString *h = FCPBridge_storeHandle(song);
+            NSString *h = SpliceKit_storeHandle(song);
             info[@"handle"] = h;
 
             result = info;
@@ -11024,7 +11024,7 @@ static NSDictionary *FCPBridge_handleFlexMusicGetSong(NSDictionary *params) {
 
 // ---------- 3. flexmusic.getTiming ----------
 
-static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleFlexMusicGetTiming(NSDictionary *params) {
     NSString *songUID = params[@"songUID"];
     NSString *handle = params[@"handle"];
     NSNumber *durationSecondsNum = params[@"durationSeconds"];
@@ -11034,15 +11034,15 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
     double durationSeconds = [durationSecondsNum doubleValue];
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // Resolve song
             id song = nil;
             if (handle) {
-                song = FCPBridge_resolveHandle(handle);
+                song = SpliceKit_resolveHandle(handle);
             }
             if (!song && songUID) {
-                id library = FCPBridge_getFlexMusicLibrary();
+                id library = SpliceKit_getFlexMusicLibrary();
                 if (library) {
                     SEL forUIDSel = NSSelectorFromString(@"songForUID:");
                     if ([library respondsToSelector:forUIDSel]) {
@@ -11055,7 +11055,7 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
                 return;
             }
 
-            FCPBridge_CMTime durTime = FCPBridge_cmtimeFromSeconds(durationSeconds);
+            SpliceKit_CMTime durTime = SpliceKit_cmtimeFromSeconds(durationSeconds);
 
             // Get options for duration - try FFAnchoredFlexMusicObject first
             id options = nil;
@@ -11063,7 +11063,7 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
             if (ffFlexObj) {
                 SEL optSel = NSSelectorFromString(@"optionsForDuration:");
                 if ([ffFlexObj respondsToSelector:optSel]) {
-                    options = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                    options = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                         (id)ffFlexObj, optSel, durTime);
                 }
             }
@@ -11071,8 +11071,8 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
                 // Build options manually
                 NSMutableDictionary *opts = [NSMutableDictionary dictionary];
                 // Look up option constants via dlsym
-                NSString *loopOpt = FCPBridge_flexMusicConstant("FMSong_Option_LoopSongForLongDurations");
-                NSString *outroOpt = FCPBridge_flexMusicConstant("FMSong_Option_OutroCanBeShortened");
+                NSString *loopOpt = SpliceKit_flexMusicConstant("FMSong_Option_LoopSongForLongDurations");
+                NSString *outroOpt = SpliceKit_flexMusicConstant("FMSong_Option_OutroCanBeShortened");
                 if (loopOpt) opts[loopOpt] = @YES;
                 if (outroOpt) opts[outroOpt] = @YES;
                 options = opts;
@@ -11082,14 +11082,14 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
             id rendition = nil;
             SEL rendSel = NSSelectorFromString(@"renditionForDuration:withOptions:");
             if ([song respondsToSelector:rendSel]) {
-                rendition = ((id (*)(id, SEL, FCPBridge_CMTime, id))objc_msgSend)(
+                rendition = ((id (*)(id, SEL, SpliceKit_CMTime, id))objc_msgSend)(
                     song, rendSel, durTime, options);
             }
             if (!rendition) {
                 // Try simpler renditionForDuration:
                 SEL rendSel2 = NSSelectorFromString(@"renditionForDuration:");
                 if ([song respondsToSelector:rendSel2]) {
-                    rendition = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                    rendition = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                         song, rendSel2, durTime);
                 }
             }
@@ -11098,7 +11098,7 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
                 return;
             }
 
-            NSString *rendHandle = FCPBridge_storeHandle(rendition);
+            NSString *rendHandle = SpliceKit_storeHandle(rendition);
             NSMutableDictionary *timing = [NSMutableDictionary dictionary];
             timing[@"renditionHandle"] = rendHandle;
             timing[@"renditionClass"] = NSStringFromClass([rendition class]);
@@ -11106,16 +11106,16 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
             // Get fitted duration from rendition
             SEL rendDurSel = NSSelectorFromString(@"duration");
             if ([rendition respondsToSelector:rendDurSel]) {
-                FCPBridge_CMTime rd = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(rendition, rendDurSel);
-                timing[@"fittedDurationSeconds"] = @(FCPBridge_cmtimeToSeconds(rd));
+                SpliceKit_CMTime rd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(rendition, rendDurSel);
+                timing[@"fittedDurationSeconds"] = @(SpliceKit_cmtimeToSeconds(rd));
             }
 
             // Extract timed metadata using identifier constants
-            NSString *beatId = FCPBridge_flexMusicConstant("FMTimedMetadataIdentifierBeat");
-            NSString *barId = FCPBridge_flexMusicConstant("FMTimedMetadataIdentifierBar");
-            NSString *sectionId = FCPBridge_flexMusicConstant("FMTimedMetadataIdentifierSection");
-            NSString *segmentId = FCPBridge_flexMusicConstant("FMTimedMetadataIdentifierSegment");
-            NSString *onsetId = FCPBridge_flexMusicConstant("FMTimedMetadataIdentifierOnset");
+            NSString *beatId = SpliceKit_flexMusicConstant("FMTimedMetadataIdentifierBeat");
+            NSString *barId = SpliceKit_flexMusicConstant("FMTimedMetadataIdentifierBar");
+            NSString *sectionId = SpliceKit_flexMusicConstant("FMTimedMetadataIdentifierSection");
+            NSString *segmentId = SpliceKit_flexMusicConstant("FMTimedMetadataIdentifierSegment");
+            NSString *onsetId = SpliceKit_flexMusicConstant("FMTimedMetadataIdentifierOnset");
 
             SEL timedMetaSel = NSSelectorFromString(@"timedMetadataItemsWithIdentifier:");
             BOOL hasTimedMeta = [rendition respondsToSelector:timedMetaSel];
@@ -11129,8 +11129,8 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
                 for (id item in (NSArray *)items) {
                     SEL timeSel = NSSelectorFromString(@"time");
                     if ([item respondsToSelector:timeSel]) {
-                        FCPBridge_CMTime t = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, timeSel);
-                        [times addObject:@(FCPBridge_cmtimeToSeconds(t))];
+                        SpliceKit_CMTime t = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, timeSel);
+                        [times addObject:@(SpliceKit_cmtimeToSeconds(t))];
                     }
                 }
                 return times;
@@ -11149,11 +11149,11 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
                     SEL initRendSel = NSSelectorFromString(@"initWithSongRendition:clippedRange:");
                     if ([ffTimingClass instancesRespondToSelector:initRendSel]) {
                         // Full range
-                        FCPBridge_CMTime start = {0, 600, 1, 0};
-                        FCPBridge_CMTimeRange fullRange = {start, durTime};
+                        SpliceKit_CMTime start = {0, 600, 1, 0};
+                        SpliceKit_CMTimeRange fullRange = {start, durTime};
 
                         id tmObj = ((id (*)(id, SEL))objc_msgSend)((id)ffTimingClass, @selector(alloc));
-                        tmObj = ((id (*)(id, SEL, id, FCPBridge_CMTimeRange))objc_msgSend)(
+                        tmObj = ((id (*)(id, SEL, id, SpliceKit_CMTimeRange))objc_msgSend)(
                             tmObj, initRendSel, rendition, fullRange);
 
                         if (tmObj) {
@@ -11170,8 +11170,8 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
                                         for (id item in (NSArray *)metaItems) {
                                             SEL timeSel2 = NSSelectorFromString(@"time");
                                             if ([item respondsToSelector:timeSel2]) {
-                                                FCPBridge_CMTime t = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, timeSel2);
-                                                [times addObject:@(FCPBridge_cmtimeToSeconds(t))];
+                                                SpliceKit_CMTime t = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, timeSel2);
+                                                [times addObject:@(SpliceKit_cmtimeToSeconds(t))];
                                             }
                                         }
                                         if (times.count > 0) timing[keys[i]] = times;
@@ -11202,7 +11202,7 @@ static NSDictionary *FCPBridge_handleFlexMusicGetTiming(NSDictionary *params) {
 
 // ---------- 4. flexmusic.renderToFile ----------
 
-static NSDictionary *FCPBridge_handleFlexMusicRender(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleFlexMusicRender(NSDictionary *params) {
     NSString *songUID = params[@"songUID"];
     NSString *handle = params[@"handle"];
     NSNumber *durationSecondsNum = params[@"durationSeconds"];
@@ -11218,20 +11218,20 @@ static NSDictionary *FCPBridge_handleFlexMusicRender(NSDictionary *params) {
     if (!outputPath) {
         NSString *ext = [format isEqualToString:@"wav"] ? @"wav" : @"m4a";
         outputPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
-            [NSString stringWithFormat:@"fcpbridge_flexmusic_%@.%@",
+            [NSString stringWithFormat:@"splicekit_flexmusic_%@.%@",
              [[NSUUID UUID] UUIDString], ext]];
     }
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // Resolve song
             id song = nil;
             if (handle) {
-                song = FCPBridge_resolveHandle(handle);
+                song = SpliceKit_resolveHandle(handle);
             }
             if (!song && songUID) {
-                id library = FCPBridge_getFlexMusicLibrary();
+                id library = SpliceKit_getFlexMusicLibrary();
                 if (library) {
                     SEL forUIDSel = NSSelectorFromString(@"songForUID:");
                     if ([library respondsToSelector:forUIDSel]) {
@@ -11244,7 +11244,7 @@ static NSDictionary *FCPBridge_handleFlexMusicRender(NSDictionary *params) {
                 return;
             }
 
-            FCPBridge_CMTime durTime = FCPBridge_cmtimeFromSeconds(durationSeconds);
+            SpliceKit_CMTime durTime = SpliceKit_cmtimeFromSeconds(durationSeconds);
 
             // Get rendition
             id rendition = nil;
@@ -11254,20 +11254,20 @@ static NSDictionary *FCPBridge_handleFlexMusicRender(NSDictionary *params) {
             if (ffFlexObj) {
                 SEL optSel = NSSelectorFromString(@"optionsForDuration:");
                 if ([ffFlexObj respondsToSelector:optSel]) {
-                    options = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                    options = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                         (id)ffFlexObj, optSel, durTime);
                 }
             }
             if (!options) options = @{};
 
             if ([song respondsToSelector:rendSel]) {
-                rendition = ((id (*)(id, SEL, FCPBridge_CMTime, id))objc_msgSend)(
+                rendition = ((id (*)(id, SEL, SpliceKit_CMTime, id))objc_msgSend)(
                     song, rendSel, durTime, options);
             }
             if (!rendition) {
                 SEL rendSel2 = NSSelectorFromString(@"renditionForDuration:");
                 if ([song respondsToSelector:rendSel2]) {
-                    rendition = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                    rendition = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                         song, rendSel2, durTime);
                 }
             }
@@ -11383,20 +11383,20 @@ static NSDictionary *FCPBridge_handleFlexMusicRender(NSDictionary *params) {
 
 // ---------- 5. flexmusic.addToTimeline ----------
 
-static NSDictionary *FCPBridge_handleFlexMusicAddToTimeline(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleFlexMusicAddToTimeline(NSDictionary *params) {
     NSString *songUID = params[@"songUID"];
     NSString *handle = params[@"handle"];
     NSNumber *durationSecondsNum = params[@"durationSeconds"];
     if (!songUID && !handle) return @{@"error": @"songUID or handle parameter required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // If no explicit duration, try to get timeline duration
             double durationSeconds = durationSecondsNum ? [durationSecondsNum doubleValue] : 0;
 
             if (durationSeconds <= 0) {
-                id timeline = FCPBridge_getActiveTimelineModule();
+                id timeline = SpliceKit_getActiveTimelineModule();
                 if (timeline) {
                     SEL seqSel = @selector(sequence);
                     if ([timeline respondsToSelector:seqSel]) {
@@ -11404,9 +11404,9 @@ static NSDictionary *FCPBridge_handleFlexMusicAddToTimeline(NSDictionary *params
                         if (sequence) {
                             SEL durSel = NSSelectorFromString(@"duration");
                             if ([sequence respondsToSelector:durSel]) {
-                                FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(
+                                SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
                                     sequence, durSel);
-                                durationSeconds = FCPBridge_cmtimeToSeconds(d);
+                                durationSeconds = SpliceKit_cmtimeToSeconds(d);
                             }
                         }
                     }
@@ -11420,10 +11420,10 @@ static NSDictionary *FCPBridge_handleFlexMusicAddToTimeline(NSDictionary *params
             // Resolve song
             id song = nil;
             if (handle) {
-                song = FCPBridge_resolveHandle(handle);
+                song = SpliceKit_resolveHandle(handle);
             }
             if (!song && songUID) {
-                id library = FCPBridge_getFlexMusicLibrary();
+                id library = SpliceKit_getFlexMusicLibrary();
                 if (library) {
                     SEL forUIDSel = NSSelectorFromString(@"songForUID:");
                     if ([library respondsToSelector:forUIDSel]) {
@@ -11436,7 +11436,7 @@ static NSDictionary *FCPBridge_handleFlexMusicAddToTimeline(NSDictionary *params
                 return;
             }
 
-            FCPBridge_CMTime durTime = FCPBridge_cmtimeFromSeconds(durationSeconds);
+            SpliceKit_CMTime durTime = SpliceKit_cmtimeFromSeconds(durationSeconds);
 
             // Get song name for FCPXML
             NSString *songName = @"FlexMusic";
@@ -11453,19 +11453,19 @@ static NSDictionary *FCPBridge_handleFlexMusicAddToTimeline(NSDictionary *params
             if (ffFlexObj) {
                 SEL optSel = NSSelectorFromString(@"optionsForDuration:");
                 if ([ffFlexObj respondsToSelector:optSel]) {
-                    options = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                    options = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                         (id)ffFlexObj, optSel, durTime) ?: @{};
                 }
             }
             SEL rendSel = NSSelectorFromString(@"renditionForDuration:withOptions:");
             if ([song respondsToSelector:rendSel]) {
-                rendition = ((id (*)(id, SEL, FCPBridge_CMTime, id))objc_msgSend)(
+                rendition = ((id (*)(id, SEL, SpliceKit_CMTime, id))objc_msgSend)(
                     song, rendSel, durTime, options);
             }
             if (!rendition) {
                 SEL rendSel2 = NSSelectorFromString(@"renditionForDuration:");
                 if ([song respondsToSelector:rendSel2]) {
-                    rendition = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                    rendition = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                         song, rendSel2, durTime);
                 }
             }
@@ -11476,7 +11476,7 @@ static NSDictionary *FCPBridge_handleFlexMusicAddToTimeline(NSDictionary *params
 
             // Export to temp file
             NSString *tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
-                [NSString stringWithFormat:@"fcpbridge_flexmusic_%@.m4a",
+                [NSString stringWithFormat:@"splicekit_flexmusic_%@.m4a",
                  [[NSUUID UUID] UUIDString]]];
 
             SEL compSel = NSSelectorFromString(@"avCompositionWithAudioMix:includeShortenedOutroFadeOut:");
@@ -11576,7 +11576,7 @@ static NSDictionary *FCPBridge_handleFlexMusicAddToTimeline(NSDictionary *params
 
             // Import the FCPXML
             NSString *xmlPath = [NSTemporaryDirectory()
-                stringByAppendingPathComponent:@"fcpbridge_flexmusic_import.fcpxml"];
+                stringByAppendingPathComponent:@"splicekit_flexmusic_import.fcpxml"];
             NSData *data = [xml dataUsingEncoding:NSUTF8StringEncoding];
             [data writeToFile:xmlPath atomically:YES];
             NSURL *xmlURL = [NSURL fileURLWithPath:xmlPath];
@@ -11608,11 +11608,11 @@ static NSDictionary *FCPBridge_handleFlexMusicAddToTimeline(NSDictionary *params
 
 // ---------- 6. montage.analyzeClips ----------
 
-static NSDictionary *FCPBridge_handleMontageAnalyze(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleMontageAnalyze(NSDictionary *params) {
     NSString *eventFilter = params[@"eventName"];
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // Get clips from library events
             id libs = ((id (*)(id, SEL))objc_msgSend)(
@@ -11689,10 +11689,10 @@ static NSDictionary *FCPBridge_handleMontageAnalyze(NSDictionary *params) {
                         // Duration
                         double durationSec = 0;
                         if ([clip respondsToSelector:@selector(duration)]) {
-                            FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(
+                            SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
                                 clip, @selector(duration));
-                            durationSec = FCPBridge_cmtimeToSeconds(d);
-                            info[@"duration"] = FCPBridge_serializeCMTime(d);
+                            durationSec = SpliceKit_cmtimeToSeconds(d);
+                            info[@"duration"] = SpliceKit_serializeCMTime(d);
                             info[@"durationSeconds"] = @(durationSec);
                         }
 
@@ -11743,7 +11743,7 @@ static NSDictionary *FCPBridge_handleMontageAnalyze(NSDictionary *params) {
                         // The user can provide file paths manually for proper media references.
 
                         // Store handle
-                        NSString *h = FCPBridge_storeHandle(clip);
+                        NSString *h = SpliceKit_storeHandle(clip);
                         info[@"handle"] = h;
 
                         [analyzedClips addObject:info];
@@ -11766,7 +11766,7 @@ static NSDictionary *FCPBridge_handleMontageAnalyze(NSDictionary *params) {
 
 // ---------- 7. montage.planEdit ----------
 
-static NSDictionary *FCPBridge_handleMontagePlan(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleMontagePlan(NSDictionary *params) {
     NSArray *beats = params[@"beats"];
     NSArray *bars = params[@"bars"];
     NSArray *clips = params[@"clips"];
@@ -11873,9 +11873,9 @@ static NSDictionary *FCPBridge_handleMontagePlan(NSDictionary *params) {
 
 // ---------- 8. montage.assemble ----------
 
-static NSDictionary *FCPBridge_handleMontageAssemble(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleMontageAssemble(NSDictionary *params) {
     NSArray *editPlan = params[@"editPlan"];
-    NSString *projectName = params[@"projectName"] ?: @"FCPBridge Montage";
+    NSString *projectName = params[@"projectName"] ?: @"SpliceKit Montage";
     NSString *songFile = params[@"songFile"];
 
     if (!editPlan || ![editPlan isKindOfClass:[NSArray class]] || editPlan.count == 0) {
@@ -11883,7 +11883,7 @@ static NSDictionary *FCPBridge_handleMontageAssemble(NSDictionary *params) {
     }
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // Collect unique media files from clip handles
             NSMutableDictionary *mediaResources = [NSMutableDictionary dictionary];
@@ -12043,7 +12043,7 @@ static NSDictionary *FCPBridge_handleMontageAssemble(NSDictionary *params) {
 
             // Write and import FCPXML
             NSString *xmlPath = [NSTemporaryDirectory()
-                stringByAppendingPathComponent:@"fcpbridge_montage.fcpxml"];
+                stringByAppendingPathComponent:@"splicekit_montage.fcpxml"];
             NSData *data = [xml dataUsingEncoding:NSUTF8StringEncoding];
             [data writeToFile:xmlPath atomically:YES];
             NSURL *xmlURL = [NSURL fileURLWithPath:xmlPath];
@@ -12080,7 +12080,7 @@ static NSDictionary *FCPBridge_handleMontageAssemble(NSDictionary *params) {
 
 // ---------- 9. montage.auto ----------
 
-static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleMontageAuto(NSDictionary *params) {
     NSString *songUID = params[@"songUID"];
     NSString *songHandle = params[@"songHandle"];
     NSString *eventName = params[@"eventName"];
@@ -12090,7 +12090,7 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
     if (!songUID && !songHandle) return @{@"error": @"songUID or songHandle parameter required"};
 
     __block NSDictionary *result = nil;
-    FCPBridge_executeOnMainThread(^{
+    SpliceKit_executeOnMainThread(^{
         @try {
             // Step 1: Analyze clips from library
             id libs = ((id (*)(id, SEL))objc_msgSend)(
@@ -12146,9 +12146,9 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
 
                         double durationSec = 0;
                         if ([clip respondsToSelector:@selector(duration)]) {
-                            FCPBridge_CMTime d = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(
+                            SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
                                 clip, @selector(duration));
-                            durationSec = FCPBridge_cmtimeToSeconds(d);
+                            durationSec = SpliceKit_cmtimeToSeconds(d);
                         }
                         info[@"durationSeconds"] = @(durationSec);
 
@@ -12160,7 +12160,7 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
                         double score = hasVideo ? (10.0 + MIN(durationSec, 30.0)) : 3.0;
                         info[@"score"] = @(score);
 
-                        NSString *h = FCPBridge_storeHandle(clip);
+                        NSString *h = SpliceKit_storeHandle(clip);
                         info[@"handle"] = h;
 
                         [analyzedClips addObject:info];
@@ -12188,10 +12188,10 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
             // Step 2: Get timing from song
             id song = nil;
             if (songHandle) {
-                song = FCPBridge_resolveHandle(songHandle);
+                song = SpliceKit_resolveHandle(songHandle);
             }
             if (!song && songUID) {
-                id fmLibrary = FCPBridge_getFlexMusicLibrary();
+                id fmLibrary = SpliceKit_getFlexMusicLibrary();
                 if (fmLibrary) {
                     SEL forUIDSel = NSSelectorFromString(@"songForUID:");
                     if ([fmLibrary respondsToSelector:forUIDSel]) {
@@ -12204,7 +12204,7 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
                 return;
             }
 
-            FCPBridge_CMTime durTime = FCPBridge_cmtimeFromSeconds(montageDuration);
+            SpliceKit_CMTime durTime = SpliceKit_cmtimeFromSeconds(montageDuration);
 
             id rendition = nil;
             id options = @{};
@@ -12212,19 +12212,19 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
             if (ffFlexObj) {
                 SEL optSel = NSSelectorFromString(@"optionsForDuration:");
                 if ([ffFlexObj respondsToSelector:optSel]) {
-                    options = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                    options = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                         (id)ffFlexObj, optSel, durTime) ?: @{};
                 }
             }
             SEL rendSel = NSSelectorFromString(@"renditionForDuration:withOptions:");
             if ([song respondsToSelector:rendSel]) {
-                rendition = ((id (*)(id, SEL, FCPBridge_CMTime, id))objc_msgSend)(
+                rendition = ((id (*)(id, SEL, SpliceKit_CMTime, id))objc_msgSend)(
                     song, rendSel, durTime, options);
             }
             if (!rendition) {
                 SEL rendSel2 = NSSelectorFromString(@"renditionForDuration:");
                 if ([song respondsToSelector:rendSel2]) {
-                    rendition = ((id (*)(id, SEL, FCPBridge_CMTime))objc_msgSend)(
+                    rendition = ((id (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(
                         song, rendSel2, durTime);
                 }
             }
@@ -12237,14 +12237,14 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
             double fittedDuration = montageDuration;
             SEL rendDurSel = NSSelectorFromString(@"duration");
             if ([rendition respondsToSelector:rendDurSel]) {
-                FCPBridge_CMTime rd = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(rendition, rendDurSel);
-                fittedDuration = FCPBridge_cmtimeToSeconds(rd);
+                SpliceKit_CMTime rd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(rendition, rendDurSel);
+                fittedDuration = SpliceKit_cmtimeToSeconds(rd);
                 if (fittedDuration > 0) montageDuration = fittedDuration;
             }
 
             // Extract timing
-            NSString *barId = FCPBridge_flexMusicConstant("FMTimedMetadataIdentifierBar");
-            NSString *beatId = FCPBridge_flexMusicConstant("FMTimedMetadataIdentifierBeat");
+            NSString *barId = SpliceKit_flexMusicConstant("FMTimedMetadataIdentifierBar");
+            NSString *beatId = SpliceKit_flexMusicConstant("FMTimedMetadataIdentifierBeat");
             SEL timedMetaSel = NSSelectorFromString(@"timedMetadataItemsWithIdentifier:");
             BOOL hasTimedMeta = [rendition respondsToSelector:timedMetaSel];
 
@@ -12257,8 +12257,8 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
                 for (id item in (NSArray *)items) {
                     SEL timeSel = NSSelectorFromString(@"time");
                     if ([item respondsToSelector:timeSel]) {
-                        FCPBridge_CMTime t = ((FCPBridge_CMTime (*)(id, SEL))STRET_MSG)(item, timeSel);
-                        double sec = FCPBridge_cmtimeToSeconds(t);
+                        SpliceKit_CMTime t = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, timeSel);
+                        double sec = SpliceKit_cmtimeToSeconds(t);
                         if (sec > 0 && sec < montageDuration) [times addObject:@(sec)];
                     }
                 }
@@ -12340,7 +12340,7 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
 
             // Step 4: Render song to temp file
             NSString *tempSongPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
-                [NSString stringWithFormat:@"fcpbridge_montage_song_%@.m4a",
+                [NSString stringWithFormat:@"splicekit_montage_song_%@.m4a",
                  [[NSUUID UUID] UUIDString]]];
 
             SEL compSel = NSSelectorFromString(@"avCompositionWithAudioMix:includeShortenedOutroFadeOut:");
@@ -12397,11 +12397,11 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
 
             for (NSDictionary *entry in editPlan) {
                 NSString *clipHandle = entry[@"clipHandle"];
-                id clip = clipHandle ? FCPBridge_resolveHandle(clipHandle) : nil;
+                id clip = clipHandle ? SpliceKit_resolveHandle(clipHandle) : nil;
                 NSString *mediaURL = @"";
 
                 if (clip) {
-                    NSString *resolved = FCPBridge_getMediaURLForClip(clip);
+                    NSString *resolved = SpliceKit_getMediaURLForClip(clip);
                     if (resolved) mediaURL = resolved;
                 }
 
@@ -12526,7 +12526,7 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
             [xml appendString:@"</fcpxml>\n"];
 
             NSString *xmlPath = [NSTemporaryDirectory()
-                stringByAppendingPathComponent:@"fcpbridge_montage_auto.fcpxml"];
+                stringByAppendingPathComponent:@"splicekit_montage_auto.fcpxml"];
             NSData *data = [xml dataUsingEncoding:NSUTF8StringEncoding];
             [data writeToFile:xmlPath atomically:YES];
             NSURL *xmlURL = [NSURL fileURLWithPath:xmlPath];
@@ -12564,7 +12564,7 @@ static NSDictionary *FCPBridge_handleMontageAuto(NSDictionary *params) {
 #pragma mark - Debug & Diagnostics
 
 // All known TLK debug UserDefaults keys
-static NSArray *FCPBridge_tlkDebugKeys(void) {
+static NSArray *SpliceKit_tlkDebugKeys(void) {
     return @[
         // Visual overlays
         @"TLKShowItemLaneIndex",
@@ -12608,7 +12608,7 @@ static NSArray *FCPBridge_tlkDebugKeys(void) {
 }
 
 // All known CFPreferences debug keys (integer or bool)
-static NSDictionary *FCPBridge_cfprefsDebugKeys(void) {
+static NSDictionary *SpliceKit_cfprefsDebugKeys(void) {
     return @{
         @"VideoDecoderLogLevelInNLE": @"int",
         @"FrameDropLogLevel": @"int",
@@ -12620,12 +12620,12 @@ static NSDictionary *FCPBridge_cfprefsDebugKeys(void) {
 }
 
 // ProAppSupport log level names
-static NSArray *FCPBridge_logLevelNames(void) {
+static NSArray *SpliceKit_logLevelNames(void) {
     return @[@"trace", @"debug", @"info", @"warning", @"error", @"failure"];
 }
 
 // ProAppSupport log category names (matching PASLogCategory class methods)
-static NSArray *FCPBridge_logCategoryNames(void) {
+static NSArray *SpliceKit_logCategoryNames(void) {
     return @[
         @"dev", @"player", @"sequenceEditor", @"camera", @"inspector",
         @"director", @"voiceover", @"selection", @"network", @"theme",
@@ -12638,7 +12638,7 @@ static NSArray *FCPBridge_logCategoryNames(void) {
 
 // Helper: collect full metadata for a single class
 // Helper: serialize a single method with dladdr info
-static NSDictionary *FCPBridge_serializeMethod(Method m) {
+static NSDictionary *SpliceKit_serializeMethod(Method m) {
     SEL sel = method_getName(m);
     const char *types = method_getTypeEncoding(m);
     IMP imp = method_getImplementation(m);
@@ -12660,7 +12660,7 @@ static NSDictionary *FCPBridge_serializeMethod(Method m) {
 }
 
 // Helper: serialize protocol method declarations
-static NSDictionary *FCPBridge_serializeProtocol(Protocol *proto) {
+static NSDictionary *SpliceKit_serializeProtocol(Protocol *proto) {
     NSMutableDictionary *protoInfo = [NSMutableDictionary dictionary];
     protoInfo[@"name"] = @(protocol_getName(proto));
 
@@ -12720,7 +12720,7 @@ static NSDictionary *FCPBridge_serializeProtocol(Protocol *proto) {
 }
 
 // Helper: parse ivar layout bitmap into array of strong/weak byte indices
-static NSArray *FCPBridge_parseIvarLayout(const uint8_t *layout) {
+static NSArray *SpliceKit_parseIvarLayout(const uint8_t *layout) {
     if (!layout) return @[];
     NSMutableArray *indices = [NSMutableArray array];
     NSUInteger byteIndex = 0;
@@ -12737,7 +12737,7 @@ static NSArray *FCPBridge_parseIvarLayout(const uint8_t *layout) {
     return indices;
 }
 
-static NSDictionary *FCPBridge_classMetadata(Class cls) {
+static NSDictionary *SpliceKit_classMetadata(Class cls) {
     NSString *className = NSStringFromClass(cls);
 
     // Instance methods with dladdr
@@ -12746,7 +12746,7 @@ static NSDictionary *FCPBridge_classMetadata(Class cls) {
     Method *mList = class_copyMethodList(cls, &mCount);
     if (mList) {
         for (unsigned int i = 0; i < mCount; i++) {
-            [instanceMethods addObject:FCPBridge_serializeMethod(mList[i])];
+            [instanceMethods addObject:SpliceKit_serializeMethod(mList[i])];
         }
         free(mList);
     }
@@ -12759,7 +12759,7 @@ static NSDictionary *FCPBridge_classMetadata(Class cls) {
         Method *cmList = class_copyMethodList(metaCls, &cmCount);
         if (cmList) {
             for (unsigned int i = 0; i < cmCount; i++) {
-                [classMethods addObject:FCPBridge_serializeMethod(cmList[i])];
+                [classMethods addObject:SpliceKit_serializeMethod(cmList[i])];
             }
             free(cmList);
         }
@@ -12786,8 +12786,8 @@ static NSDictionary *FCPBridge_classMetadata(Class cls) {
     // Ivar layout bitmaps (strong/weak reference tracking)
     const uint8_t *strongLayout = class_getIvarLayout(cls);
     const uint8_t *weakLayout = class_getWeakIvarLayout(cls);
-    NSArray *strongIndices = FCPBridge_parseIvarLayout(strongLayout);
-    NSArray *weakIndices = FCPBridge_parseIvarLayout(weakLayout);
+    NSArray *strongIndices = SpliceKit_parseIvarLayout(strongLayout);
+    NSArray *weakIndices = SpliceKit_parseIvarLayout(weakLayout);
 
     // Properties with parsed attributes
     NSMutableArray *properties = [NSMutableArray array];
@@ -12838,7 +12838,7 @@ static NSDictionary *FCPBridge_classMetadata(Class cls) {
     Protocol * __unsafe_unretained *prList = class_copyProtocolList(cls, &prCount);
     if (prList) {
         for (unsigned int i = 0; i < prCount; i++) {
-            [protocols addObject:FCPBridge_serializeProtocol(prList[i])];
+            [protocols addObject:SpliceKit_serializeProtocol(prList[i])];
         }
         free(prList);
     }
@@ -12867,7 +12867,7 @@ static NSDictionary *FCPBridge_classMetadata(Class cls) {
     };
 }
 
-static NSDictionary *FCPBridge_handleDumpRuntimeMetadata(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDumpRuntimeMetadata(NSDictionary *params) {
     NSString *binaryFilter = params[@"binary"]; // optional: filter to one binary
     NSArray *includeFields = params[@"include"]; // optional: subset of fields
     BOOL classesOnly = [params[@"classesOnly"] boolValue]; // just class names, no details
@@ -12921,7 +12921,7 @@ static NSDictionary *FCPBridge_handleDumpRuntimeMetadata(NSDictionary *params) {
                 @try {
                     Class cls = objc_getClass(classNames[j]);
                     if (!cls) continue;
-                    NSDictionary *meta = FCPBridge_classMetadata(cls);
+                    NSDictionary *meta = SpliceKit_classMetadata(cls);
                     [classData addObject:meta];
                 } @catch (NSException *e) {
                     // Skip problematic classes
@@ -12951,7 +12951,7 @@ static NSDictionary *FCPBridge_handleDumpRuntimeMetadata(NSDictionary *params) {
 }
 
 // Lightweight: just list loaded images with addresses/slides (no class enumeration)
-static NSDictionary *FCPBridge_handleListLoadedImages(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleListLoadedImages(NSDictionary *params) {
     NSString *filter = params[@"filter"];
     NSMutableArray *images = [NSMutableArray array];
 
@@ -12993,7 +12993,7 @@ static NSDictionary *FCPBridge_handleListLoadedImages(NSDictionary *params) {
 #pragma mark - Mach-O Section & Symbol Table Export
 
 // Enumerate ObjC selector references, class references, and categories for an image
-static NSDictionary *FCPBridge_handleGetImageSections(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleGetImageSections(NSDictionary *params) {
     NSString *binaryName = params[@"binary"];
     if (!binaryName) return @{@"error": @"binary parameter required"};
 
@@ -13089,7 +13089,7 @@ static NSDictionary *FCPBridge_handleGetImageSections(NSDictionary *params) {
 }
 
 // Enumerate exported symbols from an image's symbol table
-static NSDictionary *FCPBridge_handleGetImageSymbols(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleGetImageSymbols(NSDictionary *params) {
     NSString *binaryName = params[@"binary"];
     if (!binaryName) return @{@"error": @"binary parameter required"};
     NSString *filter = params[@"filter"]; // optional name filter
@@ -13187,7 +13187,7 @@ static NSDictionary *FCPBridge_handleGetImageSymbols(NSDictionary *params) {
 }
 
 // Enumerate notification name constants from exported symbols
-static NSDictionary *FCPBridge_handleGetNotificationNames(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleGetNotificationNames(NSDictionary *params) {
     NSString *binaryFilter = params[@"binary"]; // optional
     NSMutableArray *notifications = [NSMutableArray array];
 
@@ -13257,18 +13257,18 @@ static NSDictionary *FCPBridge_handleGetNotificationNames(NSDictionary *params) 
     return @{@"notifications": notifications, @"count": @(notifications.count)};
 }
 
-static NSDictionary *FCPBridge_handleDebugGetConfig(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDebugGetConfig(NSDictionary *params) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 
     // 1) TLK debug flags
     NSMutableDictionary *tlkFlags = [NSMutableDictionary dictionary];
-    for (NSString *key in FCPBridge_tlkDebugKeys()) {
+    for (NSString *key in SpliceKit_tlkDebugKeys()) {
         tlkFlags[key] = @([defaults boolForKey:key]);
     }
 
     // 2) CFPreferences debug flags
     NSMutableDictionary *cfFlags = [NSMutableDictionary dictionary];
-    NSDictionary *cfKeys = FCPBridge_cfprefsDebugKeys();
+    NSDictionary *cfKeys = SpliceKit_cfprefsDebugKeys();
     for (NSString *key in cfKeys) {
         Boolean exists = false;
         if ([cfKeys[key] isEqualToString:@"int"]) {
@@ -13287,7 +13287,7 @@ static NSDictionary *FCPBridge_handleDebugGetConfig(NSDictionary *params) {
     id logLevelVal = [defaults objectForKey:@"LogLevel"];
     if (logLevelVal) {
         NSInteger level = [logLevelVal integerValue];
-        NSArray *names = FCPBridge_logLevelNames();
+        NSArray *names = SpliceKit_logLevelNames();
         logSettings[@"LogLevel"] = (level >= 0 && level < (NSInteger)names.count)
             ? names[level] : [NSString stringWithFormat:@"%ld", (long)level];
     } else {
@@ -13315,12 +13315,12 @@ static NSDictionary *FCPBridge_handleDebugGetConfig(NSDictionary *params) {
         @"cfpreferences_debug": cfFlags,
         @"proapp_log": logSettings,
         @"fcp_flags": fcpFlags,
-        @"available_log_levels": FCPBridge_logLevelNames(),
-        @"available_log_categories": FCPBridge_logCategoryNames(),
+        @"available_log_levels": SpliceKit_logLevelNames(),
+        @"available_log_categories": SpliceKit_logCategoryNames(),
     };
 }
 
-static NSDictionary *FCPBridge_handleDebugSetConfig(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDebugSetConfig(NSDictionary *params) {
     NSString *key = params[@"key"];
     id value = params[@"value"];
 
@@ -13331,7 +13331,7 @@ static NSDictionary *FCPBridge_handleDebugSetConfig(NSDictionary *params) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 
     // Check if it's a TLK key
-    NSArray *tlkKeys = FCPBridge_tlkDebugKeys();
+    NSArray *tlkKeys = SpliceKit_tlkDebugKeys();
     if ([tlkKeys containsObject:key]) {
         BOOL boolVal = [value boolValue];
         [defaults setBool:boolVal forKey:key];
@@ -13348,7 +13348,7 @@ static NSDictionary *FCPBridge_handleDebugSetConfig(NSDictionary *params) {
     }
 
     // Check if it's a CFPreferences key
-    NSDictionary *cfKeys = FCPBridge_cfprefsDebugKeys();
+    NSDictionary *cfKeys = SpliceKit_cfprefsDebugKeys();
     if (cfKeys[key]) {
         if ([cfKeys[key] isEqualToString:@"int"]) {
             CFPreferencesSetAppValue(
@@ -13368,7 +13368,7 @@ static NSDictionary *FCPBridge_handleDebugSetConfig(NSDictionary *params) {
 
     // Check if it's a ProAppSupport log key
     if ([key isEqualToString:@"LogLevel"]) {
-        NSArray *names = FCPBridge_logLevelNames();
+        NSArray *names = SpliceKit_logLevelNames();
         NSInteger level = -1;
         if ([value isKindOfClass:[NSString class]]) {
             level = [names indexOfObject:[value lowercaseString]];
@@ -13426,13 +13426,13 @@ static NSDictionary *FCPBridge_handleDebugSetConfig(NSDictionary *params) {
              @"note": @"Set as custom UserDefaults key"};
 }
 
-static NSDictionary *FCPBridge_handleDebugResetConfig(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDebugResetConfig(NSDictionary *params) {
     NSString *scope = params[@"scope"] ?: @"all";
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSMutableArray *removedKeys = [NSMutableArray array];
 
     if ([scope isEqualToString:@"tlk"] || [scope isEqualToString:@"all"]) {
-        for (NSString *key in FCPBridge_tlkDebugKeys()) {
+        for (NSString *key in SpliceKit_tlkDebugKeys()) {
             [defaults removeObjectForKey:key];
             [removedKeys addObject:key];
         }
@@ -13444,7 +13444,7 @@ static NSDictionary *FCPBridge_handleDebugResetConfig(NSDictionary *params) {
     }
 
     if ([scope isEqualToString:@"cfprefs"] || [scope isEqualToString:@"all"]) {
-        for (NSString *key in FCPBridge_cfprefsDebugKeys()) {
+        for (NSString *key in SpliceKit_cfprefsDebugKeys()) {
             CFPreferencesSetAppValue((__bridge CFStringRef)key, NULL, kCFPreferencesCurrentApplication);
             [removedKeys addObject:key];
         }
@@ -13466,7 +13466,7 @@ static NSDictionary *FCPBridge_handleDebugResetConfig(NSDictionary *params) {
 // Framerate monitor state
 static id sFramerateMonitor = nil;
 
-static NSDictionary *FCPBridge_handleDebugStartFramerateMonitor(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDebugStartFramerateMonitor(NSDictionary *params) {
     __block NSDictionary *result = nil;
     float interval = [params[@"interval"] floatValue];
     if (interval <= 0) interval = 2.0;
@@ -13507,7 +13507,7 @@ static NSDictionary *FCPBridge_handleDebugStartFramerateMonitor(NSDictionary *pa
     return result ?: @{@"error": @"Failed to start framerate monitor"};
 }
 
-static NSDictionary *FCPBridge_handleDebugStopFramerateMonitor(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDebugStopFramerateMonitor(NSDictionary *params) {
     __block NSDictionary *result = nil;
     dispatch_sync(dispatch_get_main_queue(), ^{
         if (!sFramerateMonitor) {
@@ -13523,7 +13523,7 @@ static NSDictionary *FCPBridge_handleDebugStopFramerateMonitor(NSDictionary *par
     return result;
 }
 
-static NSDictionary *FCPBridge_handleDebugEnablePreset(NSDictionary *params) {
+static NSDictionary *SpliceKit_handleDebugEnablePreset(NSDictionary *params) {
     NSString *preset = params[@"preset"];
     if (!preset) {
         return @{@"error": @"'preset' parameter required",
@@ -13573,12 +13573,12 @@ static NSDictionary *FCPBridge_handleDebugEnablePreset(NSDictionary *params) {
         setKey(@"EnableScheduledReadAudioLogging", YES);
     } else if ([preset isEqualToString:@"all_off"]) {
         // Turn off all TLK visual/logging flags
-        for (NSString *key in FCPBridge_tlkDebugKeys()) {
+        for (NSString *key in SpliceKit_tlkDebugKeys()) {
             [defaults removeObjectForKey:key];
             [changed addObject:@{@"key": key, @"value": @"removed"}];
         }
         // Reset CFPreferences
-        for (NSString *key in FCPBridge_cfprefsDebugKeys()) {
+        for (NSString *key in SpliceKit_cfprefsDebugKeys()) {
             CFPreferencesSetAppValue((__bridge CFStringRef)key, NULL, kCFPreferencesCurrentApplication);
             [changed addObject:@{@"key": key, @"value": @"removed"}];
         }
@@ -13607,7 +13607,7 @@ static NSDictionary *FCPBridge_handleDebugEnablePreset(NSDictionary *params) {
 
 #pragma mark - Request Dispatcher
 
-static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
+static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
     NSString *method = request[@"method"];
     NSDictionary *params = request[@"params"] ?: @{};
 
@@ -13616,253 +13616,253 @@ static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
     }
 
     // Lazily install effect-drag swizzles on first RPC call
-    FCPBridge_installEffectDragSwizzlesNow();
+    SpliceKit_installEffectDragSwizzlesNow();
 
     NSDictionary *result = nil;
 
     // system.* namespace
     if ([method isEqualToString:@"system.version"]) {
-        result = FCPBridge_handleSystemVersion(params);
+        result = SpliceKit_handleSystemVersion(params);
     } else if ([method isEqualToString:@"system.getClasses"]) {
-        result = FCPBridge_handleSystemGetClasses(params);
+        result = SpliceKit_handleSystemGetClasses(params);
     } else if ([method isEqualToString:@"system.getMethods"]) {
-        result = FCPBridge_handleSystemGetMethods(params);
+        result = SpliceKit_handleSystemGetMethods(params);
     } else if ([method isEqualToString:@"system.callMethod"]) {
-        result = FCPBridge_handleSystemCallMethod(params);
+        result = SpliceKit_handleSystemCallMethod(params);
     } else if ([method isEqualToString:@"system.swizzle"]) {
-        result = FCPBridge_handleSystemSwizzle(params);
+        result = SpliceKit_handleSystemSwizzle(params);
     } else if ([method isEqualToString:@"system.getProperties"]) {
-        result = FCPBridge_handleSystemGetProperties(params);
+        result = SpliceKit_handleSystemGetProperties(params);
     } else if ([method isEqualToString:@"system.getProtocols"]) {
-        result = FCPBridge_handleSystemGetProtocols(params);
+        result = SpliceKit_handleSystemGetProtocols(params);
     } else if ([method isEqualToString:@"system.getSuperchain"]) {
-        result = FCPBridge_handleSystemGetSuperchain(params);
+        result = SpliceKit_handleSystemGetSuperchain(params);
     } else if ([method isEqualToString:@"system.getIvars"]) {
-        result = FCPBridge_handleSystemGetIvars(params);
+        result = SpliceKit_handleSystemGetIvars(params);
     } else if ([method isEqualToString:@"system.callMethodWithArgs"]) {
-        result = FCPBridge_handleCallMethodWithArgs(params);
+        result = SpliceKit_handleCallMethodWithArgs(params);
     }
     // object.* namespace
     else if ([method isEqualToString:@"object.get"]) {
-        result = FCPBridge_handleObjectGet(params);
+        result = SpliceKit_handleObjectGet(params);
     } else if ([method isEqualToString:@"object.release"]) {
-        result = FCPBridge_handleObjectRelease(params);
+        result = SpliceKit_handleObjectRelease(params);
     } else if ([method isEqualToString:@"object.list"]) {
-        result = FCPBridge_handleObjectList(params);
+        result = SpliceKit_handleObjectList(params);
     } else if ([method isEqualToString:@"object.getProperty"]) {
-        result = FCPBridge_handleGetProperty(params);
+        result = SpliceKit_handleGetProperty(params);
     } else if ([method isEqualToString:@"object.setProperty"]) {
-        result = FCPBridge_handleSetProperty(params);
+        result = SpliceKit_handleSetProperty(params);
     }
     // timeline.* namespace
     else if ([method isEqualToString:@"timeline.action"]) {
-        result = FCPBridge_handleTimelineAction(params);
+        result = SpliceKit_handleTimelineAction(params);
     } else if ([method isEqualToString:@"timeline.directAction"]) {
-        result = FCPBridge_handleDirectTimelineAction(params);
+        result = SpliceKit_handleDirectTimelineAction(params);
     } else if ([method isEqualToString:@"timeline.getState"]) {
-        result = FCPBridge_handleTimelineGetState(params);
+        result = SpliceKit_handleTimelineGetState(params);
     } else if ([method isEqualToString:@"timeline.getDetailedState"]) {
-        result = FCPBridge_handleTimelineGetDetailedState(params);
+        result = SpliceKit_handleTimelineGetDetailedState(params);
     } else if ([method isEqualToString:@"timeline.setRange"]) {
-        result = FCPBridge_handleSetRange(params);
+        result = SpliceKit_handleSetRange(params);
     } else if ([method isEqualToString:@"timeline.addMarkers"]) {
-        result = FCPBridge_handleBatchAddMarkers(params);
+        result = SpliceKit_handleBatchAddMarkers(params);
     } else if ([method isEqualToString:@"timeline.batchExport"]) {
-        result = FCPBridge_handleBatchExport(params);
+        result = SpliceKit_handleBatchExport(params);
     }
     // playback.* namespace
     else if ([method isEqualToString:@"playback.action"]) {
-        result = FCPBridge_handlePlayback(params);
+        result = SpliceKit_handlePlayback(params);
     } else if ([method isEqualToString:@"playback.seekToTime"]) {
-        result = FCPBridge_handlePlaybackSeek(params);
+        result = SpliceKit_handlePlaybackSeek(params);
     } else if ([method isEqualToString:@"playback.getPosition"]) {
-        result = FCPBridge_handlePlaybackGetPosition(params);
+        result = SpliceKit_handlePlaybackGetPosition(params);
     }
     // fcpxml.* namespace
     else if ([method isEqualToString:@"fcpxml.import"]) {
-        result = FCPBridge_handleFCPXMLImport(params);
+        result = SpliceKit_handleFCPXMLImport(params);
     } else if ([method isEqualToString:@"fcpxml.pasteImport"]) {
-        result = FCPBridge_handlePasteboardImportXML(params);
+        result = SpliceKit_handlePasteboardImportXML(params);
     }
     // effects.* namespace
     else if ([method isEqualToString:@"effects.list"]) {
-        result = FCPBridge_handleEffectList(params);
+        result = SpliceKit_handleEffectList(params);
     } else if ([method isEqualToString:@"effects.getClipEffects"]) {
-        result = FCPBridge_handleGetClipEffects(params);
+        result = SpliceKit_handleGetClipEffects(params);
     }
     // transcript.* namespace
     else if ([method isEqualToString:@"transcript.open"]) {
-        result = FCPBridge_handleTranscriptOpen(params);
+        result = SpliceKit_handleTranscriptOpen(params);
     } else if ([method isEqualToString:@"transcript.close"]) {
-        result = FCPBridge_handleTranscriptClose(params);
+        result = SpliceKit_handleTranscriptClose(params);
     } else if ([method isEqualToString:@"transcript.getState"]) {
-        result = FCPBridge_handleTranscriptGetState(params);
+        result = SpliceKit_handleTranscriptGetState(params);
     } else if ([method isEqualToString:@"transcript.deleteWords"]) {
-        result = FCPBridge_handleTranscriptDeleteWords(params);
+        result = SpliceKit_handleTranscriptDeleteWords(params);
     } else if ([method isEqualToString:@"transcript.moveWords"]) {
-        result = FCPBridge_handleTranscriptMoveWords(params);
+        result = SpliceKit_handleTranscriptMoveWords(params);
     } else if ([method isEqualToString:@"transcript.search"]) {
-        result = FCPBridge_handleTranscriptSearch(params);
+        result = SpliceKit_handleTranscriptSearch(params);
     } else if ([method isEqualToString:@"transcript.deleteSilences"]) {
-        result = FCPBridge_handleTranscriptDeleteSilences(params);
+        result = SpliceKit_handleTranscriptDeleteSilences(params);
     } else if ([method isEqualToString:@"transcript.setSilenceThreshold"]) {
-        result = FCPBridge_handleTranscriptSetSilenceThreshold(params);
+        result = SpliceKit_handleTranscriptSetSilenceThreshold(params);
     } else if ([method isEqualToString:@"transcript.setSpeaker"]) {
-        result = FCPBridge_handleTranscriptSetSpeaker(params);
+        result = SpliceKit_handleTranscriptSetSpeaker(params);
     } else if ([method isEqualToString:@"transcript.setEngine"]) {
-        result = FCPBridge_handleTranscriptSetEngine(params);
+        result = SpliceKit_handleTranscriptSetEngine(params);
     }
     // scene detection
     else if ([method isEqualToString:@"scene.detect"]) {
-        result = FCPBridge_handleDetectSceneChanges(params);
+        result = SpliceKit_handleDetectSceneChanges(params);
     }
     // effects browse/apply
     else if ([method isEqualToString:@"effects.listAvailable"]) {
-        result = FCPBridge_handleEffectsListAvailable(params);
+        result = SpliceKit_handleEffectsListAvailable(params);
     } else if ([method isEqualToString:@"effects.apply"]) {
-        result = FCPBridge_handleEffectsApply(params);
+        result = SpliceKit_handleEffectsApply(params);
     } else if ([method isEqualToString:@"titles.insert"]) {
-        result = FCPBridge_handleTitleInsert(params);
+        result = SpliceKit_handleTitleInsert(params);
     } else if ([method isEqualToString:@"stabilize.subject"]) {
-        result = FCPBridge_handleSubjectStabilize(params);
+        result = SpliceKit_handleSubjectStabilize(params);
     }
     // transitions.* namespace
     else if ([method isEqualToString:@"transitions.list"]) {
-        result = FCPBridge_handleTransitionsList(params);
+        result = SpliceKit_handleTransitionsList(params);
     } else if ([method isEqualToString:@"transitions.apply"]) {
-        result = FCPBridge_handleTransitionsApply(params);
+        result = SpliceKit_handleTransitionsApply(params);
     }
     // command.* namespace (command palette)
     else if ([method isEqualToString:@"command.show"]) {
-        result = FCPBridge_handleCommandShow(params);
+        result = SpliceKit_handleCommandShow(params);
     } else if ([method isEqualToString:@"command.hide"]) {
-        result = FCPBridge_handleCommandHide(params);
+        result = SpliceKit_handleCommandHide(params);
     } else if ([method isEqualToString:@"command.search"]) {
-        result = FCPBridge_handleCommandSearch(params);
+        result = SpliceKit_handleCommandSearch(params);
     } else if ([method isEqualToString:@"command.execute"]) {
-        result = FCPBridge_handleCommandExecute(params);
+        result = SpliceKit_handleCommandExecute(params);
     } else if ([method isEqualToString:@"command.ai"]) {
-        result = FCPBridge_handleCommandAI(params);
+        result = SpliceKit_handleCommandAI(params);
     }
     // browser.* namespace
     else if ([method isEqualToString:@"browser.listClips"]) {
-        result = FCPBridge_handleBrowserListClips(params);
+        result = SpliceKit_handleBrowserListClips(params);
     } else if ([method isEqualToString:@"browser.appendClip"]) {
-        result = FCPBridge_handleBrowserAppendClip(params);
+        result = SpliceKit_handleBrowserAppendClip(params);
     }
     // menu.* namespace
     else if ([method isEqualToString:@"menu.execute"]) {
-        result = FCPBridge_handleMenuExecute(params);
+        result = SpliceKit_handleMenuExecute(params);
     } else if ([method isEqualToString:@"menu.list"]) {
-        result = FCPBridge_handleMenuList(params);
+        result = SpliceKit_handleMenuList(params);
     }
     // inspector.* namespace
     else if ([method isEqualToString:@"inspector.get"]) {
-        result = FCPBridge_handleInspectorGet(params);
+        result = SpliceKit_handleInspectorGet(params);
     } else if ([method isEqualToString:@"inspector.set"]) {
-        result = FCPBridge_handleInspectorSet(params);
+        result = SpliceKit_handleInspectorSet(params);
     }
     // view.* namespace
     else if ([method isEqualToString:@"view.toggle"]) {
-        result = FCPBridge_handleViewToggle(params);
+        result = SpliceKit_handleViewToggle(params);
     } else if ([method isEqualToString:@"view.workspace"]) {
-        result = FCPBridge_handleWorkspace(params);
+        result = SpliceKit_handleWorkspace(params);
     }
     // roles.* namespace
     else if ([method isEqualToString:@"roles.assign"]) {
-        result = FCPBridge_handleRolesAssign(params);
+        result = SpliceKit_handleRolesAssign(params);
     }
     // share.* namespace
     else if ([method isEqualToString:@"share.export"]) {
-        result = FCPBridge_handleShareExport(params);
+        result = SpliceKit_handleShareExport(params);
     }
     // project.* namespace
     else if ([method isEqualToString:@"project.create"]) {
-        result = FCPBridge_handleProjectCreate(params);
+        result = SpliceKit_handleProjectCreate(params);
     } else if ([method isEqualToString:@"project.createEvent"]) {
-        result = FCPBridge_handleEventCreate(params);
+        result = SpliceKit_handleEventCreate(params);
     } else if ([method isEqualToString:@"project.createLibrary"]) {
-        result = FCPBridge_handleLibraryCreate(params);
+        result = SpliceKit_handleLibraryCreate(params);
     }
     // tool.* namespace
     else if ([method isEqualToString:@"tool.select"]) {
-        result = FCPBridge_handleToolSelect(params);
+        result = SpliceKit_handleToolSelect(params);
     }
     // dialog.* namespace
     else if ([method isEqualToString:@"dialog.detect"]) {
-        result = FCPBridge_handleDialogDetect(params);
+        result = SpliceKit_handleDialogDetect(params);
     } else if ([method isEqualToString:@"dialog.click"]) {
-        result = FCPBridge_handleDialogClick(params);
+        result = SpliceKit_handleDialogClick(params);
     } else if ([method isEqualToString:@"dialog.fill"]) {
-        result = FCPBridge_handleDialogFill(params);
+        result = SpliceKit_handleDialogFill(params);
     } else if ([method isEqualToString:@"dialog.checkbox"]) {
-        result = FCPBridge_handleDialogCheckbox(params);
+        result = SpliceKit_handleDialogCheckbox(params);
     } else if ([method isEqualToString:@"dialog.popup"]) {
-        result = FCPBridge_handleDialogPopup(params);
+        result = SpliceKit_handleDialogPopup(params);
     } else if ([method isEqualToString:@"dialog.dismiss"]) {
-        result = FCPBridge_handleDialogDismiss(params);
+        result = SpliceKit_handleDialogDismiss(params);
     }
     // viewer.* namespace
     else if ([method isEqualToString:@"viewer.getZoom"]) {
-        result = FCPBridge_handleViewerGetZoom(params);
+        result = SpliceKit_handleViewerGetZoom(params);
     } else if ([method isEqualToString:@"viewer.setZoom"]) {
-        result = FCPBridge_handleViewerSetZoom(params);
+        result = SpliceKit_handleViewerSetZoom(params);
     }
     // options.* namespace
     else if ([method isEqualToString:@"options.get"]) {
-        result = FCPBridge_handleOptionsGet(params);
+        result = SpliceKit_handleOptionsGet(params);
     } else if ([method isEqualToString:@"options.set"]) {
-        result = FCPBridge_handleOptionsSet(params);
+        result = SpliceKit_handleOptionsSet(params);
     }
     // beats.* namespace
     else if ([method isEqualToString:@"beats.detect"]) {
-        result = FCPBridge_handleBeatsDetect(params);
+        result = SpliceKit_handleBeatsDetect(params);
     }
     // flexmusic.* namespace
     else if ([method isEqualToString:@"flexmusic.listSongs"]) {
-        result = FCPBridge_handleFlexMusicListSongs(params);
+        result = SpliceKit_handleFlexMusicListSongs(params);
     } else if ([method isEqualToString:@"flexmusic.getSong"]) {
-        result = FCPBridge_handleFlexMusicGetSong(params);
+        result = SpliceKit_handleFlexMusicGetSong(params);
     } else if ([method isEqualToString:@"flexmusic.getTiming"]) {
-        result = FCPBridge_handleFlexMusicGetTiming(params);
+        result = SpliceKit_handleFlexMusicGetTiming(params);
     } else if ([method isEqualToString:@"flexmusic.renderToFile"]) {
-        result = FCPBridge_handleFlexMusicRender(params);
+        result = SpliceKit_handleFlexMusicRender(params);
     } else if ([method isEqualToString:@"flexmusic.addToTimeline"]) {
-        result = FCPBridge_handleFlexMusicAddToTimeline(params);
+        result = SpliceKit_handleFlexMusicAddToTimeline(params);
     }
     // montage.* namespace
     else if ([method isEqualToString:@"montage.analyzeClips"]) {
-        result = FCPBridge_handleMontageAnalyze(params);
+        result = SpliceKit_handleMontageAnalyze(params);
     } else if ([method isEqualToString:@"montage.planEdit"]) {
-        result = FCPBridge_handleMontagePlan(params);
+        result = SpliceKit_handleMontagePlan(params);
     } else if ([method isEqualToString:@"montage.assemble"]) {
-        result = FCPBridge_handleMontageAssemble(params);
+        result = SpliceKit_handleMontageAssemble(params);
     } else if ([method isEqualToString:@"montage.auto"]) {
-        result = FCPBridge_handleMontageAuto(params);
+        result = SpliceKit_handleMontageAuto(params);
     }
     // debug.* namespace
     else if ([method isEqualToString:@"debug.getConfig"]) {
-        result = FCPBridge_handleDebugGetConfig(params);
+        result = SpliceKit_handleDebugGetConfig(params);
     } else if ([method isEqualToString:@"debug.setConfig"]) {
-        result = FCPBridge_handleDebugSetConfig(params);
+        result = SpliceKit_handleDebugSetConfig(params);
     } else if ([method isEqualToString:@"debug.resetConfig"]) {
-        result = FCPBridge_handleDebugResetConfig(params);
+        result = SpliceKit_handleDebugResetConfig(params);
     } else if ([method isEqualToString:@"debug.enablePreset"]) {
-        result = FCPBridge_handleDebugEnablePreset(params);
+        result = SpliceKit_handleDebugEnablePreset(params);
     } else if ([method isEqualToString:@"debug.startFramerateMonitor"]) {
-        result = FCPBridge_handleDebugStartFramerateMonitor(params);
+        result = SpliceKit_handleDebugStartFramerateMonitor(params);
     } else if ([method isEqualToString:@"debug.stopFramerateMonitor"]) {
-        result = FCPBridge_handleDebugStopFramerateMonitor(params);
+        result = SpliceKit_handleDebugStopFramerateMonitor(params);
     } else if ([method isEqualToString:@"debug.dumpRuntimeMetadata"]) {
-        result = FCPBridge_handleDumpRuntimeMetadata(params);
+        result = SpliceKit_handleDumpRuntimeMetadata(params);
     } else if ([method isEqualToString:@"debug.listLoadedImages"]) {
-        result = FCPBridge_handleListLoadedImages(params);
+        result = SpliceKit_handleListLoadedImages(params);
     } else if ([method isEqualToString:@"debug.getImageSections"]) {
-        result = FCPBridge_handleGetImageSections(params);
+        result = SpliceKit_handleGetImageSections(params);
     } else if ([method isEqualToString:@"debug.getImageSymbols"]) {
-        result = FCPBridge_handleGetImageSymbols(params);
+        result = SpliceKit_handleGetImageSymbols(params);
     } else if ([method isEqualToString:@"debug.getNotificationNames"]) {
-        result = FCPBridge_handleGetNotificationNames(params);
+        result = SpliceKit_handleGetNotificationNames(params);
     }
     else {
         return @{@"error": @{@"code": @(-32601), @"message":
@@ -13878,8 +13878,8 @@ static NSDictionary *FCPBridge_handleRequest(NSDictionary *request) {
 
 #pragma mark - Client Handler
 
-static void FCPBridge_handleClient(int clientFd) {
-    FCPBridge_log(@"Client connected (fd=%d)", clientFd);
+static void SpliceKit_handleClient(int clientFd) {
+    SpliceKit_log(@"Client connected (fd=%d)", clientFd);
 
     dispatch_async(sClientQueue, ^{
         [sConnectedClients addObject:@(clientFd)];
@@ -13912,14 +13912,14 @@ static void FCPBridge_handleClient(int clientFd) {
                                        @"message": @"Parse error"};
             } else {
                 @try {
-                    NSDictionary *result = FCPBridge_handleRequest(request);
+                    NSDictionary *result = SpliceKit_handleRequest(request);
                     if (result[@"error"]) {
                         response[@"error"] = result[@"error"];
                     } else {
                         response[@"result"] = result[@"result"];
                     }
                 } @catch (NSException *exception) {
-                    FCPBridge_log(@"Exception handling request: %@ - %@",
+                    SpliceKit_log(@"Exception handling request: %@ - %@",
                                   exception.name, exception.reason);
                     response[@"error"] = @{
                         @"code": @(-32000),
@@ -13939,7 +13939,7 @@ static void FCPBridge_handleClient(int clientFd) {
         }
     }
 
-    FCPBridge_log(@"Client disconnected (fd=%d)", clientFd);
+    SpliceKit_log(@"Client disconnected (fd=%d)", clientFd);
     dispatch_async(sClientQueue, ^{
         [sConnectedClients removeObject:@(clientFd)];
     });
@@ -13948,14 +13948,14 @@ static void FCPBridge_handleClient(int clientFd) {
 
 #pragma mark - Server
 
-void FCPBridge_startControlServer(void) {
-    sClientQueue = dispatch_queue_create("com.fcpbridge.clients", DISPATCH_QUEUE_SERIAL);
+void SpliceKit_startControlServer(void) {
+    sClientQueue = dispatch_queue_create("com.splicekit.clients", DISPATCH_QUEUE_SERIAL);
     sConnectedClients = [NSMutableArray array];
 
     // Use TCP on localhost -- sandbox allows network.server entitlement
     int serverFd = socket(AF_INET, SOCK_STREAM, 0);
     if (serverFd < 0) {
-        FCPBridge_log(@"ERROR: Failed to create TCP socket: %s", strerror(errno));
+        SpliceKit_log(@"ERROR: Failed to create TCP socket: %s", strerror(errno));
         return;
     }
 
@@ -13967,16 +13967,16 @@ void FCPBridge_startControlServer(void) {
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);  // 127.0.0.1 only
-    addr.sin_port = htons(FCPBRIDGE_TCP_PORT);
+    addr.sin_port = htons(SPLICEKIT_TCP_PORT);
 
     if (bind(serverFd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        FCPBridge_log(@"ERROR: Failed to bind TCP port %d: %s", FCPBRIDGE_TCP_PORT, strerror(errno));
+        SpliceKit_log(@"ERROR: Failed to bind TCP port %d: %s", SPLICEKIT_TCP_PORT, strerror(errno));
         close(serverFd);
         return;
     }
 
     if (listen(serverFd, 5) < 0) {
-        FCPBridge_log(@"ERROR: Failed to listen: %s", strerror(errno));
+        SpliceKit_log(@"ERROR: Failed to listen: %s", strerror(errno));
         close(serverFd);
         return;
     }
@@ -13985,9 +13985,9 @@ void FCPBridge_startControlServer(void) {
 
     sServerFd = serverFd;
 
-    FCPBridge_log(@"================================================");
-    FCPBridge_log(@"Control server listening on 127.0.0.1:%d", FCPBRIDGE_TCP_PORT);
-    FCPBridge_log(@"================================================");
+    SpliceKit_log(@"================================================");
+    SpliceKit_log(@"Control server listening on 127.0.0.1:%d", SPLICEKIT_TCP_PORT);
+    SpliceKit_log(@"================================================");
 
     // Use dispatch_source for accepting connections instead of a blocking loop.
     // This lets the thread exit naturally and won't block app termination.
@@ -13999,14 +13999,14 @@ void FCPBridge_startControlServer(void) {
         int clientFd = accept(serverFd, NULL, NULL);
         if (clientFd < 0) return;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            FCPBridge_handleClient(clientFd);
+            SpliceKit_handleClient(clientFd);
         });
     });
 
     dispatch_source_set_cancel_handler(acceptSource, ^{
         close(serverFd);
         sServerFd = -1;
-        FCPBridge_log(@"Server socket closed");
+        SpliceKit_log(@"Server socket closed");
     });
 
     dispatch_resume(acceptSource);
@@ -14015,7 +14015,7 @@ void FCPBridge_startControlServer(void) {
     [[NSNotificationCenter defaultCenter]
         addObserverForName:NSApplicationWillTerminateNotification
         object:nil queue:nil usingBlock:^(NSNotification *note) {
-            FCPBridge_log(@"App terminating — cancelling server");
+            SpliceKit_log(@"App terminating — cancelling server");
             dispatch_source_cancel(acceptSource);
         }];
 }

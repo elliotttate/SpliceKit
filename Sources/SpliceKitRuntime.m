@@ -1,37 +1,37 @@
 //
-//  FCPBridgeRuntime.m
+//  SpliceKitRuntime.m
 //  ObjC runtime access utilities - class discovery, method introspection
 //
 
-#import "FCPBridge.h"
+#import "SpliceKit.h"
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 
 #pragma mark - Safe Message Sending
 
-id FCPBridge_sendMsg(id target, SEL selector) {
+id SpliceKit_sendMsg(id target, SEL selector) {
     if (!target) return nil;
     return ((id (*)(id, SEL))objc_msgSend)(target, selector);
 }
 
-id FCPBridge_sendMsg1(id target, SEL selector, id arg1) {
+id SpliceKit_sendMsg1(id target, SEL selector, id arg1) {
     if (!target) return nil;
     return ((id (*)(id, SEL, id))objc_msgSend)(target, selector, arg1);
 }
 
-id FCPBridge_sendMsg2(id target, SEL selector, id arg1, id arg2) {
+id SpliceKit_sendMsg2(id target, SEL selector, id arg1, id arg2) {
     if (!target) return nil;
     return ((id (*)(id, SEL, id, id))objc_msgSend)(target, selector, arg1, arg2);
 }
 
-BOOL FCPBridge_sendMsgBool(id target, SEL selector) {
+BOOL SpliceKit_sendMsgBool(id target, SEL selector) {
     if (!target) return NO;
     return ((BOOL (*)(id, SEL))objc_msgSend)(target, selector);
 }
 
 #pragma mark - Main Thread Dispatch
 
-void FCPBridge_executeOnMainThread(dispatch_block_t block) {
+void SpliceKit_executeOnMainThread(dispatch_block_t block) {
     if ([NSThread isMainThread]) {
         block();
     } else {
@@ -50,19 +50,19 @@ void FCPBridge_executeOnMainThread(dispatch_block_t block) {
         long waitResult = dispatch_semaphore_wait(sem,
             dispatch_time(DISPATCH_TIME_NOW, 20LL * NSEC_PER_SEC));
         if (waitResult != 0) {
-            NSLog(@"[FCPBridge] WARNING: Main thread dispatch timed out (20s). "
+            NSLog(@"[SpliceKit] WARNING: Main thread dispatch timed out (20s). "
                   @"Main thread may be blocked by startup or modal dialog.");
         }
     }
 }
 
-void FCPBridge_executeOnMainThreadAsync(dispatch_block_t block) {
+void SpliceKit_executeOnMainThreadAsync(dispatch_block_t block) {
     dispatch_async(dispatch_get_main_queue(), block);
 }
 
 #pragma mark - Class Discovery
 
-NSArray *FCPBridge_classesInImage(const char *imageName) {
+NSArray *SpliceKit_classesInImage(const char *imageName) {
     NSMutableArray *result = [NSMutableArray array];
     unsigned int count = 0;
     const char **names = objc_copyClassNamesForImage(imageName, &count);
@@ -75,7 +75,7 @@ NSArray *FCPBridge_classesInImage(const char *imageName) {
     return result;
 }
 
-NSDictionary *FCPBridge_methodsForClass(Class cls) {
+NSDictionary *SpliceKit_methodsForClass(Class cls) {
     NSMutableDictionary *methods = [NSMutableDictionary dictionary];
     unsigned int count = 0;
     Method *methodList = class_copyMethodList(cls, &count);
@@ -96,7 +96,7 @@ NSDictionary *FCPBridge_methodsForClass(Class cls) {
     return methods;
 }
 
-NSArray *FCPBridge_allLoadedClasses(void) {
+NSArray *SpliceKit_allLoadedClasses(void) {
     NSMutableArray *result = [NSMutableArray array];
     unsigned int count = 0;
     Class *classes = objc_copyClassList(&count);
