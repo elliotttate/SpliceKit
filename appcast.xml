@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
-    <title>FCPBridge Patcher Updates</title>
-    <link>https://github.com/elliotttate/FCPBridge</link>
-    <description>FCPBridge Patcher release updates</description>
+    <title>SpliceKit Patcher Updates</title>
+    <link>https://github.com/elliotttate/SpliceKit</link>
+    <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
-      <title>FCPBridge v2.8.4</title>
+      <title>SpliceKit v2.8.4</title>
       <sparkle:version>2.8.4</sparkle:version>
       <sparkle:shortVersionString>2.8.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -22,29 +22,29 @@
         </ul>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.8.4/FCPBridgePatcher-v2.8.4.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.4/SpliceKitPatcher-v2.8.4.zip"
         sparkle:edSignature="1rtBeHZ5H+tKxfL8hJ5M4rxJsDu/rrAoiJENL7ZGosEptYlldTG7na0pcXG+TXLFUB85+UCwHgOiADMoN1NTDg=="
         length="3289588"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.8.3</title>
+      <title>SpliceKit v2.8.3</title>
       <sparkle:version>2.8.3</sparkle:version>
       <sparkle:shortVersionString>2.8.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 02 Apr 2026 19:00:28 +0000</pubDate>
       <description><![CDATA[
         <h2>What's New in 2.8.3</h2>
-        <p>Effect drag as adjustment clip: drag effects to empty timeline space to create named adjustment clips with effects applied, toggle via FCPBridge menu</p>
+        <p>Effect drag as adjustment clip: drag effects to empty timeline space to create named adjustment clips with effects applied, toggle via SpliceKit menu</p>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.8.3/FCPBridgePatcher-v2.8.3.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.3/SpliceKitPatcher-v2.8.3.zip"
         sparkle:edSignature="AhoT5U/0NCdIyixcXq4uZoCRO28wPChE5b6CqtqOWwRwjPZNrzopoOJS8UgQwXkhnx7UP58SnT/3fcy81XYQAg=="
         length="3135251"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.8.2</title>
+      <title>SpliceKit v2.8.2</title>
       <sparkle:version>2.8.2</sparkle:version>
       <sparkle:shortVersionString>2.8.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -54,13 +54,13 @@
         <p>Support Final Cut Pro Creator Studio edition with auto-detection and edition picker, effect drag to empty timeline creates adjustment clip</p>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.8.2/FCPBridgePatcher-v2.8.2.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.2/SpliceKitPatcher-v2.8.2.zip"
         sparkle:edSignature="HlWhOw1inlXs+IZ4m5631jQ93VTmMm7H00Qp7hEyWotDBXkx9BhuTiNf3fwTXCrc/ONtNJmz8xD6W72MxTyZBA=="
         length="3121749"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.8.1</title>
+      <title>SpliceKit v2.8.1</title>
       <sparkle:version>2.8.1</sparkle:version>
       <sparkle:shortVersionString>2.8.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -70,13 +70,13 @@
         <p>Improved Parakeet error messages: download progress, network/disk/memory diagnostics, Xcode CLT detection, 120+ command palette entries</p>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.8.1/FCPBridgePatcher-v2.8.1.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.1/SpliceKitPatcher-v2.8.1.zip"
         sparkle:edSignature="LtsO2Egui/fbfA46o7M2CmeoksIaZT/qYzGfNXy/NhfNTHNJN7vv3pfJMSjEPr+0AMMDyQo3933Yf1etXbsIBw=="
         length="3108160"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.8.1</title>
+      <title>SpliceKit v2.8.1</title>
       <sparkle:version>2.8.1</sparkle:version>
       <sparkle:shortVersionString>2.8.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -86,13 +86,13 @@
         <p>Add 120+ commands to in-app command palette, fix Sparkle rpath for standalone launch</p>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.8.1/FCPBridgePatcher-v2.8.1.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.1/SpliceKitPatcher-v2.8.1.zip"
         sparkle:edSignature="Q96BXV73EIsB6FCfHQ2fM6eWLMcn8MpjXJQ/YbsWfsNN7x23hJO7Jmaa5fRFrGvEaDMbfJP3NHyBW5IhLY3dAQ=="
         length="3102333"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.8.1</title>
+      <title>SpliceKit v2.8.1</title>
       <sparkle:version>2.8.1</sparkle:version>
       <sparkle:shortVersionString>2.8.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -102,13 +102,13 @@
         <p>Add 120+ commands to in-app command palette covering all MCP actions</p>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.8.1/FCPBridgePatcher-v2.8.1.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.1/SpliceKitPatcher-v2.8.1.zip"
         sparkle:edSignature="aJsFGUpDGfXv2EDLSQKxtAJl4Y08J7WC29QhMarC5PgNF63yIMUlICoj6+qJ60RBS5DYF680ayHzROTZwr3WCA=="
         length="3102332"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.8.0</title>
+      <title>SpliceKit v2.8.0</title>
       <sparkle:version>2.8.0</sparkle:version>
       <sparkle:shortVersionString>2.8.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -118,13 +118,13 @@
         <p>Full MCP control: universal menu access, dialog handling, effect parameter read/write (opacity, transform, crop, volume), 200+ timeline actions, tool selection, playhead monitoring, modal-safe dispatch</p>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.8.0/FCPBridgePatcher-v2.8.0.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.0/SpliceKitPatcher-v2.8.0.zip"
         sparkle:edSignature="r4OB4eIl2QeR0ErNRZLKkWZekiso1xiqcbISCAHh57fzACOSLlShyQen+WH3gQUJwzw3RAP8KfvCVuHJZXLICw=="
         length="3085829"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.7.0 — Batch Export</title>
+      <title>SpliceKit v2.7.0 — Batch Export</title>
       <sparkle:version>2.7.0</sparkle:version>
       <sparkle:shortVersionString>2.7.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -138,13 +138,13 @@
         </ul>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.7.0/FCPBridgePatcher-v2.7.0.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.7.0/SpliceKitPatcher-v2.7.0.zip"
         sparkle:edSignature="6n67XJJMQ/SWovuDoFEsfrH6j50H1xnj1TZoTq6bULI7p7zpDvw6Oq8+dsoG2aqsYxEs1WbHt4m0Iy7KH2HYBg=="
         length="2919553"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.6.1 — Fix Parakeet in release patcher</title>
+      <title>SpliceKit v2.6.1 — Fix Parakeet in release patcher</title>
       <sparkle:version>2.6.1</sparkle:version>
       <sparkle:shortVersionString>2.6.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -157,13 +157,13 @@
         </ul>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.6.1/FCPBridgePatcher-v2.6.1.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.6.1/SpliceKitPatcher-v2.6.1.zip"
         sparkle:edSignature="r3e5fpUXgDReqTzDWG5M/yhqiKTLgKenh9/u22nZiOixQqnq6RgP1S+Q63RTwXPsYiFY7aOu8iYsJRdQxAJVBA=="
         length="2325654"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.6.0 — Parakeet v3 Multilingual, Batch Transcription</title>
+      <title>SpliceKit v2.6.0 — Parakeet v3 Multilingual, Batch Transcription</title>
       <sparkle:version>2.6.0</sparkle:version>
       <sparkle:shortVersionString>2.6.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -181,13 +181,13 @@
         </ul>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.6.0/FCPBridgePatcher-v2.6.0.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.6.0/SpliceKitPatcher-v2.6.0.zip"
         sparkle:edSignature="hfanxljAVER2kF894o4QjaHG+axToURy8OicDbx+0ve85pbwyAYatAacesfwgkPpkEsKXFJ3Kp86/Lp9wCN8Cg=="
         length="2320203"
         type="application/octet-stream" />
     </item>
     <item>
-      <title>FCPBridge v2.5.0 — Parakeet, Speaker Diarization, Titles Fix, Auto-Update</title>
+      <title>SpliceKit v2.5.0 — Parakeet, Speaker Diarization, Titles Fix, Auto-Update</title>
       <sparkle:version>2.5.0</sparkle:version>
       <sparkle:shortVersionString>2.5.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -204,7 +204,7 @@
         </ul>
       ]]></description>
       <enclosure
-        url="https://github.com/elliotttate/FCPBridge/releases/download/v2.5.0/FCPBridgePatcher-v2.5.0.zip"
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v2.5.0/SpliceKitPatcher-v2.5.0.zip"
         sparkle:edSignature="9lEMTLmpHAAFqbCqRq+i42GXVlbZ/6wkVbQl10nvolbMaCg8hynNsqIiLG3Kfom8m7uvHUVg1AgIVBTCMZrhCg=="
         length="2312784"
         type="application/octet-stream" />

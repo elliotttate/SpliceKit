@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# FCPBridge Release Script — fully automated
+# SpliceKit Release Script — fully automated
 # Usage: ./release.sh <version> "<release notes>"
 # Example: ./release.sh 2.8.0 "New feature X, fix Y"
 
@@ -17,13 +17,13 @@ if [ -z "$NOTES" ]; then
 fi
 
 SIGN_ID="Developer ID Application: Brian Tate (RH4U5VJHM6)"
-KEYCHAIN_PROFILE="FCPBridge"
-PATCHER_APP="patcher/FCPBridgePatcher.app"
-ZIP_NAME="FCPBridgePatcher-v${VERSION}.zip"
+KEYCHAIN_PROFILE="SpliceKit"
+PATCHER_APP="patcher/SpliceKitPatcher.app"
+ZIP_NAME="SpliceKitPatcher-v${VERSION}.zip"
 ZIP_PATH="patcher/${ZIP_NAME}"
 SPARKLE_SIGN="/tmp/bin/sign_update"
 
-echo "=== FCPBridge Release v${VERSION} ==="
+echo "=== SpliceKit Release v${VERSION} ==="
 echo ""
 
 # ──────────────────────────────────────────────
@@ -34,11 +34,11 @@ echo "[1/12] Bumping version to ${VERSION}..."
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${PATCHER_APP}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "${PATCHER_APP}/Contents/Info.plist"
 
-echo "[2/12] Building FCPBridge dylib..."
+echo "[2/12] Building SpliceKit dylib..."
 make clean && make
 
 echo "[3/12] Syncing patcher resources and rebuilding patcher..."
-cp build/FCPBridge "${PATCHER_APP}/Contents/Resources/FCPBridge"
+cp build/SpliceKit "${PATCHER_APP}/Contents/Resources/SpliceKit"
 cp mcp/server.py "${PATCHER_APP}/Contents/Resources/mcp/server.py"
 cp tools/silence-detector.swift "${PATCHER_APP}/Contents/Resources/tools/silence-detector.swift"
 rsync -a --delete Sources/ "${PATCHER_APP}/Contents/Resources/Sources/"
@@ -47,12 +47,12 @@ rsync -a --delete \
     --exclude '.swiftpm' \
     tools/parakeet-transcriber/ "${PATCHER_APP}/Contents/Resources/tools/parakeet-transcriber/"
 xcrun swiftc -parse-as-library -O \
-    -target arm64-apple-macos14.0 \
+    -target arm64-apple-macos14.0 -target x86_64-apple-macos14.0 \
     -F "${PATCHER_APP}/Contents/Frameworks" \
     -framework Sparkle \
     -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
-    -o "${PATCHER_APP}/Contents/MacOS/FCPBridgePatcher" \
-    patcher/FCPBridgePatcher/main.swift
+    -o "${PATCHER_APP}/Contents/MacOS/SpliceKitPatcher" \
+    patcher/SpliceKitPatcher/main.swift
 
 # ──────────────────────────────────────────────
 # SIGN
@@ -77,7 +77,7 @@ echo "  Verification passed"
 
 echo "[6/12] Creating zip..."
 rm -f "${ZIP_PATH}"
-cd patcher && ditto -c -k --keepParent FCPBridgePatcher.app "${ZIP_NAME}" && cd ..
+cd patcher && ditto -c -k --keepParent SpliceKitPatcher.app "${ZIP_NAME}" && cd ..
 
 echo "[7/12] Submitting for notarization (this may take a few minutes)..."
 xcrun notarytool submit "${ZIP_PATH}" --keychain-profile "${KEYCHAIN_PROFILE}" --wait
@@ -85,7 +85,7 @@ xcrun notarytool submit "${ZIP_PATH}" --keychain-profile "${KEYCHAIN_PROFILE}" -
 echo "[8/12] Stapling notarization ticket..."
 xcrun stapler staple "${PATCHER_APP}"
 rm -f "${ZIP_PATH}"
-cd patcher && ditto -c -k --keepParent FCPBridgePatcher.app "${ZIP_NAME}" && cd ..
+cd patcher && ditto -c -k --keepParent SpliceKitPatcher.app "${ZIP_NAME}" && cd ..
 echo "  Final zip: ${ZIP_PATH} ($(du -h "${ZIP_PATH}" | cut -f1))"
 
 # ──────────────────────────────────────────────
@@ -107,7 +107,7 @@ echo "  Signature: ${SPARKLE_SIG}"
 echo "[10/12] Updating appcast.xml..."
 # Build the new item XML
 NEW_ITEM="    <item>
-      <title>FCPBridge v${VERSION}</title>
+      <title>SpliceKit v${VERSION}</title>
       <sparkle:version>${VERSION}</sparkle:version>
       <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -117,7 +117,7 @@ NEW_ITEM="    <item>
         <p>${NOTES}</p>
       ]]></description>
       <enclosure
-        url=\"https://github.com/elliotttate/FCPBridge/releases/download/v${VERSION}/${ZIP_NAME}\"
+        url=\"https://github.com/elliotttate/SpliceKit/releases/download/v${VERSION}/${ZIP_NAME}\"
         sparkle:edSignature=\"${SPARKLE_SIG}\"
         length=\"${FILE_SIZE}\"
         type=\"application/octet-stream\" />

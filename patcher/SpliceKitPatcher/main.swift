@@ -14,7 +14,7 @@ enum PatchStatus: Equatable {
 enum PatchStep: String, CaseIterable {
     case checkPrereqs = "Checking prerequisites"
     case copyApp = "Copying Final Cut Pro"
-    case buildDylib = "Building FCPBridge dylib"
+    case buildDylib = "Building SpliceKit dylib"
     case installFramework = "Installing framework"
     case injectDylib = "Injecting into binary"
     case signApp = "Re-signing application"
@@ -73,8 +73,8 @@ class PatcherModel: ObservableObject {
         } else {
             sourceApp = Self.standardApp
         }
-        destDir = NSHomeDirectory() + "/Desktop/FinalCutPro_Modded"
-        // Find FCPBridge sources. Priority:
+        destDir = NSHomeDirectory() + "/Applications/SpliceKit"
+        // Find SpliceKit sources. Priority:
         // 1. Embedded in app bundle (Resources/Sources/) — self-contained release
         // 2. Relative to app bundle (developer running from repo checkout)
         // 3. Common local paths
@@ -84,7 +84,7 @@ class PatcherModel: ObservableObject {
         // 1. Embedded in app bundle
         if let resourcePath = Bundle.main.resourcePath {
             let embedded = resourcePath + "/Sources"
-            if FileManager.default.fileExists(atPath: embedded + "/FCPBridge.m") {
+            if FileManager.default.fileExists(atPath: embedded + "/SpliceKit.m") {
                 found = resourcePath
             }
         }
@@ -93,7 +93,7 @@ class PatcherModel: ObservableObject {
         if found.isEmpty {
             var dir = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
             for _ in 0..<5 {
-                if FileManager.default.fileExists(atPath: dir + "/Sources/FCPBridge.m") {
+                if FileManager.default.fileExists(atPath: dir + "/Sources/SpliceKit.m") {
                     found = dir; break
                 }
                 dir = (dir as NSString).deletingLastPathComponent
@@ -103,11 +103,11 @@ class PatcherModel: ObservableObject {
         // 3. Common locations
         if found.isEmpty {
             for path in [
-                NSHomeDirectory() + "/Documents/GitHub/FCPBridge",
-                NSHomeDirectory() + "/Desktop/FCPBridge",
-                NSHomeDirectory() + "/FCPBridge",
+                NSHomeDirectory() + "/Documents/GitHub/SpliceKit",
+                NSHomeDirectory() + "/Desktop/SpliceKit",
+                NSHomeDirectory() + "/SpliceKit",
             ] {
-                if FileManager.default.fileExists(atPath: path + "/Sources/FCPBridge.m") {
+                if FileManager.default.fileExists(atPath: path + "/Sources/SpliceKit.m") {
                     found = path; break
                 }
             }
@@ -115,7 +115,7 @@ class PatcherModel: ObservableObject {
 
         // 4. Cache dir (download during patch)
         if found.isEmpty {
-            found = NSHomeDirectory() + "/Library/Caches/FCPBridge"
+            found = NSHomeDirectory() + "/Library/Caches/SpliceKit"
         }
         repoDir = found
         // Defer status check — shell() pumps the run loop via waitUntilExit,
@@ -128,9 +128,9 @@ class PatcherModel: ObservableObject {
     func checkStatus() {
         let binary = moddedApp + "/Contents/MacOS/Final Cut Pro"
         if FileManager.default.fileExists(atPath: binary) {
-            // Check if FCPBridge is injected
-            let result = shell("otool -L '\(binary)' 2>/dev/null | grep FCPBridge")
-            if result.contains("FCPBridge") {
+            // Check if SpliceKit is injected
+            let result = shell("otool -L '\(binary)' 2>/dev/null | grep SpliceKit")
+            if result.contains("SpliceKit") {
                 status = .patched
 
                 // Check if running
@@ -196,9 +196,9 @@ class PatcherModel: ObservableObject {
             await MainActor.run {
                 checkStatus()
                 if bridgeConnected {
-                    appendLog("FCPBridge connected on port 9876")
+                    appendLog("SpliceKit connected on port 9876")
                 } else {
-                    appendLog("Waiting for FCPBridge... (check ~/Library/Logs/FCPBridge/fcpbridge.log)")
+                    appendLog("Waiting for SpliceKit... (check ~/Library/Logs/SpliceKit/splicekit.log)")
                 }
             }
         }
@@ -206,7 +206,7 @@ class PatcherModel: ObservableObject {
 
     func uninstall() {
         appendLog("Removing modded FCP...")
-        shell("pkill -f FinalCutPro_Modded 2>/dev/null; sleep 1")
+        shell("pkill -f SpliceKit 2>/dev/null; sleep 1")
         do {
             try FileManager.default.removeItem(atPath: destDir)
             appendLog("Removed \(destDir)")
@@ -240,23 +240,23 @@ class PatcherModel: ObservableObject {
         }
         await logAsync("FCP \(fcpVersion): OK")
 
-        let repoSources = repoDir + "/Sources/FCPBridge.m"
+        let repoSources = repoDir + "/Sources/SpliceKit.m"
         if !FileManager.default.fileExists(atPath: repoSources) {
-            await logAsync("Downloading FCPBridge sources...")
+            await logAsync("Downloading SpliceKit sources...")
             let dlResult = shell("""
                 mkdir -p '\(repoDir)' && \
-                curl -sL https://github.com/elliotttate/FCPBridge/archive/refs/heads/main.zip \
-                    -o /tmp/fcpbridge_src.zip && \
-                unzip -qo /tmp/fcpbridge_src.zip -d /tmp/fcpbridge_extract && \
-                cp -R /tmp/fcpbridge_extract/FCPBridge-main/* '\(repoDir)/' && \
-                rm -rf /tmp/fcpbridge_src.zip /tmp/fcpbridge_extract 2>&1
+                curl -sL https://github.com/elliotttate/SpliceKit/archive/refs/heads/main.zip \
+                    -o /tmp/splicekit_src.zip && \
+                unzip -qo /tmp/splicekit_src.zip -d /tmp/splicekit_extract && \
+                cp -R /tmp/splicekit_extract/SpliceKit-main/* '\(repoDir)/' && \
+                rm -rf /tmp/splicekit_src.zip /tmp/splicekit_extract 2>&1
                 """)
             guard FileManager.default.fileExists(atPath: repoSources) else {
-                throw PatchError.msg("Failed to download FCPBridge sources. Make sure you have an internet connection.\n\(dlResult)")
+                throw PatchError.msg("Failed to download SpliceKit sources. Make sure you have an internet connection.\n\(dlResult)")
             }
-            await logAsync("Downloaded FCPBridge sources")
+            await logAsync("Downloaded SpliceKit sources")
         } else {
-            await logAsync("FCPBridge sources: OK")
+            await logAsync("SpliceKit sources: OK")
         }
         await completeStepAsync(.checkPrereqs)
 
@@ -278,21 +278,21 @@ class PatcherModel: ObservableObject {
 
         // Step 3: Build dylib
         await setStepAsync(.buildDylib)
-        await logAsync("Compiling FCPBridge dylib...")
-        let buildDir = NSTemporaryDirectory() + "FCPBridge_build"
+        await logAsync("Compiling SpliceKit dylib...")
+        let buildDir = NSTemporaryDirectory() + "SpliceKit_build"
         shell("mkdir -p '\(buildDir)'")
-        let sources = ["FCPBridge.m", "FCPBridgeRuntime.m", "FCPBridgeSwizzle.m", "FCPBridgeServer.m", "FCPTranscriptPanel.m", "FCPCommandPalette.m"]
+        let sources = ["SpliceKit.m", "SpliceKitRuntime.m", "SpliceKitSwizzle.m", "SpliceKitServer.m", "SpliceKitTranscriptPanel.m", "SpliceKitCommandPalette.m"]
             .map { "'\(repoDir)/Sources/\($0)'" }.joined(separator: " ")
         let buildResult = shell("""
             clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
             -framework Foundation -framework AppKit -framework AVFoundation \
             -fobjc-arc -fmodules -Wno-deprecated-declarations \
             -undefined dynamic_lookup -dynamiclib \
-            -install_name @rpath/FCPBridge.framework/Versions/A/FCPBridge \
+            -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
             -I '\(repoDir)/Sources' \
-            \(sources) -o '\(buildDir)/FCPBridge' 2>&1
+            \(sources) -o '\(buildDir)/SpliceKit' 2>&1
             """)
-        guard FileManager.default.fileExists(atPath: buildDir + "/FCPBridge") else {
+        guard FileManager.default.fileExists(atPath: buildDir + "/SpliceKit") else {
             throw PatchError.msg("Build failed:\n\(buildResult)")
         }
         await logAsync("Built universal dylib (arm64 + x86_64)")
@@ -323,7 +323,7 @@ class PatcherModel: ObservableObject {
             await logAsync("Building Parakeet transcriber (may take a moment on first run)...")
             // Always stage the package in a persistent cache location so the runtime
             // can rebuild it later if the deployed binary is missing.
-            let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/FCPBridge/tools/parakeet-transcriber"
+            let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/SpliceKit/tools/parakeet-transcriber"
             let sourcePath = URL(fileURLWithPath: parakeetSrcDir).standardizedFileURL.path
             let cachePath = URL(fileURLWithPath: parakeetCacheDir).standardizedFileURL.path
             let parakeetPkgDir: String
@@ -354,31 +354,31 @@ class PatcherModel: ObservableObject {
 
         // Step 4: Install framework
         await setStepAsync(.installFramework)
-        let fwDir = moddedApp + "/Contents/Frameworks/FCPBridge.framework"
+        let fwDir = moddedApp + "/Contents/Frameworks/SpliceKit.framework"
         shell("""
             mkdir -p '\(fwDir)/Versions/A/Resources'
-            cp '\(buildDir)/FCPBridge' '\(fwDir)/Versions/A/FCPBridge'
+            cp '\(buildDir)/SpliceKit' '\(fwDir)/Versions/A/SpliceKit'
             cd '\(fwDir)/Versions' && ln -sf A Current
-            cd '\(fwDir)' && ln -sf Versions/Current/FCPBridge FCPBridge
+            cd '\(fwDir)' && ln -sf Versions/Current/SpliceKit SpliceKit
             cd '\(fwDir)' && ln -sf Versions/Current/Resources Resources
             """)
         let plist = """
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
             <plist version="1.0"><dict>
-            <key>CFBundleIdentifier</key><string>com.fcpbridge.FCPBridge</string>
-            <key>CFBundleName</key><string>FCPBridge</string>
+            <key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string>
+            <key>CFBundleName</key><string>SpliceKit</string>
             <key>CFBundleVersion</key><string>2.6.1</string>
             <key>CFBundlePackageType</key><string>FMWK</string>
-            <key>CFBundleExecutable</key><string>FCPBridge</string>
+            <key>CFBundleExecutable</key><string>SpliceKit</string>
             </dict></plist>
             """
         try plist.write(toFile: fwDir + "/Versions/A/Resources/Info.plist", atomically: true, encoding: .utf8)
 
         // Deploy tools to locations the runtime code can find
         let toolsDirs = [
-            NSHomeDirectory() + "/Desktop/FCPBridge/build",
-            NSHomeDirectory() + "/Documents/GitHub/FCPBridge/build",
+            NSHomeDirectory() + "/Desktop/SpliceKit/build",
+            NSHomeDirectory() + "/Documents/GitHub/SpliceKit/build",
         ]
         for toolsDir in toolsDirs {
             shell("mkdir -p '\(toolsDir)'")
@@ -400,9 +400,9 @@ class PatcherModel: ObservableObject {
         // Step 5: Inject LC_LOAD_DYLIB
         await setStepAsync(.injectDylib)
         let binary = moddedApp + "/Contents/MacOS/Final Cut Pro"
-        let alreadyInjected = shell("otool -L '\(binary)' 2>/dev/null | grep FCPBridge")
+        let alreadyInjected = shell("otool -L '\(binary)' 2>/dev/null | grep SpliceKit")
         if alreadyInjected.isEmpty {
-            let insertDylib = "/tmp/fcpbridge_insert_dylib"
+            let insertDylib = "/tmp/splicekit_insert_dylib"
             if !FileManager.default.fileExists(atPath: insertDylib) {
                 await logAsync("Building insert_dylib tool...")
                 shell("""
@@ -413,7 +413,7 @@ class PatcherModel: ObservableObject {
                     cd /tmp && rm -rf _insert_dylib_build
                     """)
             }
-            shell("'\(insertDylib)' --inplace --all-yes '@rpath/FCPBridge.framework/Versions/A/FCPBridge' '\(binary)' 2>&1")
+            shell("'\(insertDylib)' --inplace --all-yes '@rpath/SpliceKit.framework/Versions/A/SpliceKit' '\(binary)' 2>&1")
             await logAsync("Injected LC_LOAD_DYLIB")
         } else {
             await logAsync("Already injected (skipping)")
@@ -423,7 +423,7 @@ class PatcherModel: ObservableObject {
         // Step 6: Re-sign
         await setStepAsync(.signApp)
 
-        // Sign only the components we modified (FCPBridge framework and the main
+        // Sign only the components we modified (SpliceKit framework and the main
         // app binary).  Apple's own frameworks must keep their original signatures
         // or internal integrity checks (e.g. ProAppSupport +[PCApp isiMovie])
         // will abort on launch.  We always use ad-hoc signing here because
@@ -444,13 +444,13 @@ class PatcherModel: ObservableObject {
             """
         try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)
 
-        shell("/usr/libexec/PlistBuddy -c \"Add :NSSpeechRecognitionUsageDescription string 'FCPBridge uses speech recognition to transcribe timeline audio for text-based editing.'\" '\(moddedApp)/Contents/Info.plist' 2>/dev/null")
+        shell("/usr/libexec/PlistBuddy -c \"Add :NSSpeechRecognitionUsageDescription string 'SpliceKit uses speech recognition to transcribe timeline audio for text-based editing.'\" '\(moddedApp)/Contents/Info.plist' 2>/dev/null")
 
-        // Only sign the FCPBridge framework (ours) and the main app bundle.
+        // Only sign the SpliceKit framework (ours) and the main app bundle.
         // Leave all Apple frameworks, plugins, and helpers with their original
         // Apple signatures intact.
         shell("""
-            codesign --force --sign \(signIdentity) '\(moddedApp)/Contents/Frameworks/FCPBridge.framework' 2>/dev/null
+            codesign --force --sign \(signIdentity) '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>/dev/null
             codesign --force --sign \(signIdentity) --entitlements '\(entitlements)' '\(moddedApp)' 2>/dev/null
             """)
 
@@ -580,7 +580,7 @@ struct ContentView: View {
                 .font(.system(size: 32))
                 .foregroundStyle(.blue)
             VStack(alignment: .leading, spacing: 2) {
-                Text("FCPBridge Patcher")
+                Text("SpliceKit Patcher")
                     .font(.title2.bold())
                 Text("Direct programmatic control of Final Cut Pro")
                     .font(.caption)
@@ -692,7 +692,7 @@ struct ContentView: View {
 
     var statusTitle: String {
         switch model.status {
-        case .patched: return "FCPBridge Installed"
+        case .patched: return "SpliceKit Installed"
         case .notPatched: return "Not Patched"
         case .running: return "FCP Running with Bridge"
         case .unknown: return "Checking..."
@@ -834,7 +834,7 @@ struct CheckForUpdatesView: View {
 // MARK: - App Entry Point
 
 @main
-struct FCPBridgePatcherApp: App {
+struct SpliceKitPatcherApp: App {
     private let updaterController: SPUStandardUpdaterController
     @StateObject private var checkForUpdatesVM: CheckForUpdatesViewModel
 

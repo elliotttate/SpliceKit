@@ -34,7 +34,7 @@ credentials.json
 # Swift packages
 Package.resolved
 # But keep the copy embedded in the release patcher bundle
-!patcher/FCPBridgePatcher.app/Contents/Resources/tools/parakeet-transcriber/Package.resolved
+!patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber/Package.resolved
 
 # Release binaries (use GitHub Releases instead)
-patcher/FCPBridgePatcher-v*.zip
+patcher/SpliceKitPatcher-v*.zip

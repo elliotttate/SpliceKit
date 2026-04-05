@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-FCPBridge MCP Server v2
-Provides direct in-process control of Final Cut Pro via the FCPBridge dylib.
-Connects to the JSON-RPC server running INSIDE the FCP process at 127.0.0.1:9876.
+SpliceKit MCP Server — the bridge between AI tools and Final Cut Pro.
+
+This is the MCP (Model Context Protocol) server that Claude and other AI tools
+talk to. It exposes FCP's entire editing API as MCP tools. Under the hood, each
+tool just sends a JSON-RPC request to the SpliceKit dylib running inside FCP's
+process (127.0.0.1:9876) and returns the result.
+
+The tools are intentionally verbose in their docstrings because that's what the
+AI model sees when deciding which tool to use and how to call it.
 """
 
 import socket
@@ -10,12 +16,12 @@ import json
 import time
 from mcp.server.fastmcp import FastMCP
 
-FCPBRIDGE_HOST = "127.0.0.1"
-FCPBRIDGE_PORT = 9876
+SPLICEKIT_HOST = "127.0.0.1"
+SPLICEKIT_PORT = 9876
 
 mcp = FastMCP(
-    "fcpbridge",
-    instructions="""Direct in-process control of Final Cut Pro via injected FCPBridge dylib.
+    "splicekit",
+    instructions="""Direct in-process control of Final Cut Pro via injected SpliceKit dylib.
 Connects to a JSON-RPC server running INSIDE the FCP process with access to 78,000+ ObjC classes.
 All operations are fully programmatic - no AppleScript, no UI automation.
 
@@ -130,7 +136,12 @@ montage_auto(song_uid, event_name, style) -- one-shot auto-montage
 
 
 class BridgeConnection:
-    """Persistent connection to the FCPBridge JSON-RPC server."""
+    """Persistent TCP connection to the SpliceKit JSON-RPC server inside FCP.
+
+    Keeps the socket open between calls so we don't pay the connect overhead
+    on every tool invocation. Auto-reconnects if the connection drops (FCP
+    restarted, socket timed out, etc).
+    """
 
     def __init__(self):
         self.sock = None
@@ -141,25 +152,31 @@ class BridgeConnection:
         if self.sock is None:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(30)
-            self.sock.connect((FCPBRIDGE_HOST, FCPBRIDGE_PORT))
+            self.sock.connect((SPLICEKIT_HOST, SPLICEKIT_PORT))
             self._buf = b""
 
     def call(self, method: str, **params) -> dict:
+        """Send a JSON-RPC request and wait for the response.
+
+        Returns the result dict on success, or {"error": "..."} on failure.
+        Handles connection errors gracefully — the next call will auto-reconnect.
+        """
         try:
             self.ensure_connected()
         except (ConnectionRefusedError, OSError) as e:
-            return {"error": f"Cannot connect to FCPBridge at {FCPBRIDGE_HOST}:{FCPBRIDGE_PORT}. "
+            return {"error": f"Cannot connect to SpliceKit at {SPLICEKIT_HOST}:{SPLICEKIT_PORT}. "
                     f"Is the modded FCP running? Error: {e}"}
 
         self._id += 1
         req = json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": self._id})
         try:
             self.sock.sendall(req.encode() + b"\n")
+            # Read until we get a complete line (newline-delimited JSON)
             while b"\n" not in self._buf:
-                chunk = self.sock.recv(16777216)
+                chunk = self.sock.recv(16777216)  # 16MB — FCPXML responses can be large
                 if not chunk:
                     self.sock = None
-                    return {"error": "Connection closed by FCPBridge"}
+                    return {"error": "Connection closed by SpliceKit"}
                 self._buf += chunk
             line, self._buf = self._buf.split(b"\n", 1)
             resp = json.loads(line)
@@ -175,29 +192,48 @@ bridge = BridgeConnection()
 
 
 def _err(r):
-    return "error" in r or "ERROR" in r
+    """Check if a bridge response contains an error."""
+    return "error" in r
 
 
 def _fmt(r):
+    """Pretty-print a bridge response as indented JSON."""
     return json.dumps(r, indent=2, default=str)
+
+
+def _call_or_error(method: str, **params) -> str:
+    """Call the bridge and return formatted JSON, or an error string.
+
+    This is the common pattern used by most tools — call the bridge,
+    check for errors, format the result. Having it in one place means
+    we don't repeat the same 4 lines in every tool function.
+    """
+    r = bridge.call(method, **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
 
 
 # ============================================================
 # Core Connection & Status
 # ============================================================
+# The first thing any client should do is call bridge_status() to
+# verify FCP is running and the bridge is responsive.
 
 @mcp.tool()
 def bridge_status() -> str:
-    """Check if FCPBridge is running and get FCP version info."""
+    """Check if SpliceKit is running and get FCP version info."""
     r = bridge.call("system.version")
     if _err(r):
-        return f"FCPBridge NOT connected: {r.get('error', r)}"
+        return f"SpliceKit NOT connected: {r.get('error', r)}"  # special error message for status
     return _fmt(r)
 
 
 # ============================================================
-# Timeline Actions (direct ObjC IBAction calls)
+# Timeline Actions
 # ============================================================
+# These map directly to FCP's IBAction methods on the timeline module.
+# Most require a clip to be selected first (selectClipAtPlayhead).
 
 @mcp.tool()
 def timeline_action(action: str) -> str:
@@ -273,10 +309,7 @@ def timeline_action(action: str) -> str:
 
     You can also pass any raw ObjC selector name.
     """
-    r = bridge.call("timeline.action", action=action)
-    if _err(r):
-        return f"Error: {r.get('error', r)}"
-    return _fmt(r)
+    return _call_or_error("timeline.action", action=action)
 
 
 @mcp.tool()
@@ -286,10 +319,7 @@ def playback_action(action: str) -> str:
     Actions: playPause, goToStart, goToEnd, nextFrame, prevFrame,
              nextFrame10, prevFrame10, playAroundCurrent
     """
-    r = bridge.call("playback.action", action=action)
-    if _err(r):
-        return f"Error: {r.get('error', r)}"
-    return _fmt(r)
+    return _call_or_error("playback.action", action=action)
 
 
 @mcp.tool()
@@ -328,10 +358,7 @@ def seek_to_time(seconds: float) -> str:
     This is much faster than stepping frames. Use this for all
     time-based positioning before blade, marker, or other operations.
     """
-    r = bridge.call("playback.seekToTime", seconds=seconds)
-    if _err(r):
-        return f"Error: {r.get('error', r)}"
-    return _fmt(r)
+    return _call_or_error("playback.seekToTime", seconds=seconds)
 
 
 # ============================================================
@@ -481,6 +508,8 @@ def verify_action(description: str = "") -> str:
 # ============================================================
 # Advanced Method Calling (with arguments)
 # ============================================================
+# The swiss army knife — call any ObjC method on any object.
+# Use this when a specific tool doesn't exist for what you need.
 
 @mcp.tool()
 def call_method_with_args(target: str, selector: str, args: str = "[]",
@@ -537,10 +566,13 @@ def call_method_with_args(target: str, selector: str, args: str = "[]",
 # ============================================================
 # Object Handles
 # ============================================================
+# The handle system lets you hold references to live ObjC objects
+# across multiple tool calls. Think of handles as pointers that
+# survive between requests. Always release_all when you're done.
 
 @mcp.tool()
 def manage_handles(action: str = "list", handle: str = "") -> str:
-    """Manage object handles stored by FCPBridge.
+    """Manage object handles stored by SpliceKit.
 
     Actions:
       list - show all active handles with class names
@@ -605,8 +637,11 @@ def set_object_property(handle: str, key: str, value: str, value_type: str = "st
 
 
 # ============================================================
-# FCPXML Import
+# FCPXML Import & Generation
 # ============================================================
+# FCPXML is Apple's interchange format for FCP projects. We can
+# generate it programmatically and import it to create complex
+# timelines without clicking through FCP's UI.
 
 @mcp.tool()
 def import_fcpxml(xml: str, internal: bool = True) -> str:
@@ -621,7 +656,7 @@ def import_fcpxml(xml: str, internal: bool = True) -> str:
 
 
 @mcp.tool()
-def generate_fcpxml(event_name: str = "FCPBridge Event", project_name: str = "FCPBridge Project",
+def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "SpliceKit Project",
                     frame_rate: str = "24", width: int = 1920, height: int = 1080,
                     items: str = "[]") -> str:
     """Generate valid FCPXML for import. Creates a project with clips, gaps, titles,
@@ -748,6 +783,7 @@ def generate_fcpxml(event_name: str = "FCPBridge Event", project_name: str = "FC
 # ============================================================
 # Effects & Color Correction
 # ============================================================
+# Tools for inspecting and applying effects on clips.
 
 @mcp.tool()
 def get_clip_effects(handle: str = "") -> str:
@@ -908,6 +944,36 @@ def analyze_timeline() -> str:
 # ============================================================
 
 @mcp.tool()
+def add_markers_at_times(markers: str) -> str:
+    """Add multiple markers at specific times in a single batch call.
+    Much faster than seeking + adding markers one at a time.
+
+    markers: JSON array of marker objects. Each marker:
+      {"time": 5.0, "name": "Scene 1", "kind": "standard"}
+      {"time": 15.5, "name": "Chapter 1", "kind": "chapter"}
+      {"time": 30.0, "name": "Review", "kind": "todo"}
+
+    kind: "standard" (default), "chapter", or "todo"
+
+    Returns count of markers successfully added.
+    """
+    try:
+        marker_list = json.loads(markers)
+    except json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+
+    r = bridge.call("timeline.addMarkers", markers=marker_list)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    lines = [f"Added {r.get('applied', 0)}/{r.get('count', 0)} markers"]
+    for m in r.get("markers", []):
+        status = "OK" if m.get("success") else f"FAILED: {m.get('error', '?')}"
+        lines.append(f"  {m['time']:.2f}s -> {status}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def import_srt_as_markers(srt_content: str) -> str:
     """Import SRT subtitle content as markers in the current timeline.
     Each subtitle becomes a standard marker at the corresponding timecode.
@@ -925,8 +991,7 @@ def import_srt_as_markers(srt_content: str) -> str:
 
     # Parse SRT
     blocks = re.split(r'\n\n+', srt_content.strip())
-    markers_added = 0
-    errors = []
+    marker_list = []
 
     for block in blocks:
         lines = block.strip().split('\n')
@@ -940,29 +1005,25 @@ def import_srt_as_markers(srt_content: str) -> str:
 
         h, m, s, ms = int(ts_match.group(1)), int(ts_match.group(2)), int(ts_match.group(3)), int(ts_match.group(4))
         total_seconds = h * 3600 + m * 60 + s + ms / 1000.0
-
         text = ' '.join(lines[2:]).strip()
 
-        # Navigate to the timestamp and add marker
-        # Use frame stepping to get close (at 24fps)
-        frames = int(total_seconds * 24)
+        marker_list.append({"time": total_seconds, "name": text, "kind": "standard"})
 
-        # Go to start, step to position, add marker
-        bridge.call("playback.action", action="goToStart")
-        for _ in range(frames):
-            bridge.call("playback.action", action="nextFrame")
+    if not marker_list:
+        return "No valid SRT entries found"
 
-        r = bridge.call("timeline.action", action="addMarker")
-        if not _err(r):
-            markers_added += 1
-        else:
-            errors.append(f"Failed at {total_seconds:.1f}s: {r}")
+    # Single batch call to add all markers at once (no playhead movement needed)
+    r = bridge.call("timeline.addMarkers", markers=marker_list)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
 
-    result = f"Imported {markers_added} markers from SRT"
-    if errors:
-        result += f"\nErrors: {len(errors)}"
-        for e in errors[:5]:
-            result += f"\n  - {e}"
+    applied = r.get("applied", 0)
+    result = f"Imported {applied}/{len(marker_list)} markers from SRT"
+    failed = [m for m in r.get("markers", []) if not m.get("success")]
+    if failed:
+        result += f"\nFailed: {len(failed)}"
+        for m in failed[:5]:
+            result += f"\n  - {m['time']:.1f}s: {m.get('error', '?')}"
     return result
 
 
@@ -993,6 +1054,8 @@ def is_library_updating() -> str:
 # ============================================================
 # Runtime Introspection
 # ============================================================
+# Reverse-engineering tools — enumerate classes, explore methods,
+# inspect the class hierarchy. Use these to discover new APIs.
 
 @mcp.tool()
 def get_classes(filter: str = "") -> str:
@@ -1137,7 +1200,7 @@ def call_method(class_name: str, selector: str, class_method: bool = True) -> st
 
 @mcp.tool()
 def raw_call(method: str, params: str = "{}") -> str:
-    """Send a raw JSON-RPC call to FCPBridge."""
+    """Send a raw JSON-RPC call to SpliceKit."""
     try:
         p = json.loads(params)
     except json.JSONDecodeError as e:
@@ -1149,6 +1212,9 @@ def raw_call(method: str, params: str = "{}") -> str:
 # ============================================================
 # Transcript-Based Editing
 # ============================================================
+# Text-based editing: transcribe clips, then edit the video by
+# editing the text. Delete words to remove video segments,
+# drag words to reorder clips.
 
 @mcp.tool()
 def open_transcript(file_url: str = "") -> str:
@@ -1642,7 +1708,7 @@ def execute_menu_command(menu_path: list[str]) -> str:
                    e.g. ["File", "New", "Project"] or ["Edit", "Paste as Connected Clip"]
 
     This gives you access to every single menu item in FCP, including items
-    that don't have dedicated FCPBridge actions. Menu items are matched
+    that don't have dedicated SpliceKit actions. Menu items are matched
     case-insensitively and trailing ellipsis (...) is ignored.
     """
     r = bridge.call("menu.execute", menuPath=menu_path)
@@ -2026,12 +2092,12 @@ def set_viewer_zoom(zoom: float) -> str:
 
 
 # ============================================================
-# FCPBridge Options
+# SpliceKit Options
 # ============================================================
 
 @mcp.tool()
 def get_bridge_options() -> str:
-    """Get the current FCPBridge option settings.
+    """Get the current SpliceKit option settings.
 
     Returns the state of all configurable options
     (e.g. effectDragAsAdjustmentClip, viewerPinchZoom, videoOnlyKeepsAudioDisabled).
@@ -2044,7 +2110,7 @@ def get_bridge_options() -> str:
 
 @mcp.tool()
 def set_bridge_option(option: str, enabled: bool) -> str:
-    """Toggle an FCPBridge option.
+    """Toggle an SpliceKit option.
 
     Args:
         option: Option name. Currently supported:
@@ -2057,6 +2123,57 @@ def set_bridge_option(option: str, enabled: bool) -> str:
     if _err(r):
         return f"Error: {r.get('error', r)}"
     return _fmt(r)
+
+
+# ============================================================
+# Beat Detection (Any Audio File)
+# ============================================================
+
+@mcp.tool()
+def detect_beats(file_path: str, sensitivity: float = 0.5, min_bpm: float = 60.0, max_bpm: float = 200.0) -> str:
+    """Detect beats, bars, and sections in any audio file (MP3, WAV, M4A, etc.).
+
+    Analyzes the audio using onset detection and tempo estimation.
+    Returns precise timestamps for every beat, bar (4 beats), and section (16 beats),
+    plus the detected BPM. These timestamps can be fed directly into montage_plan_edit()
+    to cut video clips to the rhythm of any song.
+
+    Args:
+        file_path: Path to audio file (MP3, WAV, M4A, AAC, AIFF, etc.)
+        sensitivity: Beat detection sensitivity 0.0-1.0 (default 0.5).
+                     Higher = more beats detected, lower = only strong beats.
+        min_bpm: Minimum expected BPM (default 60).
+        max_bpm: Maximum expected BPM (default 200).
+
+    Returns beat timestamps, bar timestamps, section timestamps, BPM, and duration.
+    """
+    import subprocess, os
+    # Run beat-detector as an external process (AVFoundation deadlocks inside FCP)
+    tool_paths = [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "build", "beat-detector"),
+        "/usr/local/bin/beat-detector",
+        os.path.expanduser("~/Documents/GitHub/SpliceKit/build/beat-detector"),
+    ]
+    tool = None
+    for p in tool_paths:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            tool = p
+            break
+    if not tool:
+        return "Error: beat-detector tool not found. Build it with: cd SpliceKit && swiftc -O -o build/beat-detector tools/beat-detector.swift"
+
+    try:
+        result = subprocess.run(
+            [tool, file_path, str(sensitivity), str(min_bpm), str(max_bpm)],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            return f"Error: beat-detector failed: {result.stderr}"
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        return "Error: beat-detector timed out"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ============================================================

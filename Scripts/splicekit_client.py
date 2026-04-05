@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-FCPBridge Python Client
-Connects to the FCPBridge Unix domain socket and provides
+SpliceKit Python Client
+Connects to the SpliceKit Unix domain socket and provides
 direct access to Final Cut Pro's internal APIs.
 """
 
@@ -10,14 +10,14 @@ import json
 import sys
 import readline  # enables arrow keys in interactive mode
 
-FCPBRIDGE_HOST = "127.0.0.1"
-FCPBRIDGE_PORT = 9876
+SPLICEKIT_HOST = "127.0.0.1"
+SPLICEKIT_PORT = 9876
 
 
-class FCPBridge:
-    """Client for the FCPBridge JSON-RPC server running inside Final Cut Pro."""
+class SpliceKit:
+    """Client for the SpliceKit JSON-RPC server running inside Final Cut Pro."""
 
-    def __init__(self, host=FCPBRIDGE_HOST, port=FCPBRIDGE_PORT):
+    def __init__(self, host=SPLICEKIT_HOST, port=SPLICEKIT_PORT):
         self.host = host
         self.port = port
         self.sock = None
@@ -26,10 +26,10 @@ class FCPBridge:
         self.connect()
 
     def connect(self):
-        """Connect to the FCPBridge TCP server."""
+        """Connect to the SpliceKit TCP server."""
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.host, self.port))
-        print(f"Connected to FCPBridge at {self.host}:{self.port}")
+        print(f"Connected to SpliceKit at {self.host}:{self.port}")
 
     def close(self):
         """Close the connection."""
@@ -65,7 +65,7 @@ class FCPBridge:
     # ---- Convenience methods ----
 
     def version(self):
-        """Get FCPBridge and FCP version info."""
+        """Get SpliceKit and FCP version info."""
         return self.call("system.version")
 
     def get_classes(self, filter=None):
@@ -101,16 +101,16 @@ class FCPBridge:
 
 
 def interactive_mode():
-    """Run an interactive REPL for FCPBridge."""
+    """Run an interactive REPL for SpliceKit."""
     try:
-        fcp = FCPBridge()
+        fcp = SpliceKit()
     except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
-        print(f"ERROR: Cannot connect to {FCPBRIDGE_HOST}:{FCPBRIDGE_PORT} - {e}")
-        print("Make sure modded FCP is running with FCPBridge loaded.")
+        print(f"ERROR: Cannot connect to {SPLICEKIT_HOST}:{SPLICEKIT_PORT} - {e}")
+        print("Make sure modded FCP is running with SpliceKit loaded.")
         sys.exit(1)
 
     info = fcp.version()
-    print(f"\nFCPBridge v{info['fcpbridge_version']}")
+    print(f"\nSpliceKit v{info['splicekit_version']}")
     print(f"FCP {info['fcp_version']} (build {info['fcp_build']})")
     print(f"PID: {info['pid']} | Arch: {info['arch']}")
     print(f"\nType JSON-RPC method calls or use shortcuts:")
@@ -126,7 +126,7 @@ def interactive_mode():
 
     while True:
         try:
-            line = input("fcpbridge> ").strip()
+            line = input("splicekit> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nBye!")
             break
@@ -217,8 +217,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--interactive":
         interactive_mode()
     elif len(sys.argv) > 1:
-        # One-shot mode: fcpbridge_client.py "system.version"
-        fcp = FCPBridge()
+        # One-shot mode: splicekit_client.py "system.version"
+        fcp = SpliceKit()
         result = fcp.call(sys.argv[1], **json.loads(sys.argv[2]) if len(sys.argv) > 2 else {})
         print(json.dumps(result, indent=2, default=str))
         fcp.close()

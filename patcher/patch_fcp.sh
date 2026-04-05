@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# FCPBridge Patcher
-# Patches Final Cut Pro to load the FCPBridge dylib for programmatic control.
+# SpliceKit Patcher
+# Patches Final Cut Pro to load the SpliceKit dylib for programmatic control.
 #
 # Usage:
 #   ./patch_fcp.sh                     # Patch using defaults
@@ -27,7 +27,7 @@ if [[ -z "${SOURCE_APP:-}" ]]; then
         SOURCE_APP="$STANDARD_APP"  # will fail with a clear error later
     fi
 fi
-DEFAULT_DEST="$HOME/Desktop/FinalCutPro_Modded"
+DEFAULT_DEST="$HOME/Applications/SpliceKit"
 DEST_DIR="${DEST_DIR:-$DEFAULT_DEST}"
 APP_NAME="$(basename "$SOURCE_APP")"
 BRIDGE_PORT=9876
@@ -54,16 +54,16 @@ step()  { echo -e "\n${CYAN}${BOLD}=== $* ===${NC}"; }
 usage() {
     cat << 'EOF'
 
-  FCPBridge Patcher v2.0.0
+  SpliceKit Patcher v2.0.0
 
-  Creates a modded copy of Final Cut Pro with FCPBridge injected
+  Creates a modded copy of Final Cut Pro with SpliceKit injected
   for direct programmatic control via JSON-RPC and MCP.
 
   Usage:
     ./patch_fcp.sh [options]
 
   Options:
-    --dest DIR       Destination directory (default: ~/Desktop/FinalCutPro_Modded)
+    --dest DIR       Destination directory (default: ~/Applications/SpliceKit)
     --source APP     Source FCP app (default: /Applications/Final Cut Pro.app)
     --no-copy        Skip copying (use existing modded copy)
     --rebuild        Rebuild dylib only and redeploy
@@ -72,14 +72,14 @@ usage() {
 
   What it does:
     1. Copies Final Cut Pro to a writable location
-    2. Builds the FCPBridge dylib from source
+    2. Builds the SpliceKit dylib from source
     3. Injects it into the FCP binary (LC_LOAD_DYLIB)
     4. Re-signs everything with custom entitlements (no sandbox)
     5. Patches CloudContent/ImagePlayground crash points
     6. Sets up the MCP server config
 
   After patching:
-    - Launch: ~/Desktop/FinalCutPro_Modded/Final Cut Pro.app
+    - Launch: ~/Applications/SpliceKit/Final Cut Pro.app
     - Connect: 127.0.0.1:9876 (JSON-RPC)
     - MCP config: .mcp.json is created in current directory
 
@@ -118,7 +118,7 @@ MODDED_APP="$DEST_DIR/$APP_NAME"
 # Uninstall
 # ============================================================
 if $UNINSTALL; then
-    step "Uninstalling FCPBridge"
+    step "Uninstalling SpliceKit"
     if [[ -d "$DEST_DIR" ]]; then
         info "Removing $DEST_DIR"
         rm -rf "$DEST_DIR"
@@ -136,7 +136,7 @@ echo -e "${BOLD}"
 cat << 'BANNER'
 
   ╔═══════════════════════════════════════════════╗
-  ║         FCPBridge Patcher v2.0.0              ║
+  ║         SpliceKit Patcher v2.0.0              ║
   ║  Direct programmatic control of Final Cut Pro ║
   ╚═══════════════════════════════════════════════╝
 
@@ -232,18 +232,18 @@ else
 fi
 
 # ============================================================
-# Step 2: Build FCPBridge dylib
+# Step 2: Build SpliceKit dylib
 # ============================================================
-step "Step 2: Building FCPBridge dylib"
+step "Step 2: Building SpliceKit dylib"
 
 BUILD_DIR="$REPO_DIR/build"
 mkdir -p "$BUILD_DIR"
 
 SOURCES=(
-    "$REPO_DIR/Sources/FCPBridge.m"
-    "$REPO_DIR/Sources/FCPBridgeRuntime.m"
-    "$REPO_DIR/Sources/FCPBridgeSwizzle.m"
-    "$REPO_DIR/Sources/FCPBridgeServer.m"
+    "$REPO_DIR/Sources/SpliceKit.m"
+    "$REPO_DIR/Sources/SpliceKitRuntime.m"
+    "$REPO_DIR/Sources/SpliceKitSwizzle.m"
+    "$REPO_DIR/Sources/SpliceKitServer.m"
 )
 
 info "Compiling ${#SOURCES[@]} source files..."
@@ -252,27 +252,27 @@ clang -arch arm64 -arch x86_64 \
     -framework Foundation -framework AppKit \
     -fobjc-arc -fmodules \
     -undefined dynamic_lookup -dynamiclib \
-    -install_name @rpath/FCPBridge.framework/Versions/A/FCPBridge \
+    -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
     -I "$REPO_DIR/Sources" \
     "${SOURCES[@]}" \
-    -o "$BUILD_DIR/FCPBridge" 2>&1
+    -o "$BUILD_DIR/SpliceKit" 2>&1
 
-log "Built: $(file "$BUILD_DIR/FCPBridge" | grep -o 'universal.*')"
+log "Built: $(file "$BUILD_DIR/SpliceKit" | grep -o 'universal.*')"
 
 # ============================================================
 # Step 3: Create framework bundle
 # ============================================================
-step "Step 3: Installing FCPBridge framework"
+step "Step 3: Installing SpliceKit framework"
 
-FW_DIR="$MODDED_APP/Contents/Frameworks/FCPBridge.framework"
+FW_DIR="$MODDED_APP/Contents/Frameworks/SpliceKit.framework"
 mkdir -p "$FW_DIR/Versions/A/Resources"
 
 # Copy dylib
-cp "$BUILD_DIR/FCPBridge" "$FW_DIR/Versions/A/FCPBridge"
+cp "$BUILD_DIR/SpliceKit" "$FW_DIR/Versions/A/SpliceKit"
 
 # Create symlinks
 cd "$FW_DIR/Versions" && ln -sf A Current
-cd "$FW_DIR" && ln -sf Versions/Current/FCPBridge FCPBridge
+cd "$FW_DIR" && ln -sf Versions/Current/SpliceKit SpliceKit
 cd "$FW_DIR" && ln -sf Versions/Current/Resources Resources
 
 # Create Info.plist
@@ -281,12 +281,12 @@ cat > "$FW_DIR/Versions/A/Resources/Info.plist" << 'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key><string>com.fcpbridge.FCPBridge</string>
-    <key>CFBundleName</key><string>FCPBridge</string>
+    <key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string>
+    <key>CFBundleName</key><string>SpliceKit</string>
     <key>CFBundleVersion</key><string>2.0.0</string>
     <key>CFBundleShortVersionString</key><string>2.0.0</string>
     <key>CFBundlePackageType</key><string>FMWK</string>
-    <key>CFBundleExecutable</key><string>FCPBridge</string>
+    <key>CFBundleExecutable</key><string>SpliceKit</string>
 </dict>
 </plist>
 PLIST
@@ -301,11 +301,11 @@ step "Step 4: Injecting dylib into FCP binary"
 BINARY="$MODDED_APP/Contents/MacOS/Final Cut Pro"
 
 # Check if already injected
-if otool -L "$BINARY" 2>/dev/null | grep -q FCPBridge; then
+if otool -L "$BINARY" 2>/dev/null | grep -q SpliceKit; then
     log "Already injected (skipping)"
 else
     # Build insert_dylib if needed
-    INSERT_DYLIB="/tmp/fcpbridge_insert_dylib"
+    INSERT_DYLIB="/tmp/splicekit_insert_dylib"
     if [[ ! -f "$INSERT_DYLIB" ]]; then
         info "Building insert_dylib tool..."
         TMPDIR_ID=$(mktemp -d)
@@ -316,7 +316,7 @@ else
     fi
 
     "$INSERT_DYLIB" --inplace --all-yes \
-        "@rpath/FCPBridge.framework/Versions/A/FCPBridge" \
+        "@rpath/SpliceKit.framework/Versions/A/SpliceKit" \
         "$BINARY" 2>/dev/null
 
     log "LC_LOAD_DYLIB injected"
@@ -341,14 +341,14 @@ cat > "$ENTITLEMENTS" << 'ENT'
 </plist>
 ENT
 
-# Only sign the FCPBridge framework (ours) and the main app bundle.
+# Only sign the SpliceKit framework (ours) and the main app bundle.
 # Apple's own frameworks must keep their original signatures or internal
 # integrity checks (e.g. ProAppSupport +[PCApp isiMovie]) abort on launch.
-info "Signing FCPBridge framework..."
-codesign --force --sign - "$MODDED_APP/Contents/Frameworks/FCPBridge.framework" 2>/dev/null || true
+info "Signing SpliceKit framework..."
+codesign --force --sign - "$MODDED_APP/Contents/Frameworks/SpliceKit.framework" 2>/dev/null || true
 
 # Sign main app with entitlements (disables library validation so our
-# ad-hoc-signed FCPBridge.framework loads alongside Apple-signed frameworks)
+# ad-hoc-signed SpliceKit.framework loads alongside Apple-signed frameworks)
 info "Signing main application..."
 codesign --force --sign - --entitlements "$ENTITLEMENTS" "$MODDED_APP" 2>/dev/null
 
@@ -382,7 +382,7 @@ defaults write com.apple.FinalCut FFCloudContentDisabled -bool true 2>/dev/null 
 log "CloudContent defaults set"
 
 # Add speech recognition usage description for transcript feature
-/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'FCPBridge uses speech recognition to transcribe timeline audio for text-based editing.'" "$MODDED_APP/Contents/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'SpliceKit uses speech recognition to transcribe timeline audio for text-based editing.'" "$MODDED_APP/Contents/Info.plist" 2>/dev/null || true
 log "Speech recognition permission configured"
 
 # ============================================================
@@ -396,7 +396,7 @@ if [[ -f "$MCP_SERVER" ]]; then
     cat > "$MCP_CONFIG" << MCPJSON
 {
   "mcpServers": {
-    "fcpbridge": {
+    "splicekit": {
       "command": "python3",
       "args": ["$MCP_SERVER"]
     }
@@ -414,7 +414,7 @@ fi
 step "Patching complete!"
 
 echo -e "
-${GREEN}${BOLD}FCPBridge has been installed successfully!${NC}
+${GREEN}${BOLD}SpliceKit has been installed successfully!${NC}
 
 ${BOLD}Launch:${NC}
   $MODDED_APP/Contents/MacOS/Final\\ Cut\\ Pro
@@ -426,10 +426,10 @@ ${BOLD}JSON-RPC server:${NC}
   127.0.0.1:$BRIDGE_PORT (starts automatically)
 
 ${BOLD}Check logs:${NC}
-  ~/Library/Logs/FCPBridge/fcpbridge.log
+  ~/Library/Logs/SpliceKit/splicekit.log
 
 ${BOLD}Python client:${NC}
-  python3 $REPO_DIR/Scripts/fcpbridge_client.py
+  python3 $REPO_DIR/Scripts/splicekit_client.py
 
 ${BOLD}MCP server:${NC}
   Configured in .mcp.json (restart Claude Code to load)

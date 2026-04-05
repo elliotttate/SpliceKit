@@ -1,17 +1,17 @@
 //
-//  FCPTranscriptPanel.h
-//  FCPBridge - Text-based editing via speech transcription
+//  SpliceKitTranscriptPanel.h
+//  SpliceKit - Text-based editing via speech transcription
 //
 
-#ifndef FCPTranscriptPanel_h
-#define FCPTranscriptPanel_h
+#ifndef SpliceKitTranscriptPanel_h
+#define SpliceKitTranscriptPanel_h
 
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 
 #pragma mark - Data Model
 
-@interface FCPTranscriptWord : NSObject
+@interface SpliceKitTranscriptWord : NSObject
 @property (nonatomic, copy) NSString *text;
 @property (nonatomic) double startTime;       // seconds on timeline
 @property (nonatomic) double duration;         // seconds
@@ -27,7 +27,7 @@
 @property (nonatomic, copy) NSString *speaker;    // detected or assigned speaker name
 @end
 
-@interface FCPTranscriptSilence : NSObject
+@interface SpliceKitTranscriptSilence : NSObject
 @property (nonatomic) double startTime;        // silence start (end of previous word)
 @property (nonatomic) double endTime;          // silence end (start of next word)
 @property (nonatomic) double duration;         // endTime - startTime
@@ -37,20 +37,20 @@
 
 #pragma mark - Transcript Panel
 
-typedef NS_ENUM(NSInteger, FCPTranscriptStatus) {
-    FCPTranscriptStatusIdle = 0,
-    FCPTranscriptStatusTranscribing,
-    FCPTranscriptStatusReady,
-    FCPTranscriptStatusError
+typedef NS_ENUM(NSInteger, SpliceKitTranscriptStatus) {
+    SpliceKitTranscriptStatusIdle = 0,
+    SpliceKitTranscriptStatusTranscribing,
+    SpliceKitTranscriptStatusReady,
+    SpliceKitTranscriptStatusError
 };
 
-typedef NS_ENUM(NSInteger, FCPTranscriptEngine) {
-    FCPTranscriptEngineFCPNative = 0,   // FCP's built-in AASpeechAnalyzer (fast, on-device)
-    FCPTranscriptEngineAppleSpeech,     // SFSpeechRecognizer (slower, network-capable)
-    FCPTranscriptEngineParakeet,        // NVIDIA Parakeet TDT 0.6B via FluidAudio (on-device, auto-downloads)
+typedef NS_ENUM(NSInteger, SpliceKitTranscriptEngine) {
+    SpliceKitTranscriptEngineFCPNative = 0,   // FCP's built-in AASpeechAnalyzer (fast, on-device)
+    SpliceKitTranscriptEngineAppleSpeech,     // SFSpeechRecognizer (slower, network-capable)
+    SpliceKitTranscriptEngineParakeet,        // NVIDIA Parakeet TDT 0.6B via FluidAudio (on-device, auto-downloads)
 };
 
-@interface FCPTranscriptPanel : NSObject
+@interface SpliceKitTranscriptPanel : NSObject
 
 + (instancetype)sharedPanel;
 
@@ -69,9 +69,9 @@ typedef NS_ENUM(NSInteger, FCPTranscriptEngine) {
 
 // State
 - (NSDictionary *)getState;
-@property (nonatomic, readonly) FCPTranscriptStatus status;
-@property (nonatomic, readonly) NSArray<FCPTranscriptWord *> *words;
-@property (nonatomic, readonly) NSArray<FCPTranscriptSilence *> *silences;
+@property (nonatomic, readonly) SpliceKitTranscriptStatus status;
+@property (nonatomic, readonly) NSArray<SpliceKitTranscriptWord *> *words;
+@property (nonatomic, readonly) NSArray<SpliceKitTranscriptSilence *> *silences;
 @property (nonatomic, readonly, copy) NSString *fullText;
 @property (nonatomic, readonly, copy) NSString *errorMessage;
 
@@ -80,7 +80,7 @@ typedef NS_ENUM(NSInteger, FCPTranscriptEngine) {
 - (NSDictionary *)moveWordsFromIndex:(NSUInteger)startIndex count:(NSUInteger)count toIndex:(NSUInteger)destIndex;
 
 // Engine selection
-@property (nonatomic) FCPTranscriptEngine engine; // default: FCPTranscriptEngineFCPNative
+@property (nonatomic) SpliceKitTranscriptEngine engine; // default: SpliceKitTranscriptEngineFCPNative
 
 // Silence operations
 @property (nonatomic) double silenceThreshold;  // seconds, default 0.3
@@ -98,4 +98,4 @@ typedef NS_ENUM(NSInteger, FCPTranscriptEngine) {
 
 @end
 
-#endif /* FCPTranscriptPanel_h */
+#endif /* SpliceKitTranscriptPanel_h */

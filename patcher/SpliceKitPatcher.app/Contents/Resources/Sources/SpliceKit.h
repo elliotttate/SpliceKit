@@ -1,98 +1,98 @@
 //
-//  FCPBridge.h
-//  FCPBridge - Direct in-process access to Final Cut Pro private APIs
+//  SpliceKit.h
+//  SpliceKit - Direct in-process access to Final Cut Pro private APIs
 //
 
-#ifndef FCPBridge_h
-#define FCPBridge_h
+#ifndef SpliceKit_h
+#define SpliceKit_h
 
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
 // Version
-#define FCPBRIDGE_VERSION "2.6.0"
-#define FCPBRIDGE_MAX_HANDLES 2000
+#define SPLICEKIT_VERSION "2.6.0"
+#define SPLICEKIT_MAX_HANDLES 2000
 
 // Socket path - resolve at runtime to handle sandbox
-const char *FCPBridge_getSocketPath(void);
+const char *SpliceKit_getSocketPath(void);
 
-// Logging - writes to ~/Library/Logs/FCPBridge/fcpbridge.log AND NSLog
-void FCPBridge_log(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
+// Logging - writes to ~/Library/Logs/SpliceKit/splicekit.log AND NSLog
+void SpliceKit_log(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
 
 #pragma mark - Runtime Utilities
 
 // Safe message sending wrappers
-id FCPBridge_sendMsg(id target, SEL selector);
-id FCPBridge_sendMsg1(id target, SEL selector, id arg1);
-id FCPBridge_sendMsg2(id target, SEL selector, id arg1, id arg2);
-BOOL FCPBridge_sendMsgBool(id target, SEL selector);
+id SpliceKit_sendMsg(id target, SEL selector);
+id SpliceKit_sendMsg1(id target, SEL selector, id arg1);
+id SpliceKit_sendMsg2(id target, SEL selector, id arg1, id arg2);
+BOOL SpliceKit_sendMsgBool(id target, SEL selector);
 
 // Class/method discovery
-NSArray *FCPBridge_classesInImage(const char *imageName);
-NSDictionary *FCPBridge_methodsForClass(Class cls);
-NSArray *FCPBridge_allLoadedClasses(void);
+NSArray *SpliceKit_classesInImage(const char *imageName);
+NSDictionary *SpliceKit_methodsForClass(Class cls);
+NSArray *SpliceKit_allLoadedClasses(void);
 
 // Main thread dispatch
-void FCPBridge_executeOnMainThread(dispatch_block_t block);
-void FCPBridge_executeOnMainThreadAsync(dispatch_block_t block);
+void SpliceKit_executeOnMainThread(dispatch_block_t block);
+void SpliceKit_executeOnMainThreadAsync(dispatch_block_t block);
 
 #pragma mark - Swizzling
 
-IMP FCPBridge_swizzleMethod(Class cls, SEL selector, IMP newImpl);
-BOOL FCPBridge_unswizzleMethod(Class cls, SEL selector);
+IMP SpliceKit_swizzleMethod(Class cls, SEL selector, IMP newImpl);
+BOOL SpliceKit_unswizzleMethod(Class cls, SEL selector);
 
 #pragma mark - Object Handle System
 
-NSString *FCPBridge_storeHandle(id object);
-id FCPBridge_resolveHandle(NSString *handleId);
-void FCPBridge_releaseHandle(NSString *handleId);
-void FCPBridge_releaseAllHandles(void);
-NSDictionary *FCPBridge_listHandles(void);
+NSString *SpliceKit_storeHandle(id object);
+id SpliceKit_resolveHandle(NSString *handleId);
+void SpliceKit_releaseHandle(NSString *handleId);
+void SpliceKit_releaseAllHandles(void);
+NSDictionary *SpliceKit_listHandles(void);
 
 #pragma mark - Server
 
-void FCPBridge_startControlServer(void);
-void FCPBridge_broadcastEvent(NSDictionary *event);
+void SpliceKit_startControlServer(void);
+void SpliceKit_broadcastEvent(NSDictionary *event);
 
 #pragma mark - Transition Freeze Extend
 
-void FCPBridge_installTransitionFreezeExtendSwizzle(void);
+void SpliceKit_installTransitionFreezeExtendSwizzle(void);
 
 #pragma mark - Effect Drag as Adjustment Clip
 
-void FCPBridge_installEffectDragAsAdjustmentClip(void);
-void FCPBridge_setEffectDragAsAdjustmentClipEnabled(BOOL enabled);
-BOOL FCPBridge_isEffectDragAsAdjustmentClipEnabled(void);
+void SpliceKit_installEffectDragAsAdjustmentClip(void);
+void SpliceKit_setEffectDragAsAdjustmentClipEnabled(BOOL enabled);
+BOOL SpliceKit_isEffectDragAsAdjustmentClipEnabled(void);
 
 #pragma mark - Viewer Pinch-to-Zoom
 
-void FCPBridge_installViewerPinchZoom(void);
-void FCPBridge_removeViewerPinchZoom(void);
-void FCPBridge_setViewerPinchZoomEnabled(BOOL enabled);
-BOOL FCPBridge_isViewerPinchZoomEnabled(void);
+void SpliceKit_installViewerPinchZoom(void);
+void SpliceKit_removeViewerPinchZoom(void);
+void SpliceKit_setViewerPinchZoomEnabled(BOOL enabled);
+BOOL SpliceKit_isViewerPinchZoomEnabled(void);
 
 #pragma mark - Effect Browser Favorites
 
-void FCPBridge_installEffectFavoritesSwizzle(void);
+void SpliceKit_installEffectFavoritesSwizzle(void);
 
 #pragma mark - Video-Only Keeps Audio Disabled
 
-void FCPBridge_installVideoOnlyKeepsAudioDisabled(void);
-void FCPBridge_setVideoOnlyKeepsAudioDisabledEnabled(BOOL enabled);
-BOOL FCPBridge_isVideoOnlyKeepsAudioDisabledEnabled(void);
+void SpliceKit_installVideoOnlyKeepsAudioDisabled(void);
+void SpliceKit_setVideoOnlyKeepsAudioDisabledEnabled(BOOL enabled);
+BOOL SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled(void);
 
 #pragma mark - Cached Class References
 
-extern Class FCPBridge_FFAnchoredTimelineModule;
-extern Class FCPBridge_FFAnchoredSequence;
-extern Class FCPBridge_FFLibrary;
-extern Class FCPBridge_FFLibraryDocument;
-extern Class FCPBridge_FFEditActionMgr;
-extern Class FCPBridge_FFModelDocument;
-extern Class FCPBridge_FFPlayer;
-extern Class FCPBridge_FFActionContext;
-extern Class FCPBridge_PEAppController;
-extern Class FCPBridge_PEDocument;
+extern Class SpliceKit_FFAnchoredTimelineModule;
+extern Class SpliceKit_FFAnchoredSequence;
+extern Class SpliceKit_FFLibrary;
+extern Class SpliceKit_FFLibraryDocument;
+extern Class SpliceKit_FFEditActionMgr;
+extern Class SpliceKit_FFModelDocument;
+extern Class SpliceKit_FFPlayer;
+extern Class SpliceKit_FFActionContext;
+extern Class SpliceKit_PEAppController;
+extern Class SpliceKit_PEDocument;
 
-#endif /* FCPBridge_h */
+#endif /* SpliceKit_h */
