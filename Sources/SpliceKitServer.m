@@ -5961,7 +5961,7 @@ static void SpliceKit_captureTransitionReplayRequest(id sequence, id spineObject
     sFreezeExtendActionRootItem = rootItem;
     sFreezeExtendActionReportErrors = reportErrors;
 
-    SpliceKit_log([NSString stringWithFormat:
+    SpliceKit_log(@"%@", [NSString stringWithFormat:
         @"[FreezeExtend] Captured transition request from %@ before=%@ after=%@ reportErrors=%@ effects=%@ root=%@",
         source ?: @"transition",
         before ? @"YES" : @"NO",
@@ -5994,7 +5994,7 @@ static void SpliceKit_captureOperationTransitionReplayRequest(
         durationSeconds = (double)transitionDuration.value / (double)transitionDuration.timescale;
     }
 
-    SpliceKit_log([NSString stringWithFormat:
+    SpliceKit_log(@"%@", [NSString stringWithFormat:
         @"[FreezeExtend] Captured operation replay from %@ before=%@ after=%@ reportErrors=%d duration=%.4f spare=%@",
         source ?: @"transition",
         before ? @"YES" : @"NO",
@@ -6081,7 +6081,7 @@ static BOOL SpliceKit_replayCapturedTransitionRequest(id timeline, NSString **ou
             @"captured sequence no longer responds to actionAddTransitionsToSpineObjects");
     }
 
-    SpliceKit_log([NSString stringWithFormat:
+    SpliceKit_log(@"%@", [NSString stringWithFormat:
         @"[FreezeExtend] Action replay using sequence=%@ spineObjects=%@ root=%@ liveRight=%@",
         NSStringFromClass([sequence class]) ?: @"<nil>",
         NSStringFromClass([spineObjects class]) ?: @"<nil>",
@@ -6172,7 +6172,7 @@ static BOOL SpliceKit_replayCapturedOperationTransitionRequest(id timeline, NSSt
             @"captured sequence no longer responds to operationAddTransitions...askedRetry");
     }
 
-    SpliceKit_log([NSString stringWithFormat:
+    SpliceKit_log(@"%@", [NSString stringWithFormat:
         @"[FreezeExtend] Operation replay using sequence=%@ spineObject=%@ objects=%@ liveRight=%@ spare=%@",
         NSStringFromClass([sequence class]) ?: @"<nil>",
         NSStringFromClass([spineObject class]) ?: @"<nil>",
@@ -6272,7 +6272,7 @@ static double SpliceKit_defaultTransitionDurationSeconds(id timeline) {
 static BOOL SpliceKit_failFreezeExtendRepair(NSString **outReason, NSString *reason) {
     NSString *message = reason ?: @"unknown reason";
     if (outReason) *outReason = message;
-    SpliceKit_log([NSString stringWithFormat:
+    SpliceKit_log(@"%@", [NSString stringWithFormat:
         @"[FreezeExtend] Synthetic repair step failed: %@", message]);
     return NO;
 }
@@ -6347,7 +6347,7 @@ static BOOL SpliceKit_attemptFreezeExtendRepairRightSide(NSString **outReason) {
             }
         }
         sForceOverlap = YES;
-        SpliceKit_log([NSString stringWithFormat:
+        SpliceKit_log(@"%@", [NSString stringWithFormat:
             @"[FreezeExtend] Repair: reduced duration from %.4f to %.4f "
             @"(left=%.4f target=%.4f minClip=%.4f)",
             defaultDur, maxFeasible, leftDurForRepair, targetDuration, minClipDur]);
@@ -6370,7 +6370,7 @@ static BOOL SpliceKit_attemptFreezeExtendRepairRightSide(NSString **outReason) {
                 SpliceKit_log(@"[FreezeExtend] Captured operation replay returned success but no transition appeared");
             }
         } else {
-            SpliceKit_log([NSString stringWithFormat:
+            SpliceKit_log(@"%@", [NSString stringWithFormat:
                 @"[FreezeExtend] Captured operation replay failed: %@",
                 opReplayReason ?: @"unknown reason"]);
         }
@@ -6393,7 +6393,7 @@ static BOOL SpliceKit_attemptFreezeExtendRepairRightSide(NSString **outReason) {
                 SpliceKit_log(@"[FreezeExtend] Captured replay returned success but no transition appeared");
             }
         } else {
-            SpliceKit_log([NSString stringWithFormat:
+            SpliceKit_log(@"%@", [NSString stringWithFormat:
                 @"[FreezeExtend] Captured replay failed: %@",
                 replayReason ?: @"unknown reason"]);
         }
@@ -6442,7 +6442,7 @@ static BOOL SpliceKit_attemptFreezeExtendRepairRightSide(NSString **outReason) {
     }
 
     if (rightEnd <= targetEnd + (frame * 4.0)) {
-        SpliceKit_log([NSString stringWithFormat:
+        SpliceKit_log(@"%@", [NSString stringWithFormat:
             @"[FreezeExtend] Right clip already within captured bounds start=%.4f end=%.4f targetEnd=%.4f",
             rightStart, rightEnd, targetEnd]);
         repairResult = YES;
@@ -6459,7 +6459,7 @@ static BOOL SpliceKit_attemptFreezeExtendRepairRightSide(NSString **outReason) {
         double leftStart = 0.0;
         double leftEnd = 0.0;
         SpliceKit_transitionGetItemBounds(leftClip, &leftStart, &leftEnd);
-        SpliceKit_log([NSString stringWithFormat:
+        SpliceKit_log(@"%@", [NSString stringWithFormat:
             @"[FreezeExtend] Corrective trim left=%.4f-%.4f right=%.4f-%.4f targetCut=%.4f targetEnd=%.4f",
             leftStart, leftEnd, rightStart, rightEnd, targetStart, targetEnd]);
 
@@ -6492,7 +6492,7 @@ static BOOL SpliceKit_attemptFreezeExtendRepairRightSide(NSString **outReason) {
             goto repair_cleanup;
         }
 
-        SpliceKit_log([NSString stringWithFormat:
+        SpliceKit_log(@"%@", [NSString stringWithFormat:
             @"[FreezeExtend] Corrective trim completed right=%.4f-%.4f",
             correctedRightStart, correctedRightEnd]);
         SpliceKit_sendTimelineSimpleAction(timeline, @"deselectAll:");
@@ -6527,7 +6527,7 @@ static void SpliceKit_scheduleFreezeExtendRepairAttempt(NSInteger attemptNumber)
             BOOL ok = SpliceKit_attemptFreezeExtendRepairRightSide(&reason);
             if (ok) {
                 sFreezeExtendDidApply = YES;
-                SpliceKit_log([NSString stringWithFormat:
+                SpliceKit_log(@"%@", [NSString stringWithFormat:
                     @"[FreezeExtend] Synthetic repair completed on attempt %ld",
                     (long)attemptNumber]);
                 SpliceKit_clearCapturedTransitionRequest();
@@ -6540,7 +6540,7 @@ static void SpliceKit_scheduleFreezeExtendRepairAttempt(NSInteger attemptNumber)
             }
 
             sFreezeExtendDidApply = NO;
-            SpliceKit_log([NSString stringWithFormat:
+            SpliceKit_log(@"%@", [NSString stringWithFormat:
                 @"[FreezeExtend] Synthetic repair failed on attempt %ld: %@",
                 (long)attemptNumber, reason ?: @"unknown reason"]);
             SpliceKit_clearCapturedTransitionRequest();
@@ -6568,7 +6568,7 @@ static int SpliceKit_effectiveTransitionOverlapType(int overlapType, NSString *s
     if (overlapType != 2) {
         SpliceKit_log(@"[FreezeExtend] Forcing transitionOverlapType -> 2");
         if (source.length > 0) {
-            SpliceKit_log([NSString stringWithFormat:
+            SpliceKit_log(@"%@", [NSString stringWithFormat:
                 @"[FreezeExtend] Source=%@ original transitionOverlapType=%d",
                 source, overlapType]);
         }
@@ -6648,7 +6648,7 @@ static BOOL SpliceKit_swizzled_operationAddTransitionsAskedRetry(
 
 static void SpliceKit_swizzled_NSApp_stopModalWithCode(id self, SEL _cmd, NSModalResponse code) {
     if (sFreezeExtendInTransitionAlert) {
-        SpliceKit_log([NSString stringWithFormat:
+        SpliceKit_log(@"%@", [NSString stringWithFormat:
             @"[FreezeExtend] stopModalWithCode raw=%ld", (long)code]);
         if (SpliceKit_isFreezeFramesResponse(code)) {
             SpliceKit_log(@"[FreezeExtend] stopModalWithCode detected 'Use Freeze Frames'");
