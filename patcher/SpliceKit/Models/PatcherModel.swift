@@ -89,14 +89,10 @@ class PatcherModel: ObservableObject {
             sourceApp = Self.standardApp
         }
         destDir = NSHomeDirectory() + "/Library/Application Support/SpliceKit"
-        // Find FCPBridge sources. Priority:
-        // 1. Embedded in app bundle (Resources/Sources/) — self-contained release
-        // 2. Relative to app bundle (developer running from repo checkout)
-        // 3. Common local paths
-        // 4. Cache dir (will download into it during patch)
+        // Find sources: app bundle first, then Application Support cache
         var found = ""
 
-        // 1. Embedded in app bundle
+        // 1. Embedded in app bundle (Resources/Sources/) — self-contained release
         if let resourcePath = Bundle.main.resourcePath {
             let embedded = resourcePath + "/Sources"
             if FileManager.default.fileExists(atPath: embedded + "/FCPBridge.m") {
@@ -104,31 +100,7 @@ class PatcherModel: ObservableObject {
             }
         }
 
-        // 2. Relative to app bundle (developer workflow)
-        if found.isEmpty {
-            var dir = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
-            for _ in 0..<5 {
-                if FileManager.default.fileExists(atPath: dir + "/Sources/FCPBridge.m") {
-                    found = dir; break
-                }
-                dir = (dir as NSString).deletingLastPathComponent
-            }
-        }
-
-        // 3. Common locations
-        if found.isEmpty {
-            for path in [
-                NSHomeDirectory() + "/Documents/GitHub/FCPBridge",
-                NSHomeDirectory() + "/Desktop/FCPBridge",
-                NSHomeDirectory() + "/FCPBridge",
-            ] {
-                if FileManager.default.fileExists(atPath: path + "/Sources/FCPBridge.m") {
-                    found = path; break
-                }
-            }
-        }
-
-        // 4. Cache dir (download during patch)
+        // 2. Application Support cache (will download into it during patch)
         if found.isEmpty {
             found = NSHomeDirectory() + "/Library/Caches/SpliceKit"
         }
