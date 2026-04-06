@@ -183,6 +183,8 @@ static void SpliceKit_checkCompatibility(void) {
 - (void)toggleViewerPinchZoom:(id)sender;
 - (void)toggleVideoOnlyKeepsAudioDisabled:(id)sender;
 - (void)toggleSuppressAutoImport:(id)sender;
+- (void)editLLadder:(id)sender;
+- (void)editJLadder:(id)sender;
 @property (nonatomic, weak) NSButton *toolbarButton;
 @property (nonatomic, weak) NSButton *paletteToolbarButton;
 @end
@@ -250,6 +252,80 @@ static void SpliceKit_checkCompatibility(void) {
     }
 }
 
+// --- Playback Speed ladder editors ---
+
+static NSString *SpliceKit_ladderToString(NSArray<NSNumber *> *ladder) {
+    NSMutableArray *strs = [NSMutableArray array];
+    for (NSNumber *n in ladder) {
+        float v = [n floatValue];
+        if (v == (int)v) [strs addObject:[NSString stringWithFormat:@"%d", (int)v]];
+        else [strs addObject:[NSString stringWithFormat:@"%.1f", v]];
+    }
+    return [strs componentsJoinedByString:@", "];
+}
+
+static NSArray<NSNumber *> *SpliceKit_parseLadderString(NSString *str) {
+    NSMutableArray *result = [NSMutableArray array];
+    for (NSString *part in [str componentsSeparatedByString:@","]) {
+        NSString *trimmed = [part stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (trimmed.length > 0) {
+            float val = [trimmed floatValue];
+            if (val > 0.0f) [result addObject:@(val)];
+        }
+    }
+    // Sort ascending
+    [result sortUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) {
+        return [a compare:b];
+    }];
+    return result;
+}
+
+- (void)editLLadder:(id)sender {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"L Key Speeds";
+        alert.informativeText = @"Each press of L advances to the next speed.\nEnter values separated by commas:";
+        [alert addButtonWithTitle:@"Save"];
+        [alert addButtonWithTitle:@"Cancel"];
+        NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 280, 24)];
+        input.stringValue = SpliceKit_ladderToString(SpliceKit_getLLadder());
+        alert.accessoryView = input;
+        [alert.window makeFirstResponder:input];
+        if ([alert runModal] == NSAlertFirstButtonReturn) {
+            NSArray *speeds = SpliceKit_parseLadderString(input.stringValue);
+            if (speeds.count > 0) {
+                SpliceKit_setLLadder(speeds);
+                if ([sender isKindOfClass:[NSMenuItem class]])
+                    [(NSMenuItem *)sender setTitle:
+                        [NSString stringWithFormat:@"L Speeds: %@", SpliceKit_ladderToString(speeds)]];
+            }
+        }
+    });
+}
+
+- (void)editJLadder:(id)sender {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"J Key Speeds";
+        alert.informativeText = @"Each press of J advances to the next reverse speed.\nEnter values separated by commas:";
+        [alert addButtonWithTitle:@"Save"];
+        [alert addButtonWithTitle:@"Cancel"];
+        NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 280, 24)];
+        input.stringValue = SpliceKit_ladderToString(SpliceKit_getJLadder());
+        alert.accessoryView = input;
+        [alert.window makeFirstResponder:input];
+        if ([alert runModal] == NSAlertFirstButtonReturn) {
+            NSArray *speeds = SpliceKit_parseLadderString(input.stringValue);
+            if (speeds.count > 0) {
+                SpliceKit_setJLadder(speeds);
+                if ([sender isKindOfClass:[NSMenuItem class]])
+                    [(NSMenuItem *)sender setTitle:
+                        [NSString stringWithFormat:@"J Speeds: %@", SpliceKit_ladderToString(speeds)]];
+            }
+        }
+    });
+}
+
 - (void)updateToolbarButtonState:(BOOL)active {
     NSButton *btn = self.toolbarButton;
     if (!btn) return;
@@ -291,6 +367,32 @@ static void SpliceKit_installMenu(void) {
     paletteItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
     paletteItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:paletteItem];
+
+    // --- Playback Speed submenu ---
+    [bridgeMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenu *speedMenu = [[NSMenu alloc] initWithTitle:@"Playback Speed"];
+    SpliceKitMenuController *mc = [SpliceKitMenuController shared];
+
+    NSMenuItem *lItem = [[NSMenuItem alloc]
+        initWithTitle:[NSString stringWithFormat:@"L Speeds: %@",
+                       SpliceKit_ladderToString(SpliceKit_getLLadder())]
+               action:@selector(editLLadder:)
+        keyEquivalent:@""];
+    lItem.target = mc;
+    [speedMenu addItem:lItem];
+
+    NSMenuItem *jItem = [[NSMenuItem alloc]
+        initWithTitle:[NSString stringWithFormat:@"J Speeds: %@",
+                       SpliceKit_ladderToString(SpliceKit_getJLadder())]
+               action:@selector(editJLadder:)
+        keyEquivalent:@""];
+    jItem.target = mc;
+    [speedMenu addItem:jItem];
+
+    NSMenuItem *speedMenuItem = [[NSMenuItem alloc] initWithTitle:@"Playback Speed" action:nil keyEquivalent:@""];
+    speedMenuItem.submenu = speedMenu;
+    [bridgeMenu addItem:speedMenuItem];
 
     // --- Options submenu ---
     [bridgeMenu addItem:[NSMenuItem separatorItem]];
@@ -599,6 +701,9 @@ static void SpliceKit_appDidLaunch(void) {
     // Install FCPXML direct paste support (converts FCPXML on pasteboard
     // to native clipboard format so pasteAnchored: can handle it)
     SpliceKit_installFCPXMLPasteSwizzle();
+
+    // Swizzle J/L to use configurable speed ladders
+    SpliceKit_installPlaybackSpeedSwizzle();
 
     // Rebuild FCP's hidden Debug pane + Debug menu bar (Apple strips the NIB
     // and leaves the menu unassigned in release builds; we reconstruct both).

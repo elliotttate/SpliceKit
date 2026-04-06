@@ -329,9 +329,52 @@ def playback_action(action: str) -> str:
     """Control playback via responder chain.
 
     Actions: playPause, goToStart, goToEnd, nextFrame, prevFrame,
-             nextFrame10, prevFrame10, playAroundCurrent
+             nextFrame10, prevFrame10, playAroundCurrent, playFromStart,
+             playInToOut, playReverse, stopPlaying, loop,
+             fastForward, rewind,
+             playRate1X, playRate2X, playRate4X, playRate8X,
+             playRate16X, playRate32X, playRateHalf, playRateMinusHalf,
+             playRateMinus1X, playRateMinus2X, playRateMinus32X
+
+    For precise speed control, use set_playback_speed() instead.
     """
     return _call_or_error("playback.action", action=action)
+
+
+@mcp.tool()
+def set_playback_speed(rate: float = None, action: str = None) -> str:
+    """Set playback speed to an exact rate, or use shuttle actions.
+
+    Args:
+        rate: Exact playback rate as float. Examples:
+              0.5 = half speed, 1.0 = normal, 1.5, 1.8,
+              2.0 = double speed, -1.0 = reverse normal.
+              Supports any float value.
+        action: Named speed action. One of:
+              "faster" - play forward at configured L speed
+              "slower" - play reverse at configured J speed
+              "stop" - stop playback
+
+    L/J speed ladders are configurable via Enhancements > Playback Speed menu,
+    or via set_bridge_option("lLadder", value=[1, 1.5, 2, 4, 8]).
+    Default ladders: [1, 2, 4, 8, 16, 32].
+    "faster"/"slower" trigger the swizzled fastForward/rewind which walk
+    the configured ladder progressively (like pressing L/J on keyboard).
+
+    Provide either rate OR action, not both.
+    """
+    if rate is not None and action is not None:
+        return "Error: provide either rate or action, not both"
+
+    if rate is not None:
+        return _call_or_error("playback.setRate", rate=rate)
+
+    if action is not None:
+        if action in ("faster", "slower", "stop"):
+            return _call_or_error("playback.shuttle", direction=action)
+        return f"Error: unknown action '{action}'. Valid: faster, slower, stop"
+
+    return "Error: provide either rate (float) or action (string)"
 
 
 @mcp.tool()

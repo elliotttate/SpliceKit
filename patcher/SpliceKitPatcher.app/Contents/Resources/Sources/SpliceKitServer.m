@@ -2950,6 +2950,18 @@ NSDictionary *SpliceKit_handlePlayback(NSDictionary *params) {
         @"loop":             @"loop:",
         @"fastForward":      @"fastForward:",
         @"rewind":           @"rewind:",
+        // Named rate presets (JKL-style)
+        @"playRate1X":        @"playRate1X:",
+        @"playRate2X":        @"playRate2X:",
+        @"playRate4X":        @"playRate4X:",
+        @"playRate8X":        @"playRate8X:",
+        @"playRate16X":       @"playRate16X:",
+        @"playRate32X":       @"playRate32X:",
+        @"playRateHalf":      @"playRateHalf:",
+        @"playRateMinusHalf": @"playRateMinusHalf:",
+        @"playRateMinus1X":   @"playRateMinus1X:",
+        @"playRateMinus2X":   @"playRateMinus2X:",
+        @"playRateMinus32X":  @"playRateMinus32X:",
     };
 
     NSString *selector = actionMap[action];
@@ -3064,6 +3076,22 @@ NSDictionary *SpliceKit_handlePlaybackGetPosition(NSDictionary *params) {
                     r[@"isPlaying"] = @(playing);
                 }
 
+                // Read current playback rate from FFPlayer
+                id playerModule = SpliceKit_getPlayerModule();
+                if (playerModule) {
+                    SEL pSel = NSSelectorFromString(@"player");
+                    if ([playerModule respondsToSelector:pSel]) {
+                        id ffPlayer = ((id (*)(id, SEL))objc_msgSend)(playerModule, pSel);
+                        if (ffPlayer) {
+                            SEL rateSel = NSSelectorFromString(@"rate");
+                            if ([ffPlayer respondsToSelector:rateSel]) {
+                                double currentRate = ((double (*)(id, SEL))objc_msgSend)(ffPlayer, rateSel);
+                                r[@"rate"] = @(currentRate);
+                            }
+                        }
+                    }
+                }
+
                 result = r;
             } else {
                 result = @{@"error": @"Cannot read playhead time"};
@@ -3073,6 +3101,200 @@ NSDictionary *SpliceKit_handlePlaybackGetPosition(NSDictionary *params) {
         }
     });
     return result ?: @{@"error": @"Failed to get position"};
+}
+
+#pragma mark - Playback Speed Configuration
+
+static NSString * const kSpliceKitLSpeedLadder = @"SpliceKitLSpeedLadder";
+static NSString * const kSpliceKitJSpeedLadder = @"SpliceKitJSpeedLadder";
+static NSString * const kSpliceKitLDoubleTapSpeed = @"SpliceKitLDoubleTapSpeed";
+static NSString * const kSpliceKitJDoubleTapSpeed = @"SpliceKitJDoubleTapSpeed";
+
+NSArray<NSNumber *> *SpliceKit_getLSpeedLadder(void) {
+    NSArray *stored = [[NSUserDefaults standardUserDefaults] arrayForKey:kSpliceKitLSpeedLadder];
+    if (stored.count > 0) return stored;
+    return @[@1.5, @1.8, @2, @4, @8, @16, @32];
+}
+
+void SpliceKit_setLSpeedLadder(NSArray<NSNumber *> *speeds) {
+    [[NSUserDefaults standardUserDefaults] setObject:speeds forKey:kSpliceKitLSpeedLadder];
+    SpliceKit_log(@"[Speed] L ladder set to: %@", speeds);
+}
+
+NSArray<NSNumber *> *SpliceKit_getJSpeedLadder(void) {
+    NSArray *stored = [[NSUserDefaults standardUserDefaults] arrayForKey:kSpliceKitJSpeedLadder];
+    if (stored.count > 0) return stored;
+    return @[@(-1.5), @(-1.8), @(-2), @(-4), @(-8), @(-16), @(-32)];
+}
+
+void SpliceKit_setJSpeedLadder(NSArray<NSNumber *> *speeds) {
+    [[NSUserDefaults standardUserDefaults] setObject:speeds forKey:kSpliceKitJSpeedLadder];
+    SpliceKit_log(@"[Speed] J ladder set to: %@", speeds);
+}
+
+float SpliceKit_getLDoubleTapSpeed(void) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([defaults objectForKey:kSpliceKitLDoubleTapSpeed]) {
+        return [defaults floatForKey:kSpliceKitLDoubleTapSpeed];
+    }
+    return 2.0f;
+}
+
+void SpliceKit_setLDoubleTapSpeed(float speed) {
+    [[NSUserDefaults standardUserDefaults] setFloat:speed forKey:kSpliceKitLDoubleTapSpeed];
+    SpliceKit_log(@"[Speed] L double-tap set to: %.1f", speed);
+}
+
+float SpliceKit_getJDoubleTapSpeed(void) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([defaults objectForKey:kSpliceKitJDoubleTapSpeed]) {
+        return [defaults floatForKey:kSpliceKitJDoubleTapSpeed];
+    }
+    return -2.0f;
+}
+
+void SpliceKit_setJDoubleTapSpeed(float speed) {
+    [[NSUserDefaults standardUserDefaults] setFloat:speed forKey:kSpliceKitJDoubleTapSpeed];
+    SpliceKit_log(@"[Speed] J double-tap set to: %.1f", speed);
+}
+
+void SpliceKit_setPlaybackRate(float rate) {
+    SpliceKit_executeOnMainThread(^{
+        id playerModule = SpliceKit_getPlayerModule();
+        if (!playerModule) return;
+        SEL sel = NSSelectorFromString(@"_playWithRate:");
+        if ([playerModule respondsToSelector:sel]) {
+            ((void (*)(id, SEL, float))objc_msgSend)(playerModule, sel, rate);
+        }
+    });
+}
+
+NSDictionary *SpliceKit_handlePlaybackSetRate(NSDictionary *params) {
+    NSNumber *rateNum = params[@"rate"];
+    if (!rateNum) return @{@"error": @"rate parameter required"};
+
+    __block NSDictionary *result = nil;
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id playerModule = SpliceKit_getPlayerModule();
+            if (!playerModule) {
+                result = @{@"error": @"No player module found"};
+                return;
+            }
+
+            float rate = [rateNum floatValue];
+
+            SEL sel = NSSelectorFromString(@"_playWithRate:");
+            if (![playerModule respondsToSelector:sel]) {
+                result = @{@"error": @"Player module does not respond to _playWithRate:"};
+                return;
+            }
+
+            ((void (*)(id, SEL, float))objc_msgSend)(playerModule, sel, rate);
+
+            // Read back actual rate from FFPlayer to confirm
+            double actualRate = 0.0;
+            SEL pSel = NSSelectorFromString(@"player");
+            if ([playerModule respondsToSelector:pSel]) {
+                id ffPlayer = ((id (*)(id, SEL))objc_msgSend)(playerModule, pSel);
+                if (ffPlayer) {
+                    SEL rateSel = NSSelectorFromString(@"rate");
+                    if ([ffPlayer respondsToSelector:rateSel]) {
+                        actualRate = ((double (*)(id, SEL))objc_msgSend)(ffPlayer, rateSel);
+                    }
+                }
+            }
+
+            result = @{
+                @"status": @"ok",
+                @"requestedRate": @(rate),
+                @"actualRate": @(actualRate),
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to set rate"};
+}
+
+NSDictionary *SpliceKit_handlePlaybackShuttle(NSDictionary *params) {
+    NSString *direction = params[@"direction"];
+    if (!direction) return @{@"error": @"direction parameter required (faster/slower/stop)"};
+
+    if ([direction isEqualToString:@"stop"]) {
+        return SpliceKit_sendAppAction(@"stopPlaying:");
+    }
+
+    __block NSDictionary *result = nil;
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id playerModule = SpliceKit_getPlayerModule();
+            if (!playerModule) {
+                result = @{@"error": @"No player module found"};
+                return;
+            }
+
+            double currentRate = 0.0;
+            SEL pSel = NSSelectorFromString(@"player");
+            if ([playerModule respondsToSelector:pSel]) {
+                id ffPlayer = ((id (*)(id, SEL))objc_msgSend)(playerModule, pSel);
+                if (ffPlayer) {
+                    SEL rateSel = NSSelectorFromString(@"rate");
+                    if ([ffPlayer respondsToSelector:rateSel]) {
+                        currentRate = ((double (*)(id, SEL))objc_msgSend)(ffPlayer, rateSel);
+                    }
+                }
+            }
+
+            NSArray<NSNumber *> *ladder;
+            if ([direction isEqualToString:@"faster"]) {
+                ladder = SpliceKit_getLSpeedLadder();
+            } else {
+                ladder = SpliceKit_getJSpeedLadder();
+            }
+
+            float nextRate = [ladder.firstObject floatValue];
+            BOOL isFaster = [direction isEqualToString:@"faster"];
+
+            for (NSNumber *speed in ladder) {
+                float s = [speed floatValue];
+                if (isFaster) {
+                    if (s > currentRate + 0.01) { nextRate = s; break; }
+                    nextRate = s;
+                } else {
+                    if (s < currentRate - 0.01) { nextRate = s; break; }
+                    nextRate = s;
+                }
+            }
+
+            SEL sel = NSSelectorFromString(@"_playWithRate:");
+            if ([playerModule respondsToSelector:sel]) {
+                ((void (*)(id, SEL, float))objc_msgSend)(playerModule, sel, nextRate);
+            }
+
+            double actualRate = 0.0;
+            if ([playerModule respondsToSelector:pSel]) {
+                id ffPlayer = ((id (*)(id, SEL))objc_msgSend)(playerModule, pSel);
+                if (ffPlayer) {
+                    SEL rateSel = NSSelectorFromString(@"rate");
+                    if ([ffPlayer respondsToSelector:rateSel]) {
+                        actualRate = ((double (*)(id, SEL))objc_msgSend)(ffPlayer, rateSel);
+                    }
+                }
+            }
+
+            result = @{
+                @"status": @"ok",
+                @"previousRate": @(currentRate),
+                @"requestedRate": @(nextRate),
+                @"actualRate": @(actualRate),
+                @"ladder": ladder,
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to shuttle"};
 }
 
 #pragma mark - Range Selection & Batch Export
@@ -5541,6 +5763,10 @@ static NSDictionary *SpliceKit_handleOptionsGet(NSDictionary *params) {
         @"effectDragAsAdjustmentClip": @(SpliceKit_isEffectDragAsAdjustmentClipEnabled()),
         @"viewerPinchZoom": @(SpliceKit_isViewerPinchZoomEnabled()),
         @"videoOnlyKeepsAudioDisabled": @(SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled()),
+        @"lSpeedLadder": SpliceKit_getLSpeedLadder(),
+        @"jSpeedLadder": SpliceKit_getJSpeedLadder(),
+        @"lDoubleTapSpeed": @(SpliceKit_getLDoubleTapSpeed()),
+        @"jDoubleTapSpeed": @(SpliceKit_getJDoubleTapSpeed()),
     };
 }
 
@@ -5565,6 +5791,26 @@ static NSDictionary *SpliceKit_handleOptionsSet(NSDictionary *params) {
         SpliceKit_setVideoOnlyKeepsAudioDisabledEnabled([enabled boolValue]);
         return @{@"status": @"ok",
                  @"videoOnlyKeepsAudioDisabled": @(SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled())};
+    } else if ([option isEqualToString:@"lSpeedLadder"]) {
+        NSArray *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' parameter required (array of numbers)"};
+        SpliceKit_setLSpeedLadder(value);
+        return @{@"status": @"ok", @"lSpeedLadder": SpliceKit_getLSpeedLadder()};
+    } else if ([option isEqualToString:@"jSpeedLadder"]) {
+        NSArray *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' parameter required (array of numbers)"};
+        SpliceKit_setJSpeedLadder(value);
+        return @{@"status": @"ok", @"jSpeedLadder": SpliceKit_getJSpeedLadder()};
+    } else if ([option isEqualToString:@"lDoubleTapSpeed"]) {
+        NSNumber *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' parameter required (number)"};
+        SpliceKit_setLDoubleTapSpeed([value floatValue]);
+        return @{@"status": @"ok", @"lDoubleTapSpeed": @(SpliceKit_getLDoubleTapSpeed())};
+    } else if ([option isEqualToString:@"jDoubleTapSpeed"]) {
+        NSNumber *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' parameter required (number)"};
+        SpliceKit_setJDoubleTapSpeed([value floatValue]);
+        return @{@"status": @"ok", @"jDoubleTapSpeed": @(SpliceKit_getJDoubleTapSpeed())};
     }
 
     return @{@"error": [NSString stringWithFormat:@"Unknown option: %@", option]};
@@ -14693,6 +14939,10 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handlePlaybackSeek(params);
     } else if ([method isEqualToString:@"playback.getPosition"]) {
         result = SpliceKit_handlePlaybackGetPosition(params);
+    } else if ([method isEqualToString:@"playback.setRate"]) {
+        result = SpliceKit_handlePlaybackSetRate(params);
+    } else if ([method isEqualToString:@"playback.shuttle"]) {
+        result = SpliceKit_handlePlaybackShuttle(params);
     }
     // fcpxml.* namespace
     else if ([method isEqualToString:@"fcpxml.import"]) {

@@ -131,6 +131,16 @@ void SpliceKit_installSuppressAutoImport(void);
 void SpliceKit_setSuppressAutoImportEnabled(BOOL enabled);
 BOOL SpliceKit_isSuppressAutoImportEnabled(void);
 
+// Playback speed configuration — configurable J/L speed ladders
+// L ladder: speeds for each successive L press (default: 1, 2, 4, 8, 16, 32)
+// J ladder: speeds for each successive J press, stored positive, applied negative
+NSArray<NSNumber *> *SpliceKit_getLLadder(void);
+void SpliceKit_setLLadder(NSArray<NSNumber *> *speeds);
+NSArray<NSNumber *> *SpliceKit_getJLadder(void);
+void SpliceKit_setJLadder(NSArray<NSNumber *> *speeds);
+void SpliceKit_setPlaybackRate(float rate);
+void SpliceKit_installPlaybackSpeedSwizzle(void);
+
 #pragma mark - Cached Class References
 //
 // We look these up once at launch instead of calling objc_getClass() on every
