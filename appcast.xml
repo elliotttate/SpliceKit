@@ -6,6 +6,27 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.0.2</title>
+      <sparkle:version>3.0.2</sparkle:version>
+      <sparkle:shortVersionString>3.0.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sun, 06 Apr 2026 17:57:00 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.0.2</h2>
+        <ul>
+          <li><b>Auto-discover FCP</b> — Uses Spotlight to find Final Cut Pro anywhere on the system, not just /Applications</li>
+          <li><b>Browse for FCP</b> — If auto-discovery fails, a Browse button lets you locate FCP manually</li>
+          <li><b>Fix launch crash</b> — SpliceKitLogPanel was missing from the dylib build, causing FCP to crash on launch</li>
+          <li><b>Fix version display</b> — No longer shows PlistBuddy error text as the FCP version when the app is missing</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.0.2/SpliceKit-v3.0.2.dmg"
+        sparkle:edSignature="sPIOFAJG4r9nLdDcaTLDI5j3MdaIvpJPcZi4zfMJ8vtpEc6qhzP3Panb0VFkPlV8oKwc+9Vpd7MOrS3FqFjqDQ=="
+        length="10312489"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.0.1</title>
       <sparkle:version>3.0.1</sparkle:version>
       <sparkle:shortVersionString>3.0.1</sparkle:shortVersionString>
