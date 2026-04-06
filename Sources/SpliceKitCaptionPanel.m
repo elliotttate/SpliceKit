@@ -1737,6 +1737,19 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     // Strategy: import FCPXML into a temp project, copy the connected storyline to
     // clipboard via FCP's native copy, switch back to the user's project, and
     // pasteAsConnected. This places captions directly on the user's timeline.
+    //
+    // NOTE (Improvement #7): The import-switch-copy-switchback pipeline is now
+    // available as a shared function: SpliceKit_convertFCPXMLToNativeClipboard().
+    // This method still uses its own pipeline because it needs caption-specific
+    // post-processing (position offset via FFCutawayEffects transform, text/font
+    // verification via CHChannelText inspection). To consolidate, this method
+    // could be refactored to:
+    //   1. Build FCPXML (same as now)
+    //   2. Write to pasteboard via IXXMLPasteboardType
+    //   3. SpliceKit_convertFCPXMLToNativeClipboard() (handles import+copy+switchback)
+    //   4. pasteAnchored: (places clips)
+    //   5. Post-process: apply position offset + verify text
+    // This would eliminate ~100 lines of duplicate pipeline code.
 
     SpliceKitCaptionStyle *s = self.style;
     int fdN = self.fdNum, fdD = self.fdDen;
@@ -2675,6 +2688,11 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
 
 #pragma mark - Native Caption Generation (FFAnchoredCaption)
 
+// Generates FCPXML with <caption> elements (FCP's native subtitle objects)
+// and imports it via FFXMLTranslationTask. The importer's addCaption:toObject:
+// creates FFAnchoredCaption objects, anchors them, and resolves lanes.
+// This matches the path FCP uses for File > Import > Captions (SRT/ITT).
+
 - (NSDictionary *)generateNativeCaptions:(NSString *)language format:(NSString *)format {
     SpliceKit_log(@"[NativeCaptions] generateNativeCaptions called. Words: %lu, Segments: %lu, lang=%@, fmt=%@",
                   (unsigned long)self.mutableWords.count, (unsigned long)self.mutableSegments.count,
@@ -2692,334 +2710,220 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
 
     NSString *lang = language ?: @"en";
     NSString *fmt = format ?: @"ITT";
+    int fdN = self.fdNum, fdD = self.fdDen;
+
+    // Build FCPXML with <caption> elements — FCP's native subtitle format.
+    // The FFXMLImporter.addCaption:toObject: handler creates FFAnchoredCaption
+    // objects, sets up roles, anchors to the timeline, and resolves lanes.
+    // We import via FFXMLTranslationTask (same as the existing title caption path).
+
+    double totalDuration = 0;
+    for (SpliceKitCaptionSegment *seg in self.mutableSegments) {
+        if (seg.endTime > totalDuration) totalDuration = seg.endTime;
+    }
+    totalDuration += 1.0;
+
+    NSString *totalDurStr = SpliceKitCaption_durRational(totalDuration, fdN, fdD);
+    NSString *tempName = [NSString stringWithFormat:@"%@ %u",
+        kCaptionImportProjectPrefix, (unsigned)(arc4random() % 10000)];
+
+    // Caption role string: "ITT.en" format
+    NSString *captionRole = [NSString stringWithFormat:@"ITT.%@", lang];
+
+    NSMutableString *xml = [NSMutableString string];
+    [xml appendString:@"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"];
+    [xml appendString:@"<!DOCTYPE fcpxml>\n\n"];
+    [xml appendString:@"<fcpxml version=\"1.11\">\n"];
+    [xml appendString:@"    <resources>\n"];
+    [xml appendFormat:@"        <format id=\"r1\" name=\"FFVideoFormat%dx%dp%d\" "
+        @"frameDuration=\"%d/%ds\" width=\"%d\" height=\"%d\"/>\n",
+        self.videoWidth, self.videoHeight, (int)round(self.frameRate),
+        fdN, fdD, self.videoWidth, self.videoHeight];
+    [xml appendString:@"    </resources>\n"];
+    [xml appendString:@"    <library>\n"];
+    [xml appendFormat:@"        <event name=\"SpliceKit Captions\">\n"];
+    [xml appendFormat:@"            <project name=\"%@\">\n", tempName];
+    [xml appendFormat:@"                <sequence format=\"r1\" duration=\"%@\" "
+        @"tcStart=\"0s\" tcFormat=\"NDF\" audioLayout=\"stereo\" audioRate=\"48k\">\n", totalDurStr];
+    [xml appendString:@"                    <spine>\n"];
+    [xml appendFormat:@"                        <gap name=\"placeholder\" duration=\"%@\" start=\"0s\">\n",
+        totalDurStr];
+
+    NSUInteger captionCount = 0;
+    for (SpliceKitCaptionSegment *seg in self.mutableSegments) {
+        NSString *text = self.style.allCaps ? [seg.text uppercaseString] : seg.text;
+        if (text.length == 0) continue;
+
+        NSString *offsetStr = SpliceKitCaption_durRational(seg.startTime, fdN, fdD);
+        NSString *durStr = SpliceKitCaption_durRational(MAX(seg.duration, 0.04), fdN, fdD);
+
+        // <caption> uses offset (position in parent), duration, and lane.
+        // The role uses "ITT.lang" format. No start= needed (defaults to 0s).
+        // Text is plain (no text-style ref needed for simple captions).
+        [xml appendFormat:@"                            <caption lane=\"1\" offset=\"%@\" "
+            @"name=\"%@\" duration=\"%@\" role=\"%@\">\n",
+            offsetStr,
+            SpliceKitCaption_escapeXML(text),
+            durStr, captionRole];
+        [xml appendFormat:@"                                <text>%@</text>\n",
+            SpliceKitCaption_escapeXML(text)];
+        [xml appendString:@"                            </caption>\n"];
+        captionCount++;
+    }
+
+    [xml appendString:@"                        </gap>\n"];
+    [xml appendString:@"                    </spine>\n"];
+    [xml appendString:@"                </sequence>\n"];
+    [xml appendString:@"            </project>\n"];
+    [xml appendString:@"        </event>\n"];
+    [xml appendString:@"    </library>\n"];
+    [xml appendString:@"</fcpxml>\n"];
+
+    SpliceKit_log(@"[NativeCaptions] Built FCPXML with %lu <caption> elements, %lu bytes",
+                  (unsigned long)captionCount, (unsigned long)xml.length);
+
+    NSString *xmlPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"splicekit_native_captions.fcpxml"];
+    [xml writeToFile:xmlPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+    // Import via FFXMLTranslationTask (same path as title captions)
+    NSDictionary *importResult = SpliceKit_handlePasteboardImportXML(@{@"xml": xml});
+    if (importResult[@"error"]) {
+        return @{@"error": [NSString stringWithFormat:@"FCPXML import failed: %@", importResult[@"error"]],
+                 @"fcpxmlPath": xmlPath};
+    }
+
+    SpliceKit_log(@"[NativeCaptions] Import OK — waiting for temp project");
+
+    // Wait for temp project
+    BOOL foundTemp = SpliceKitCaption_pollMainThread(^{
+        return (BOOL)(SpliceKitCaption_findSequenceByPrefix(tempName) != nil);
+    }, 5.0, 0.3);
+
+    if (!foundTemp) {
+        return @{@"error": @"Temp caption project not found after import",
+                 @"fcpxmlPath": xmlPath,
+                 @"captionCount": @(captionCount)};
+    }
 
     // ---------------------------------------------------------------
-    // Step 1: Get active timeline module and sequence
+    // Load temp project → select all → copy → switch back → paste
+    // Same copy/paste approach as the title caption system.
     // ---------------------------------------------------------------
-    __block id timelineModule = nil;
-    __block id sequence = nil;
-    __block id primaryObject = nil;
-
+    __block id userSequence = nil;
+    __block NSString *userSequenceName = nil;
     SpliceKit_executeOnMainThread(^{
-        timelineModule = SpliceKit_getActiveTimelineModule();
-        if (timelineModule) {
-            sequence = ((id (*)(id, SEL))objc_msgSend)(timelineModule,
-                NSSelectorFromString(@"sequence"));
-        }
-        if (sequence) {
-            primaryObject = ((id (*)(id, SEL))objc_msgSend)(sequence,
-                NSSelectorFromString(@"primaryObject"));
+        userSequence = SpliceKitCaption_currentSequence();
+        if (userSequence) {
+            userSequenceName = ((id (*)(id, SEL))objc_msgSend)(userSequence,
+                NSSelectorFromString(@"displayName"));
         }
     });
 
-    if (!timelineModule || !sequence) {
-        return @{@"error": @"No active timeline — open a project first"};
-    }
-    if (!primaryObject) {
-        return @{@"error": @"No primary object in sequence"};
-    }
-
-    // ---------------------------------------------------------------
-    // Step 2: Find or create caption role (ITT format)
-    // ---------------------------------------------------------------
-    __block id captionRoleUUID = nil;
-    __block NSString *errorMsg = nil;
-
+    __block id tempSeq = nil;
     SpliceKit_executeOnMainThread(^{
-        @try {
-            // Get library from sequence
-            id library = ((id (*)(id, SEL))objc_msgSend)(sequence,
-                NSSelectorFromString(@"library"));
-            if (!library) {
-                errorMsg = @"Cannot get library from sequence";
-                return;
-            }
+        tempSeq = SpliceKitCaption_findSequenceByPrefix(tempName);
+        if (!tempSeq) return;
 
-            // Find the caption format string — try dlsym first, then fall back to runtime search
-            Class anchoredObjectClass = NSClassFromString(@"FFAnchoredObject");
-            if (!anchoredObjectClass) {
-                errorMsg = @"FFAnchoredObject class not found";
-                return;
-            }
+        id appDelegate = [NSApp delegate];
+        id editorContainer = ((id (*)(id, SEL))objc_msgSend)(appDelegate,
+            NSSelectorFromString(@"activeEditorContainer"));
+        if (!editorContainer) return;
 
-            // Use findOrCreateCaptionMainRoleOfFormat:inLibrary: to get the ITT caption main role
-            SEL findOrCreateSel = NSSelectorFromString(@"findOrCreateCaptionMainRoleOfFormat:inLibrary:");
-            if (![anchoredObjectClass respondsToSelector:findOrCreateSel]) {
-                errorMsg = @"findOrCreateCaptionMainRoleOfFormat:inLibrary: not found";
-                return;
-            }
-
-            // Get the FFRoleCaptionFormat_ITT global string via dlsym
-            void *ittSym = dlsym(RTLD_DEFAULT, "FFRoleCaptionFormat_ITT");
-            NSString *ittFormat = nil;
-            if (ittSym) {
-                const void *rawPtr = *(const void **)ittSym;
-                ittFormat = (__bridge NSString *)rawPtr;
-            }
-            if (!ittFormat) {
-                // Fallback: try the known string value
-                ittFormat = @"ITT";
-                SpliceKit_log(@"[NativeCaptions] dlsym for FFRoleCaptionFormat_ITT failed, using fallback 'ITT'");
-            }
-
-            id mainRole = ((id (*)(id, SEL, id, id))objc_msgSend)(
-                anchoredObjectClass, findOrCreateSel, ittFormat, library);
-            if (!mainRole) {
-                errorMsg = @"Could not find or create ITT caption role";
-                return;
-            }
-
-            // Find sub-role for language
-            id subRole = ((id (*)(id, SEL, id))objc_msgSend)(mainRole,
-                NSSelectorFromString(@"findSubRoleWithLanguageIdentifier:"), lang);
-
-            if (!subRole) {
-                // Create sub-role for this language (same as FFAddCaptionsOperation does)
-                Class roleClass = NSClassFromString(@"FFRole");
-                if (!roleClass) {
-                    errorMsg = @"FFRole class not found";
-                    return;
-                }
-
-                SEL initRoleSel = NSSelectorFromString(
-                    @"initWithName:type:kind:uuid:colorIndex:isSubRole:languageIdentifier:attributesByName:");
-                id newSubRole = [roleClass alloc];
-                newSubRole = ((id (*)(id, SEL, id, int, int, id, int, BOOL, id, id))objc_msgSend)(
-                    newSubRole, initRoleSel,
-                    nil,    // name
-                    2,      // type = caption
-                    0,      // kind
-                    nil,    // uuid (auto-generate)
-                    0,      // colorIndex
-                    YES,    // isSubRole
-                    lang,   // languageIdentifier
-                    nil);   // attributesByName
-
-                id mainRoleCopy = ((id (*)(id, SEL))objc_msgSend)(mainRole,
-                    NSSelectorFromString(@"copy"));
-                ((void (*)(id, SEL, id))objc_msgSend)(mainRoleCopy,
-                    NSSelectorFromString(@"addSubRole:"), newSubRole);
-
-                // Add to library
-                Class NSSetClass = [NSSet class];
-                id subRoleSet = ((id (*)(id, SEL, id))objc_msgSend)(NSSetClass,
-                    NSSelectorFromString(@"setWithObject:"), newSubRole);
-                ((void (*)(id, SEL, id, id, id, id, id, id))objc_msgSend)(library,
-                    NSSelectorFromString(@"actionAddNewMainRoles:addNewSubRoles:reassignRoles:renameExistingRoles:changeColorOfExistingRoles:removeExistingRoles:"),
-                    nil, subRoleSet, nil, nil, nil, nil);
-
-                // Re-fetch
-                subRole = ((id (*)(id, SEL, id))objc_msgSend)(mainRole,
-                    NSSelectorFromString(@"findSubRoleWithLanguageIdentifier:"), lang);
-            }
-
-            if (!subRole) {
-                errorMsg = @"Could not find or create caption sub-role for language";
-                return;
-            }
-
-            captionRoleUUID = ((id (*)(id, SEL))objc_msgSend)(subRole,
-                NSSelectorFromString(@"uuid"));
-            if (!captionRoleUUID) {
-                errorMsg = @"Caption sub-role has no UUID";
-                return;
-            }
-        } @catch (NSException *e) {
-            errorMsg = [NSString stringWithFormat:@"Exception finding caption role: %@", e.reason];
+        SEL loadSel = NSSelectorFromString(@"loadEditorForSequence:");
+        if ([editorContainer respondsToSelector:loadSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(editorContainer, loadSel, tempSeq);
         }
     });
 
-    if (errorMsg) {
-        return @{@"error": errorMsg};
+    // Wait for temp timeline to load
+    BOOL tempReady = SpliceKitCaption_pollMainThread(^{
+        id seq = SpliceKitCaption_currentSequence();
+        if (!seq) return NO;
+        NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq, NSSelectorFromString(@"displayName"));
+        return [name hasPrefix:tempName];
+    }, 5.0, 0.3);
+
+    if (!tempReady) {
+        SpliceKitCaption_deleteSequence(tempSeq);
+        return @{@"error": @"Failed to load temp caption project",
+                 @"fcpxmlPath": xmlPath};
     }
 
-    SpliceKit_log(@"[NativeCaptions] Caption role UUID: %@", captionRoleUUID);
+    [NSThread sleepForTimeInterval:0.5];
 
-    // ---------------------------------------------------------------
-    // Step 3: Get sample duration for time alignment
-    // ---------------------------------------------------------------
-    __block SpliceKitCaption_CMTime sampleDuration = {0, 0, 0, 0};
-
+    // Select all + copy
     SpliceKit_executeOnMainThread(^{
-        SEL fdSel = NSSelectorFromString(@"sampleDuration");
-        if ([timelineModule respondsToSelector:fdSel]) {
-            @try {
-#if defined(__arm64__)
-                sampleDuration = ((SpliceKitCaption_CMTime (*)(id, SEL))objc_msgSend)(
-                    timelineModule, fdSel);
-#else
-                ((void (*)(SpliceKitCaption_CMTime *, id, SEL))objc_msgSend_stret)(
-                    &sampleDuration, timelineModule, fdSel);
-#endif
-            } @catch (NSException *e) {
-                SpliceKit_log(@"[NativeCaptions] Exception getting sampleDuration: %@", e.reason);
+        [NSApp sendAction:NSSelectorFromString(@"selectAll:") to:nil from:nil];
+    });
+    [NSThread sleepForTimeInterval:0.3];
+    SpliceKit_executeOnMainThread(^{
+        [NSApp sendAction:NSSelectorFromString(@"copy:") to:nil from:nil];
+    });
+    [NSThread sleepForTimeInterval:0.3];
+
+    // Switch back to user's project
+    SpliceKit_executeOnMainThread(^{
+        // Re-verify userSequence is still valid
+        if (userSequenceName) {
+            for (id seq in SpliceKitCaption_allSequences()) {
+                NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq,
+                    NSSelectorFromString(@"displayName"));
+                if ([name isEqualToString:userSequenceName]) {
+                    userSequence = seq;
+                    break;
+                }
+            }
+        }
+
+        id appDelegate = [NSApp delegate];
+        id editorContainer = ((id (*)(id, SEL))objc_msgSend)(appDelegate,
+            NSSelectorFromString(@"activeEditorContainer"));
+        if (editorContainer && userSequence) {
+            SEL loadSel = NSSelectorFromString(@"loadEditorForSequence:");
+            if ([editorContainer respondsToSelector:loadSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(editorContainer, loadSel, userSequence);
             }
         }
     });
 
-    // ---------------------------------------------------------------
-    // Step 4: Create FFAnchoredCaption objects, one per segment
-    // ---------------------------------------------------------------
-    __block NSMutableArray *createdCaptions = [NSMutableArray array];
-    __block NSString *createError = nil;
+    // Wait for user's project to be active
+    SpliceKitCaption_pollMainThread(^{
+        id seq = SpliceKitCaption_currentSequence();
+        if (!seq) return NO;
+        NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq, NSSelectorFromString(@"displayName"));
+        return (BOOL)(userSequenceName && [name isEqualToString:userSequenceName]);
+    }, 5.0, 0.3);
 
+    [NSThread sleepForTimeInterval:0.5];
+
+    // Paste captions onto user's timeline
     SpliceKit_executeOnMainThread(^{
-        @try {
-            Class captionClass = NSClassFromString(@"FFAnchoredCaption");
-            if (!captionClass) {
-                createError = @"FFAnchoredCaption class not found";
-                return;
-            }
+        [NSApp sendAction:NSSelectorFromString(@"deselectAll:") to:nil from:nil];
+    });
+    [NSThread sleepForTimeInterval:0.2];
+    SpliceKit_executeOnMainThread(^{
+        [NSApp sendAction:NSSelectorFromString(@"paste:") to:nil from:nil];
+    });
+    [NSThread sleepForTimeInterval:0.5];
 
-            SEL initCaptionSel = NSSelectorFromString(@"initWithDisplayName:captionRoleUID:");
-            SEL setClippedRangeSel = NSSelectorFromString(@"setClippedRange:");
-            SEL alignTimeRangeSel = NSSelectorFromString(@"alignTimeRange:toSampleDuration:");
-            SEL clippedRangeSel = NSSelectorFromString(@"clippedRange");
-
-            // Begin single undo group
-            NSString *actionName = @"Generate Word Captions";
-            ((void (*)(id, SEL, id))objc_msgSend)(sequence,
-                NSSelectorFromString(@"actionBegin:"), actionName);
-
-            // Anchoring selectors
-            SEL anchorAtTimeSel = NSSelectorFromString(
-                @"operationAnchorItem:withAnchorInLocalTime:atTime:inContainer:inContainerAnchorLane:alignToParent:error:");
-            SEL setCaptionPlaybackSel = NSSelectorFromString(@"operationSetCaptionPlaybackRoleUID:");
-
-            int timescale = self.fdDen > 0 ? self.fdDen : 24000;
-
-            for (SpliceKitCaptionSegment *seg in self.mutableSegments) {
-                NSString *text = self.style.allCaps ? [seg.text uppercaseString] : seg.text;
-                if (text.length == 0) continue;
-
-                // Create caption
-                id caption = ((id (*)(id, SEL, id, id))objc_msgSend)(
-                    [captionClass alloc], initCaptionSel, text, captionRoleUUID);
-
-                if (!caption) {
-                    SpliceKit_log(@"[NativeCaptions] Failed to create caption for '%@'", text);
-                    continue;
-                }
-
-                // Get the caption's default clipped range and construct the desired one
-                SpliceKitCaption_CMTime startTime = SpliceKitCaption_makeCMTime(seg.startTime, timescale);
-                SpliceKitCaption_CMTime durTime = SpliceKitCaption_makeCMTime(MAX(seg.duration, 0.04), timescale);
-                SpliceKitCaption_CMTimeRange wordRange = {startTime, durTime};
-
-                // Align to sample duration if available
-                if (sampleDuration.timescale > 0 && sampleDuration.value > 0) {
-                    @try {
-#if defined(__arm64__)
-                        wordRange = ((SpliceKitCaption_CMTimeRange (*)(id, SEL, SpliceKitCaption_CMTimeRange, SpliceKitCaption_CMTime))objc_msgSend)(
-                            sequence, alignTimeRangeSel, wordRange, sampleDuration);
-#else
-                        ((void (*)(SpliceKitCaption_CMTimeRange *, id, SEL, SpliceKitCaption_CMTimeRange, SpliceKitCaption_CMTime))objc_msgSend_stret)(
-                            &wordRange, sequence, alignTimeRangeSel, wordRange, sampleDuration);
-#endif
-                    } @catch (NSException *e) {
-                        // Use unaligned range
-                    }
-                }
-
-                // Set the clipped range on the caption
-                ((void (*)(id, SEL, SpliceKitCaption_CMTimeRange))objc_msgSend)(
-                    caption, setClippedRangeSel, wordRange);
-
-                // Anchor to the primary container at the word's start time.
-                // Selector: operationAnchorItem:withAnchorInLocalTime:atTime:
-                //   inContainer:inContainerAnchorLane:alignToParent:error:
-                // Called on the sequence object (same as FFAddCaptionsOperation).
-                // CMTime (24 bytes) is passed by value — on ARM64 this is split
-                // across registers; on x86_64 it's pushed on the stack.
-                NSError *anchorError = nil;
-                @try {
-                    // Use NSInvocation to safely pass the 24-byte CMTime struct
-                    NSMethodSignature *sig = [sequence methodSignatureForSelector:anchorAtTimeSel];
-                    if (sig) {
-                        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                        [inv setTarget:sequence];
-                        [inv setSelector:anchorAtTimeSel];
-                        [inv setArgument:&caption atIndex:2];          // item
-                        [inv setArgument:&primaryObject atIndex:3];    // withAnchorInLocalTime (container)
-                        SpliceKitCaption_CMTime startCM = wordRange.start;
-                        [inv setArgument:&startCM atIndex:4];          // atTime (CMTime struct)
-                        [inv setArgument:&primaryObject atIndex:5];    // inContainer
-                        int lane = 1;
-                        [inv setArgument:&lane atIndex:6];             // inContainerAnchorLane
-                        BOOL alignToParent = NO;
-                        [inv setArgument:&alignToParent atIndex:7];    // alignToParent
-                        [inv setArgument:&anchorError atIndex:8];      // error
-                        [inv invoke];
-                    } else {
-                        SpliceKit_log(@"[NativeCaptions] No method signature for anchor selector");
-                    }
-                } @catch (NSException *e) {
-                    SpliceKit_log(@"[NativeCaptions] Anchor exception for '%@': %@", text, e.reason);
-                }
-
-                if (anchorError) {
-                    SpliceKit_log(@"[NativeCaptions] Anchor failed for '%@': %@", text, anchorError.localizedDescription);
-                }
-
-                [createdCaptions addObject:caption];
-            }
-
-            // Resolve overlaps and set caption playback role
-            if (createdCaptions.count > 0) {
-                SEL resolveOverlapsSel = NSSelectorFromString(@"_resolveOverlapsAndLaneGapsForCaptions:");
-                SEL setPlaybackRoleSel = NSSelectorFromString(@"_setCaptionPlaybackRoleForExtractedCaptions:");
-
-                if ([timelineModule respondsToSelector:resolveOverlapsSel]) {
-                    ((void (*)(id, SEL, id))objc_msgSend)(timelineModule,
-                        resolveOverlapsSel, createdCaptions);
-                }
-                if ([timelineModule respondsToSelector:setPlaybackRoleSel]) {
-                    ((void (*)(id, SEL, id))objc_msgSend)(timelineModule,
-                        setPlaybackRoleSel, createdCaptions);
-                }
-
-                // Also set the caption playback role UID on the sequence
-                if ([sequence respondsToSelector:setCaptionPlaybackSel]) {
-                    ((void (*)(id, SEL, id))objc_msgSend)(sequence,
-                        setCaptionPlaybackSel, captionRoleUUID);
-                }
-
-                // Resolve lane conflicts in the root container
-                SEL resolveLaneSel = NSSelectorFromString(
-                    @"operationResolveLaneConflictsInContainer:excludedItems:error:");
-                id rootItem = ((id (*)(id, SEL))objc_msgSend)(timelineModule,
-                    NSSelectorFromString(@"rootItem"));
-                if (rootItem && [sequence respondsToSelector:resolveLaneSel]) {
-                    ((void (*)(id, SEL, id, id, id))objc_msgSend)(sequence,
-                        resolveLaneSel, rootItem, nil, nil);
-                }
-            }
-
-            // End undo group
-            ((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(sequence,
-                NSSelectorFromString(@"actionEnd:save:error:"),
-                actionName, (createdCaptions.count > 0), nil);
-
-        } @catch (NSException *e) {
-            createError = [NSString stringWithFormat:@"Exception creating captions: %@", e.reason];
-            SpliceKit_log(@"[NativeCaptions] %@", createError);
-        }
+    // Clean up temp project
+    SpliceKit_executeOnMainThread(^{
+        id tempToDelete = SpliceKitCaption_findSequenceByPrefix(tempName);
+        if (tempToDelete) SpliceKitCaption_deleteSequence(tempToDelete);
     });
 
-    if (createError) {
-        return @{@"error": createError, @"captionsCreated": @(createdCaptions.count)};
-    }
-
-    SpliceKit_log(@"[NativeCaptions] Created %lu native captions", (unsigned long)createdCaptions.count);
+    SpliceKit_log(@"[NativeCaptions] Done: %lu captions via FCPXML import+paste", (unsigned long)captionCount);
 
     return @{
         @"status": @"ok",
-        @"captionCount": @(createdCaptions.count),
+        @"captionCount": @(captionCount),
         @"segmentCount": @(self.mutableSegments.count),
         @"wordCount": @(self.mutableWords.count),
         @"language": lang,
         @"format": fmt,
         @"grouping": @[@"words", @"sentence", @"time", @"chars", @"social"][(NSUInteger)MIN(self.groupingMode, 4)],
+        @"fcpxmlPath": xmlPath,
+        @"method": @"fcpxml_import_paste",
     };
 }
 

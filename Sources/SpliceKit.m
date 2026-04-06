@@ -596,6 +596,10 @@ static void SpliceKit_appDidLaunch(void) {
     // Install effect browser favorites context menu (always on)
     SpliceKit_installEffectFavoritesSwizzle();
 
+    // Install FCPXML direct paste support (converts FCPXML on pasteboard
+    // to native clipboard format so pasteAnchored: can handle it)
+    SpliceKit_installFCPXMLPasteSwizzle();
+
     // Rebuild FCP's hidden Debug pane + Debug menu bar (Apple strips the NIB
     // and leaves the menu unassigned in release builds; we reconstruct both).
     SpliceKit_installDebugSettingsPanel();

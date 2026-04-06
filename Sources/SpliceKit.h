@@ -105,6 +105,19 @@ BOOL SpliceKit_isViewerPinchZoomEnabled(void);
 // Adds a right-click "Favorite" option in the effect browser.
 void SpliceKit_installEffectFavoritesSwizzle(void);
 
+// Swizzles pasteAnchored: and paste: to handle FCPXML on the pasteboard.
+// When FCPXML is detected, imports it into a temp project, converts to native
+// clipboard format, and then lets the original paste proceed. Includes caching,
+// screen freeze to hide the project switch, and playhead restoration.
+void SpliceKit_installFCPXMLPasteSwizzle(void);
+
+// Shared FCPXML-to-native conversion function. Checks if the pasteboard has
+// FCPXML, converts it to native proFFPasteboardUTI format (using cache if
+// available), and returns YES if native data is now on the pasteboard.
+// Can be called directly by the caption system instead of duplicating the pipeline.
+// Must be called on the main thread.
+BOOL SpliceKit_convertFCPXMLToNativeClipboard(void);
+
 // When you switch to video-only edit mode, FCP re-enables audio every time
 // you switch back. This keeps audio disabled so it stays how you left it.
 void SpliceKit_installVideoOnlyKeepsAudioDisabled(void);

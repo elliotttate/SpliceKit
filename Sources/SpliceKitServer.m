@@ -4516,7 +4516,7 @@ static NSDictionary *SpliceKit_handleNativeCaptionsGenerate(NSDictionary *params
 }
 
 static NSDictionary *SpliceKit_handleNativeCaptionsVerify(NSDictionary *params) {
-    // Walk the caption lane in the active timeline and report caption objects
+    // Use FCP's allCaptions method on the sequence to find FFAnchoredCaption objects
     __block NSDictionary *result = nil;
 
     SpliceKit_executeOnMainThread(^{
@@ -4533,69 +4533,60 @@ static NSDictionary *SpliceKit_handleNativeCaptionsVerify(NSDictionary *params) 
                 return;
             }
 
-            // Get all captions from the sequence
-            SEL captionsSel = NSSelectorFromString(@"captionsWithRoleUID:includingDisabled:");
             NSMutableArray *captionInfos = [NSMutableArray array];
-
-            // Try to get caption objects — walk anchored items looking for FFAnchoredCaption
-            id primaryObject = ((id (*)(id, SEL))objc_msgSend)(sequence,
-                NSSelectorFromString(@"primaryObject"));
-            if (!primaryObject) {
-                result = @{@"error": @"No primary object"};
-                return;
-            }
-
-            // Get all anchored items (connected objects) from the primary object
-            SEL anchoredItemsSel = NSSelectorFromString(@"anchoredItems");
-            id anchoredItems = nil;
-            if ([primaryObject respondsToSelector:anchoredItemsSel]) {
-                anchoredItems = ((id (*)(id, SEL))objc_msgSend)(primaryObject, anchoredItemsSel);
-            }
-
-            // Also check containedItems for captions
-            SEL containedItemsSel = NSSelectorFromString(@"containedItems");
-            id containedItems = nil;
-            if ([primaryObject respondsToSelector:containedItemsSel]) {
-                containedItems = ((id (*)(id, SEL))objc_msgSend)(primaryObject, containedItemsSel);
-            }
-
             Class captionClass = NSClassFromString(@"FFAnchoredCaption");
-            SEL textSel = NSSelectorFromString(@"text");
-            SEL displayNameSel = NSSelectorFromString(@"displayName");
 
-            // Helper block to process items
-            void (^processItems)(id) = ^(id items) {
-                if (!items) return;
-                NSArray *itemArray = nil;
-                if ([items isKindOfClass:[NSArray class]]) {
-                    itemArray = items;
-                } else if ([items isKindOfClass:[NSSet class]]) {
-                    itemArray = [(NSSet *)items allObjects];
-                } else {
-                    return;
+            // Try FFAnchoredSequence.allCaptions or captionsWithRoleUID:includingDisabled:
+            SEL allCaptionsSel = NSSelectorFromString(@"allCaptions");
+            id allCaptions = nil;
+            if ([sequence respondsToSelector:allCaptionsSel]) {
+                allCaptions = ((id (*)(id, SEL))objc_msgSend)(sequence, allCaptionsSel);
+            }
+
+            if (!allCaptions) {
+                // Fallback: check primaryObject's direct anchored items (non-recursive)
+                id primaryObject = ((id (*)(id, SEL))objc_msgSend)(sequence,
+                    NSSelectorFromString(@"primaryObject"));
+                if (primaryObject) {
+                    SEL anchoredSel = NSSelectorFromString(@"anchoredItems");
+                    if ([primaryObject respondsToSelector:anchoredSel]) {
+                        allCaptions = ((id (*)(id, SEL))objc_msgSend)(primaryObject, anchoredSel);
+                    }
                 }
-                for (id item in itemArray) {
-                    if (captionClass && [item isKindOfClass:captionClass]) {
+            }
+
+            // Process found items
+            if (allCaptions) {
+                NSArray *items = nil;
+                if ([allCaptions isKindOfClass:[NSArray class]]) {
+                    items = allCaptions;
+                } else if ([allCaptions isKindOfClass:[NSSet class]]) {
+                    items = [(NSSet *)allCaptions allObjects];
+                }
+
+                SEL textSel = NSSelectorFromString(@"text");
+                SEL displayNameSel = NSSelectorFromString(@"displayName");
+
+                for (id item in items) {
+                    @try {
+                        BOOL isCaption = captionClass && [item isKindOfClass:captionClass];
+                        if (!isCaption) continue;
+
                         NSString *text = [item respondsToSelector:textSel]
                             ? ((id (*)(id, SEL))objc_msgSend)(item, textSel) : nil;
                         NSString *name = [item respondsToSelector:displayNameSel]
                             ? ((id (*)(id, SEL))objc_msgSend)(item, displayNameSel) : nil;
+
                         NSMutableDictionary *info = [NSMutableDictionary dictionary];
                         if (text) info[@"text"] = text;
                         if (name) info[@"displayName"] = name;
                         info[@"class"] = NSStringFromClass([item class]);
                         [captionInfos addObject:info];
-                    }
-                    // Recurse into sub-containers
-                    if ([item respondsToSelector:anchoredItemsSel]) {
-                        id subItems = ((id (*)(id, SEL))objc_msgSend)(item, anchoredItemsSel);
-                        if (subItems) processItems(subItems);
+                    } @catch (NSException *e) {
+                        // Skip problematic items
                     }
                 }
-            };
-
-            processItems(anchoredItems);
-            processItems(containedItems);
+            }
 
             result = @{
                 @"status": @"ok",
@@ -8412,6 +8403,340 @@ void SpliceKit_installEffectDragAsAdjustmentClip(void) {
     SpliceKit_executeOnMainThreadAsync(^{
         SpliceKit_installEffectDragSwizzlesNow();
     });
+}
+
+#pragma mark - FCPXML Direct Paste (swizzle pasteAnchored: and paste:)
+//
+// FCP's paste path only handles native proFFPasteboardUTI data. When FCPXML is
+// on the pasteboard (from generate_captions, paste_fcpxml, etc.), paste actions
+// silently ignore it because hasEdits: returns NO for FCPXML.
+//
+// This swizzle intercepts paste actions and transparently converts FCPXML to
+// native clipboard format:
+//
+// 1. Check if pasteboard has FCPXML but no native edits
+// 2. Check cache — if we've converted this exact FCPXML before, use cached data
+// 3. Freeze screen updates to hide the project switch
+// 4. Import FCPXML via FFXMLTranslationTask (creates temp project)
+// 5. Load temp project, selectAll + copy (creates native clipboard data)
+// 6. Cache the native data for future pastes
+// 7. Restore playhead position, switch back to user's project
+// 8. Unfreeze screen, call original paste (now finds native data)
+// 9. Clean up temp project
+//
+// The shared conversion function SpliceKit_convertFCPXMLToNativeClipboard() can
+// also be called directly by the caption system to avoid duplicating the pipeline.
+
+static IMP sOrigPasteAnchored = NULL;
+static IMP sOrigPaste = NULL;
+static NSCache *sFCPXMLNativeCache = nil;
+
+// --- Shared FCPXML-to-native conversion function ---
+// Returns YES if native clipboard data is now on the pasteboard.
+// Can be called from the paste swizzle or directly from the caption pipeline.
+// Must be called on the main thread.
+BOOL SpliceKit_convertFCPXMLToNativeClipboard(void) {
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    Class ffpbClass = objc_getClass("FFPasteboard");
+
+    // --- Already have native data? Nothing to do. ---
+    if (ffpbClass) {
+        id ffpb = ((id (*)(id, SEL, id))objc_msgSend)(
+            ((id (*)(id, SEL))objc_msgSend)((id)ffpbClass, @selector(alloc)),
+            NSSelectorFromString(@"initWithName:"), NSPasteboardNameGeneral);
+        if (((BOOL (*)(id, SEL, BOOL))objc_msgSend)(ffpb, NSSelectorFromString(@"hasEdits:"), NO))
+            return YES; // native data already present
+    }
+
+    // --- Check for FCPXML ---
+    SEL containsXMLSel = NSSelectorFromString(@"containsXML");
+    if (![pb respondsToSelector:containsXMLSel]) return NO;
+    if (!((BOOL (*)(id, SEL))objc_msgSend)(pb, containsXMLSel)) return NO;
+
+    NSString *xmlString = [pb stringForType:
+        ((id (*)(id, SEL))objc_msgSend)(objc_getClass("IXXMLPasteboardType"),
+            NSSelectorFromString(@"generic"))];
+    if (!xmlString || xmlString.length == 0) return NO;
+
+    SpliceKit_log(@"[FCPXMLPaste] FCPXML detected — converting to native format");
+
+    // --- Improvement #6: Check cache by content hash ---
+    // Key = libraryUUID + SHA256(xml) to avoid stale cross-library entries
+    NSString *cacheKey = nil;
+    if (sFCPXMLNativeCache) {
+        // Get current library UUID for cache key
+        NSString *libUUID = @"";
+        id activeLibs = ((id (*)(id, SEL))objc_msgSend)(
+            objc_getClass("FFLibraryDocument"), NSSelectorFromString(@"copyActiveLibraries"));
+        if (activeLibs && [(NSArray *)activeLibs count] > 0) {
+            id lib = [(NSArray *)activeLibs objectAtIndex:0];
+            SEL pidSel = NSSelectorFromString(@"persistentID");
+            if ([lib respondsToSelector:pidSel])
+                libUUID = ((id (*)(id, SEL))objc_msgSend)(lib, pidSel) ?: @"";
+        }
+        // Simple hash — FNV-1a on the XML bytes
+        const char *utf8 = xmlString.UTF8String;
+        uint64_t hash = 14695981039346656037ULL;
+        while (*utf8) { hash ^= (uint8_t)*utf8++; hash *= 1099511628211ULL; }
+        cacheKey = [NSString stringWithFormat:@"%@_%llx", libUUID, hash];
+
+        NSData *cached = [sFCPXMLNativeCache objectForKey:cacheKey];
+        if (cached) {
+            SpliceKit_log(@"[FCPXMLPaste] Cache hit — writing %lu bytes to pasteboard",
+                (unsigned long)cached.length);
+            [pb clearContents];
+            [pb setData:cached forType:@"com.apple.flexo.proFFPasteboardUTI"];
+            return YES;
+        }
+    }
+
+    // --- Save user's current state ---
+    id userSequence = nil;
+    NSString *userSequenceName = nil;
+    SpliceKit_CMTime savedPlayhead = {0, 600, 1, 0}; // default: 0s
+    {
+        id tm = SpliceKit_getActiveTimelineModule();
+        if (tm) {
+            userSequence = ((id (*)(id, SEL))objc_msgSend)(tm, NSSelectorFromString(@"sequence"));
+            if (userSequence) {
+                userSequenceName = ((id (*)(id, SEL))objc_msgSend)(userSequence,
+                    NSSelectorFromString(@"displayName"));
+            }
+            // Improvement #10: Save playhead position for restore after switch-back
+            SEL playheadSel = NSSelectorFromString(@"playheadTime");
+            if ([tm respondsToSelector:playheadSel]) {
+                savedPlayhead = ((SpliceKit_CMTime (*)(id, SEL))objc_msgSend)(tm, playheadSel);
+            }
+        }
+    }
+    if (!userSequence) {
+        SpliceKit_log(@"[FCPXMLPaste] No active timeline");
+        return NO;
+    }
+
+    // --- Inject unique project name for reliable lookup ---
+    NSString *tempProjectName = [NSString stringWithFormat:@"_SKPaste_%u",
+        arc4random() % 100000];
+    NSRegularExpression *projRegex = [NSRegularExpression
+        regularExpressionWithPattern:@"<project\\s+name=\"[^\"]*\""
+        options:0 error:nil];
+    xmlString = [projRegex stringByReplacingMatchesInString:xmlString
+        options:0 range:NSMakeRange(0, xmlString.length)
+        withTemplate:[NSString stringWithFormat:@"<project name=\"%@\"", tempProjectName]];
+
+    SpliceKit_log(@"[FCPXMLPaste] Importing as: %@", tempProjectName);
+
+    // --- Improvement #3: Freeze screen updates to hide project switch ---
+    // NSDisableScreenUpdates() is deprecated but functional. Safety timeout
+    // ensures screen unfreezes even if the pipeline hangs.
+    NSDisableScreenUpdates();
+    __block BOOL screenFrozen = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 8 * NSEC_PER_SEC),
+        dispatch_get_main_queue(), ^{
+        if (screenFrozen) {
+            NSEnableScreenUpdates();
+            SpliceKit_log(@"[FCPXMLPaste] Safety: unfroze screen after timeout");
+        }
+    });
+
+    BOOL success = NO;
+
+    // --- Import FCPXML ---
+    NSDictionary *importResult = SpliceKit_handlePasteboardImportXML(@{@"xml": xmlString});
+    if (importResult[@"error"]) {
+        SpliceKit_log(@"[FCPXMLPaste] Import failed: %@", importResult[@"error"]);
+        goto cleanup;
+    }
+
+    // --- Find temp project by unique name ---
+    {
+        __block id tempSeq = nil;
+        for (int attempt = 0; attempt < 15 && !tempSeq; attempt++) {
+            [[NSRunLoop currentRunLoop] runUntilDate:
+                [NSDate dateWithTimeIntervalSinceNow:0.2]];
+            id libs = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("FFLibraryDocument"), NSSelectorFromString(@"copyActiveLibraries"));
+            if (!libs || ![(NSArray *)libs count]) continue;
+            id lib = [(NSArray *)libs objectAtIndex:0];
+            id seqs = ((id (*)(id, SEL))objc_msgSend)(lib,
+                NSSelectorFromString(@"_deepLoadedSequences"));
+            if (!seqs) continue;
+            for (id seq in (NSSet *)seqs) {
+                NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq,
+                    NSSelectorFromString(@"displayName"));
+                if (name && [name isEqualToString:tempProjectName]) {
+                    tempSeq = seq;
+                    break;
+                }
+            }
+        }
+        if (!tempSeq) {
+            SpliceKit_log(@"[FCPXMLPaste] Temp project '%@' not found", tempProjectName);
+            goto cleanup;
+        }
+
+        SpliceKit_log(@"[FCPXMLPaste] Found temp project: %@", tempProjectName);
+
+        // --- Load temp project ---
+        id appDelegate = [NSApp delegate];
+        id editorContainer = ((id (*)(id, SEL))objc_msgSend)(appDelegate,
+            NSSelectorFromString(@"activeEditorContainer"));
+        if (!editorContainer) goto cleanup;
+
+        ((void (*)(id, SEL, id))objc_msgSend)(editorContainer,
+            NSSelectorFromString(@"loadEditorForSequence:"), tempSeq);
+
+        BOOL tempLoaded = NO;
+        for (int i = 0; i < 25 && !tempLoaded; i++) {
+            [[NSRunLoop currentRunLoop] runUntilDate:
+                [NSDate dateWithTimeIntervalSinceNow:0.2]];
+            id tm = SpliceKit_getActiveTimelineModule();
+            if (!tm) continue;
+            id seq = ((id (*)(id, SEL))objc_msgSend)(tm, NSSelectorFromString(@"sequence"));
+            if (!seq) continue;
+            NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq, NSSelectorFromString(@"displayName"));
+            if (name && [name isEqualToString:tempProjectName]) tempLoaded = YES;
+        }
+        if (!tempLoaded) {
+            SpliceKit_log(@"[FCPXMLPaste] Failed to load temp project");
+            ((void (*)(id, SEL, id))objc_msgSend)(editorContainer,
+                NSSelectorFromString(@"loadEditorForSequence:"), userSequence);
+            [[NSRunLoop currentRunLoop] runUntilDate:
+                [NSDate dateWithTimeIntervalSinceNow:0.5]];
+            goto cleanup;
+        }
+
+        [[NSRunLoop currentRunLoop] runUntilDate:
+            [NSDate dateWithTimeIntervalSinceNow:0.3]];
+
+        // --- Copy to native clipboard format ---
+        [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"selectAll:")
+                                                   to:nil from:nil];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+        [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"copy:")
+                                                   to:nil from:nil];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+        SpliceKit_log(@"[FCPXMLPaste] Copied items to native clipboard");
+
+        // --- Improvement #6: Cache the native data ---
+        if (sFCPXMLNativeCache && cacheKey) {
+            NSData *nativeData = [pb dataForType:@"com.apple.flexo.proFFPasteboardUTI"];
+            if (nativeData) {
+                [sFCPXMLNativeCache setObject:nativeData forKey:cacheKey cost:nativeData.length];
+                SpliceKit_log(@"[FCPXMLPaste] Cached %lu bytes for future use",
+                    (unsigned long)nativeData.length);
+            }
+        }
+
+        // --- Switch back to user's project ---
+        ((void (*)(id, SEL, id))objc_msgSend)(editorContainer,
+            NSSelectorFromString(@"loadEditorForSequence:"), userSequence);
+
+        BOOL userLoaded = NO;
+        for (int i = 0; i < 25 && !userLoaded; i++) {
+            [[NSRunLoop currentRunLoop] runUntilDate:
+                [NSDate dateWithTimeIntervalSinceNow:0.2]];
+            id tm = SpliceKit_getActiveTimelineModule();
+            if (!tm) continue;
+            id seq = ((id (*)(id, SEL))objc_msgSend)(tm, NSSelectorFromString(@"sequence"));
+            if (!seq) continue;
+            NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq, NSSelectorFromString(@"displayName"));
+            if (name && [name isEqualToString:userSequenceName]) userLoaded = YES;
+        }
+
+        [[NSRunLoop currentRunLoop] runUntilDate:
+            [NSDate dateWithTimeIntervalSinceNow:0.2]];
+
+        // --- Improvement #10: Restore playhead position ---
+        {
+            id tm = SpliceKit_getActiveTimelineModule();
+            if (tm) {
+                SEL setSel = NSSelectorFromString(@"setPlayheadTime:");
+                if ([tm respondsToSelector:setSel]) {
+                    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(tm, setSel, savedPlayhead);
+                }
+            }
+        }
+
+        // --- Clean up temp project ---
+        @try {
+            SEL delSel = NSSelectorFromString(@"deleteSequence:");
+            id tm = SpliceKit_getActiveTimelineModule();
+            if (tm && [tm respondsToSelector:delSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(tm, delSel, tempSeq);
+            }
+        } @catch (NSException *e) {
+            SpliceKit_log(@"[FCPXMLPaste] Cleanup error: %@", e);
+        }
+
+        success = YES;
+        SpliceKit_log(@"[FCPXMLPaste] Conversion complete — native data on pasteboard");
+    }
+
+cleanup:
+    // --- Improvement #3: Unfreeze screen ---
+    if (screenFrozen) {
+        screenFrozen = NO;
+        NSEnableScreenUpdates();
+    }
+
+    return success;
+}
+
+// --- Generic paste swizzle handler (shared by pasteAnchored: and paste:) ---
+static void SpliceKit_handleFCPXMLPaste(id self, SEL _cmd, id sender, IMP original) {
+    // Check if FCPXML needs conversion
+    Class ffpbClass = objc_getClass("FFPasteboard");
+    if (ffpbClass) {
+        id ffpb = ((id (*)(id, SEL, id))objc_msgSend)(
+            ((id (*)(id, SEL))objc_msgSend)((id)ffpbClass, @selector(alloc)),
+            NSSelectorFromString(@"initWithName:"), NSPasteboardNameGeneral);
+        if (!((BOOL (*)(id, SEL, BOOL))objc_msgSend)(ffpb, NSSelectorFromString(@"hasEdits:"), NO)) {
+            // No native data — try FCPXML conversion
+            SpliceKit_convertFCPXMLToNativeClipboard();
+        }
+    }
+    // Call original paste (works whether we converted FCPXML or data was already native)
+    ((void (*)(id, SEL, id))original)(self, _cmd, sender);
+}
+
+// --- Improvement #8: Swizzle both pasteAnchored: and paste: ---
+static void SpliceKit_swizzled_pasteAnchored(id self, SEL _cmd, id sender) {
+    SpliceKit_handleFCPXMLPaste(self, _cmd, sender, sOrigPasteAnchored);
+}
+
+static void SpliceKit_swizzled_paste(id self, SEL _cmd, id sender) {
+    SpliceKit_handleFCPXMLPaste(self, _cmd, sender, sOrigPaste);
+}
+
+void SpliceKit_installFCPXMLPasteSwizzle(void) {
+    Class tlClass = objc_getClass("FFAnchoredTimelineModule");
+    if (!tlClass) {
+        SpliceKit_log(@"[FCPXMLPaste] WARNING: FFAnchoredTimelineModule not found");
+        return;
+    }
+
+    // Improvement #6: Initialize cache (50MB limit)
+    sFCPXMLNativeCache = [[NSCache alloc] init];
+    sFCPXMLNativeCache.totalCostLimit = 50 * 1024 * 1024;
+
+    // Swizzle pasteAnchored: (paste as connected)
+    SEL pasteAnchoredSel = NSSelectorFromString(@"pasteAnchored:");
+    Method pasteAnchoredMethod = class_getInstanceMethod(tlClass, pasteAnchoredSel);
+    if (pasteAnchoredMethod) {
+        sOrigPasteAnchored = method_setImplementation(pasteAnchoredMethod,
+            (IMP)SpliceKit_swizzled_pasteAnchored);
+        SpliceKit_log(@"[FCPXMLPaste] Swizzled -[FFAnchoredTimelineModule pasteAnchored:]");
+    }
+
+    // Improvement #8: Swizzle paste: (insert paste)
+    SEL pasteSel = NSSelectorFromString(@"paste:");
+    Method pasteMethod = class_getInstanceMethod(tlClass, pasteSel);
+    if (pasteMethod) {
+        sOrigPaste = method_setImplementation(pasteMethod,
+            (IMP)SpliceKit_swizzled_paste);
+        SpliceKit_log(@"[FCPXMLPaste] Swizzled -[FFAnchoredTimelineModule paste:]");
+    }
 }
 
 #pragma mark - Effect Browser Favorites (context menu)
