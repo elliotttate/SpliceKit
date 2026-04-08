@@ -1,26 +1,24 @@
 -- Transcribe timeline and remove silences longer than 1 second
-sk.toast("Transcribing timeline...")
+sk.log("[RemoveSilences] Opening transcript...")
 sk.rpc("transcript.open", {})
-
+-- Wait for transcription (poll every 1s for up to 120s)
 local ready = false
-for i = 1, 60 do
-    sk.sleep(2)
+for i = 1, 120 do
+    sk.sleep(1)
     local state = sk.rpc("transcript.getState", {})
-    if state and state.words and #state.words > 0 then
+    if state and state.status == "error" then
+        sk.log("[RemoveSilences] Transcription error: " .. (state.errorMessage or "unknown"))
+        return
+    end
+    if state and state.wordCount and state.wordCount > 0 then
+        sk.log("[RemoveSilences] Transcription done: " .. state.wordCount .. " words")
         ready = true
         break
     end
 end
-
 if not ready then
-    sk.alert("Remove Silences", "Transcription timed out. Try again with a shorter timeline.")
+    sk.log("[RemoveSilences] Timed out waiting for transcription")
     return
 end
-
-local ts = sk.rpc("transcript.getState", {})
-local word_count = ts.words and #ts.words or 0
-
 sk.rpc("transcript.deleteSilences", {min_duration = 1.0})
-
-sk.alert("Remove Silences",
-    string.format("Done!\n\nTranscribed %d words.\nRemoved silences > 1 second.", word_count))
+sk.log("[RemoveSilences] Done — silences > 1s removed")

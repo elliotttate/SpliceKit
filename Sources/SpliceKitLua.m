@@ -373,7 +373,7 @@ static int sk_prev_frame(lua_State *L) {
 static int sk_seek(lua_State *L) {
     NSMutableDictionary *params = [NSMutableDictionary dictionary];
     if (lua_isnumber(L, 1)) {
-        params[@"time"] = @(lua_tonumber(L, 1));
+        params[@"seconds"] = @(lua_tonumber(L, 1));
     } else {
         params[@"timecode"] = @(luaL_checkstring(L, 1));
     }
@@ -411,16 +411,12 @@ static int sk_color_board(lua_State *L) {
 // --- State Queries ---
 
 static int sk_clips(lua_State *L) {
-    NSDictionary *request = @{
-        @"method": @"timeline.getState",
-        @"params": @{}
-    };
+    // Return the detailed state with full item list — this is what scripts need
+    // to iterate over clips, get durations, positions, etc.
     NSDictionary *result = SpliceKitLua_callHandler(^{
-        return SpliceKit_handleRequest(request);
+        return SpliceKit_handleTimelineGetDetailedState(@{});
     });
-    // handleRequest wraps in {result: ...} — unwrap
-    id inner = result[@"result"];
-    SpliceKitLua_pushValue(L, inner ?: result);
+    SpliceKitLua_pushValue(L, result);
     return 1;
 }
 
