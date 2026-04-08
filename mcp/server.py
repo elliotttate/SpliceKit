@@ -27,12 +27,17 @@ All operations are fully programmatic - no AppleScript, no UI automation.
 
 ## Standard Workflow
 1. bridge_status() -- verify FCP is running and connected
-2. get_timeline_clips() -- see what's in the timeline (items, handles, durations)
-3. Perform actions using timeline_action() and playback_action()
-4. verify_action() -- confirm the edit took effect by comparing state snapshots
+2. open_project("My Project") -- load a project by name
+3. get_timeline_clips() -- see what's in the timeline (items, handles, durations)
+4. Perform actions using timeline_action() and playback_action()
+5. verify_action() -- confirm the edit took effect by comparing state snapshots
 
 ## IMPORTANT: Opening a Project
-If get_timeline_clips() shows 0 items, you need to load a project into the timeline:
+Use open_project(name, event) to find and load a project by name:
+  open_project("My Project")                 -- find by name
+  open_project("Edit v2", event="4-5-26")    -- filter by event too
+
+Or manually if needed:
   1. call_method_with_args("FFLibraryDocument", "copyActiveLibraries", return_handle=True)
   2. Navigate: array -> library -> _deepLoadedSequences -> allObjects
   3. Find a sequence with hasContainedItems == true
@@ -224,6 +229,7 @@ DESTRUCTIVE_TOOLS = {
     "delete_transcript_words",
     "move_transcript_words",
     "delete_transcript_silences",
+    "blade_at_times",
     "apply_effect",
     "apply_transition",
     "execute_command",
@@ -257,6 +263,12 @@ DESTRUCTIVE_TOOLS = {
     "export_captions_txt",
     "generate_native_captions",
     "blade_scene_changes",
+    "ai_command_gemma",
+    "deploy_and_restart",
+    "lua_execute",
+    "lua_execute_file",
+    "lua_reset",
+    "lua_watch",
     "raw_call",
 }
 
@@ -271,6 +283,8 @@ IDEMPOTENT_LOCAL_WRITE_TOOLS = {
     "select_tool",
     "assign_role",
     "set_transcript_engine",
+    "open_project",
+    "select_clip_in_lane",
 }
 
 CUSTOM_TOOL_TITLES = {
@@ -292,9 +306,15 @@ CUSTOM_TOOL_TITLES = {
     "generate_fcpxml": "Generate FCPXML",
     "batch_timeline_actions": "Batch Timeline Actions",
     "import_srt_as_markers": "Import SRT As Markers",
+    "blade_at_times": "Blade At Times",
+    "open_project": "Open Project",
+    "select_clip_in_lane": "Select Clip In Lane",
+    "capture_viewer": "Capture Viewer",
+    "export_xml": "Export FCPXML",
     "is_library_updating": "Check Library Updating",
     "search_methods": "Search Methods",
     "raw_call": "Raw JSON-RPC Call",
+    "ai_command_gemma": "AI Command Gemma",
     "delete_transcript_words": "Delete Transcript Words",
     "move_transcript_words": "Move Transcript Words",
     "close_transcript": "Close Transcript Panel",
@@ -373,6 +393,12 @@ CUSTOM_TOOL_TITLES = {
     "timeline_edit_action": "Timeline Edit Action",
     "timeline_destructive_action": "Timeline Destructive Action",
     "history_action": "Timeline History Action",
+    "deploy_and_restart": "Deploy And Restart FCP",
+    "lua_execute": "Execute Lua Code",
+    "lua_execute_file": "Execute Lua File",
+    "lua_reset": "Reset Lua VM",
+    "lua_watch": "Watch Lua Files",
+    "lua_state": "Get Lua State",
 }
 
 TIMELINE_NAVIGATION_ACTIONS = {
@@ -988,13 +1014,13 @@ def verify_action(description: str = "") -> str:
 # Use this when a specific tool doesn't exist for what you need.
 
 @mcp.tool(annotations=_tool_annotations("call_method_with_args"))
-def call_method_with_args(target: str, selector: str, args: str = "[]",
+def call_method_with_args(target: str, selector: str, args: str | list = "[]",
                           class_method: bool = True, return_handle: bool = False) -> str:
     """Call any ObjC method with typed arguments via NSInvocation.
 
     target: class name (e.g. "FFLibraryDocument") or handle ID (e.g. "obj_3")
     selector: method selector (e.g. "copyActiveLibraries" or "openProjectAtURL:")
-    args: JSON array of typed arguments. Each arg is {"type": "...", "value": ...}
+    args: JSON array of typed arguments (as string or list). Each arg is {"type": "...", "value": ...}
       Types: string, int, double, float, bool, nil, sender, handle, cmtime, selector
       cmtime value: {"value": 30000, "timescale": 600}
     return_handle: if true, store the returned object and return its handle ID
@@ -1011,11 +1037,16 @@ def call_method_with_args(target: str, selector: str, args: str = "[]",
     Examples:
       call_method_with_args("FFLibraryDocument", "copyActiveLibraries", return_handle=True)
       call_method_with_args("obj_3", "displayName", "[]", false)
+      call_method_with_args("obj_1", "objectAtIndex:", [{"type":"int","value":0}], false, true)
     """
-    try:
-        parsed_args = json.loads(args)
-    except json.JSONDecodeError as e:
-        return f"Invalid args JSON: {e}"
+    # Accept args as either a JSON string or a direct list
+    if isinstance(args, list):
+        parsed_args = args
+    else:
+        try:
+            parsed_args = json.loads(args)
+        except json.JSONDecodeError as e:
+            return f"Invalid args JSON: {e}"
 
     # Safety rail: these selectors crash FCP when the error: out-pointer is nil
     unsafe_nil_error_selectors = {
@@ -1468,6 +1499,36 @@ def add_markers_at_times(markers: str) -> str:
     for m in r.get("markers", []):
         status = "OK" if m.get("success") else f"FAILED: {m.get('error', '?')}"
         lines.append(f"  {m['time']:.2f}s -> {status}")
+    return "\n".join(lines)
+
+
+@mcp.tool(annotations=_tool_annotations("blade_at_times"))
+def blade_at_times(times: str) -> str:
+    """Blade (cut) the timeline at multiple specific times in a single batch call.
+    Much faster than seeking + blading one at a time.
+
+    times: JSON array of times in seconds. Example:
+      [3.0, 6.0, 9.0, 12.0, 15.0]
+
+    For regular intervals, compute all times first:
+      To cut every 3 seconds across a 30-second timeline:
+      [3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0, 24.0, 27.0]
+
+    Returns count of cuts successfully applied.
+    """
+    try:
+        time_list = json.loads(times)
+    except json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+
+    r = bridge.call("timeline.bladeAtTimes", times=time_list)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    lines = [f"Applied {r.get('applied', 0)}/{r.get('count', 0)} cuts"]
+    for c in r.get("cuts", []):
+        status = "OK" if c.get("success") else f"FAILED: {c.get('error', '?')}"
+        lines.append(f"  {c['time']:.2f}s -> {status}")
     return "\n".join(lines)
 
 
@@ -2183,25 +2244,94 @@ def ai_command(query: str) -> str:
     if _err(r):
         return f"Error: {r.get('error', r)}"
 
+    # Apple Intelligence+ (agentic) returns a summary string, not actions
+    if r.get("summary"):
+        return r["summary"]
+
     actions = r.get("actions", [])
     if not actions:
         return "No actions determined from query."
 
-    # Apple Intelligence returns a list of FCP actions — execute them in order
-    results = []
-    for act in actions:
+    # Execute a single AI action, dispatching by type
+    def _exec_one(act):
         act_type = act.get("type", "timeline")
         action_name = act.get("action", "")
         repeat = act.get("repeat", 1)
 
+        if act_type == "seek":
+            secs = act.get("seconds", 0)
+            er = bridge.call("playback.seekToTime", seconds=secs)
+            if _err(er):
+                return f"Error on seek({secs}s): {er.get('error', er)}"
+            return f"seek -> {secs}s"
+
+        if act_type == "effect":
+            eff_name = act.get("name", "")
+            # Auto-select clip at playhead first
+            bridge.call("timeline.action", action="selectClipAtPlayhead")
+            er = bridge.call("effects.apply", name=eff_name)
+            if _err(er):
+                return f"Error on effect '{eff_name}': {er.get('error', er)}"
+            return f"effect '{eff_name}' -> ok"
+
+        if act_type == "transition":
+            tr_name = act.get("name", "")
+            er = bridge.call("transitions.apply", name=tr_name, freezeExtend=True)
+            if _err(er):
+                return f"Error on transition '{tr_name}': {er.get('error', er)}"
+            return f"transition '{tr_name}' -> ok"
+
+        if act_type == "repeat_pattern":
+            count = act.get("count", 1)
+            inner = act.get("actions", [])
+            msgs = []
+            for i in range(count):
+                for sub in inner:
+                    msgs.append(_exec_one(sub))
+            return f"repeat_pattern x{count}: " + "; ".join(msgs)
+
+        if act_type == "scene_detect":
+            er = bridge.call("scene.detect", threshold=0.35, action="detect", sampleInterval=0.1)
+            if _err(er):
+                return f"Error on scene_detect: {er.get('error', er)}"
+            return f"scene_detect -> {er.get('count', 0)} changes"
+
+        if act_type == "scene_markers":
+            er = bridge.call("scene.detect", threshold=0.35, action="markers", sampleInterval=0.1)
+            if _err(er):
+                return f"Error on scene_markers: {er.get('error', er)}"
+            return f"scene_markers -> {er.get('count', 0)} markers"
+
+        # timeline, playback, or any other type with an action field
         for _ in range(repeat):
             er = bridge.call(f"{act_type}.action", action=action_name)
             if _err(er):
-                results.append(f"Error on {act_type}.{action_name}: {er.get('error', er)}")
-                break
-        results.append(f"{act_type}.{action_name}" + (f" x{repeat}" if repeat > 1 else "") + " -> ok")
+                return f"Error on {act_type}.{action_name}: {er.get('error', er)}"
+        return f"{act_type}.{action_name}" + (f" x{repeat}" if repeat > 1 else "") + " -> ok"
+
+    # Apple Intelligence returns a list of FCP actions — execute them in order
+    results = []
+    for act in actions:
+        results.append(_exec_one(act))
 
     return f"AI executed {len(actions)} action(s):\n" + "\n".join(results)
+
+
+@mcp.tool(annotations=_tool_annotations("ai_command_gemma"))
+def ai_command_gemma(query: str, model: str = "unsloth/gemma-4-E4B-it-UD-MLX-4bit") -> str:
+    """Use Gemma 4 (via MLX on Apple Silicon) for agentic natural language editing.
+    Unlike ai_command which uses a fixed action schema, this runs a multi-turn
+    tool-calling loop and can access all bridge methods.
+    Requires mlx-lm server: python -m mlx_lm.server --model unsloth/gemma-4-E4B-it-UD-MLX-4bit
+
+    Args:
+        query: Natural language editing instruction
+        model: HuggingFace model ID (default: unsloth/gemma-4-E4B-it-UD-MLX-4bit)
+    """
+    r = bridge.call("command.aiGemma", query=query, model=model)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return r.get("summary", "Done.")
 
 
 # ============================================================
@@ -2471,6 +2601,221 @@ def create_library() -> str:
     if _err(r):
         return f"Error: {r.get('error', r)}"
     return _fmt(r)
+
+
+# ============================================================
+# Open Project by Name
+# ============================================================
+# Find a sequence by name (and optionally event) and load it
+# into the editor — no manual handle navigation required.
+
+@mcp.tool(annotations=_tool_annotations("open_project"))
+def open_project(name: str, event: str = "") -> str:
+    """Open a project/sequence by name, loading it into the timeline editor.
+
+    Searches all active libraries for a sequence matching the given name,
+    and optionally filters by event name. Much faster than manually navigating
+    the library -> sequences -> loadEditorForSequence: chain.
+
+    Args:
+        name: Project/sequence name to find (case-insensitive substring match).
+              e.g. "My Project", "Edit v2", "Interview"
+        event: Optional event name filter (case-insensitive substring match).
+               e.g. "4-5-26", "Wedding", "Interview"
+
+    Returns the matched project name, event, and library on success.
+    If no match is found, returns a list of all available sequences.
+    """
+    params = {"name": name}
+    if event:
+        params["event"] = event
+    r = bridge.call("project.open", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ============================================================
+# Select Connected Clip at Playhead (Lane Selection)
+# ============================================================
+# The standard selectClipAtPlayhead only selects the primary
+# storyline clip. This tool selects clips in any lane.
+
+@mcp.tool(annotations=_tool_annotations("select_clip_in_lane"))
+def select_clip_in_lane(lane: int = 1) -> str:
+    """Select the clip at the playhead in a specific lane (connected storyline).
+
+    The standard timeline_action("selectClipAtPlayhead") only selects clips in
+    the primary storyline (lane 0). This tool can select connected clips in any
+    lane — essential for inspecting or modifying connected titles, B-roll, etc.
+
+    Args:
+        lane: Lane number to select from.
+              0 = primary storyline (same as selectClipAtPlayhead)
+              1 = first connected lane above (captions, titles, B-roll)
+              -1 = first connected lane below
+              2, 3, etc. = higher connected lanes
+
+    Returns the selected clip's name, class, and handle for further inspection.
+    """
+    r = bridge.call("timeline.selectClipInLane", lane=lane)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ============================================================
+# Capture Viewer Screenshot
+# ============================================================
+# Captures the viewer/canvas contents directly — no external
+# screencapture tool needed, no other windows in the way.
+
+@mcp.tool(annotations=_tool_annotations("capture_viewer"))
+def capture_viewer(path: str = "/tmp/splicekit_viewer.png") -> str:
+    """Capture the FCP viewer contents as a PNG image.
+
+    Takes a screenshot of just the viewer/canvas area (not the whole screen),
+    so you can verify text rendering, effects, color correction, etc. without
+    relying on manual screenshots or having other windows in the way.
+
+    Args:
+        path: Output file path for the PNG image.
+              Default: /tmp/splicekit_viewer.png
+
+    Returns the file path, image dimensions, and file size.
+    The saved PNG can be read by Claude to visually verify timeline output.
+    """
+    r = bridge.call("viewer.capture", path=path)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    if r.get("status") == "ok":
+        return (f"Viewer captured: {r.get('path')}\n"
+                f"Size: {r.get('width')}x{r.get('height')} ({r.get('bytes', 0)} bytes)")
+    return _fmt(r)
+
+
+# ============================================================
+# Export FCPXML (Programmatic, No Dialog)
+# ============================================================
+# Export the current project to FCPXML without the save dialog.
+
+@mcp.tool(annotations=_tool_annotations("export_xml"))
+def export_xml(path: str = "/tmp/splicekit_export.fcpxml") -> str:
+    """Export the current project/sequence as FCPXML to a file — no save dialog.
+
+    Programmatically serializes the active timeline's sequence to FCPXML format
+    and writes it to the specified path. Unlike timeline_action("exportXML")
+    which opens FCP's save dialog, this writes directly.
+
+    Args:
+        path: Output file path for the FCPXML.
+              Default: /tmp/splicekit_export.fcpxml
+
+    The exported FCPXML contains the full project structure including clips,
+    effects, titles, markers, and timing. Useful for:
+    - Inspecting the project structure (e.g. finding Custom Speed keyframes)
+    - Backing up before destructive edits
+    - Transferring projects between systems
+    """
+    r = bridge.call("fcpxml.export", path=path)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+
+# ============================================================
+# Deploy & Restart FCP
+# ============================================================
+# One-shot command to build, deploy, re-sign, kill FCP, relaunch,
+# and wait for the bridge to come back online.
+
+@mcp.tool(annotations=_tool_annotations("deploy_and_restart"))
+def deploy_and_restart(skip_build: bool = False) -> str:
+    """Build SpliceKit, deploy to the modded FCP app, and restart FCP.
+
+    This automates the entire deploy cycle:
+    1. Run `make deploy` (builds dylib + copies to framework path + re-signs)
+    2. Kill any running FCP process
+    3. Relaunch the modded FCP
+    4. Wait for the SpliceKit bridge to come online (up to 30 seconds)
+
+    Args:
+        skip_build: If True, skip `make deploy` and just restart FCP.
+                    Useful when you've already built and just need to relaunch.
+
+    Returns success/failure status and bridge connection state.
+    """
+    import subprocess, os, time as _time
+
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    results = []
+
+    # Step 1: Build and deploy
+    if not skip_build:
+        try:
+            proc = subprocess.run(
+                ["make", "deploy"],
+                cwd=project_dir, capture_output=True, text=True, timeout=120
+            )
+            if proc.returncode != 0:
+                return f"Build failed (exit {proc.returncode}):\n{proc.stderr}\n{proc.stdout}"
+            results.append("Build + deploy: OK")
+        except subprocess.TimeoutExpired:
+            return "Error: build timed out after 120s"
+        except Exception as e:
+            return f"Error running make deploy: {e}"
+
+    # Step 2: Kill FCP
+    try:
+        subprocess.run(["pkill", "-x", "Final Cut Pro"], capture_output=True, timeout=5)
+        results.append("Killed FCP")
+        _time.sleep(2)  # wait for process to fully exit
+    except Exception:
+        results.append("FCP was not running")
+
+    # Step 3: Relaunch
+    # Find the modded app
+    modded_standard = os.path.expanduser("~/Applications/SpliceKit/Final Cut Pro.app")
+    modded_creator = os.path.expanduser("~/Applications/SpliceKit/Final Cut Pro Creator Studio.app")
+    modded_app = modded_standard if os.path.isdir(modded_standard) else modded_creator
+
+    if not os.path.isdir(modded_app):
+        return f"Error: modded FCP not found at {modded_standard} or {modded_creator}"
+
+    try:
+        subprocess.Popen(["open", modded_app])
+        results.append(f"Launched: {os.path.basename(modded_app)}")
+    except Exception as e:
+        return f"Error launching FCP: {e}"
+
+    # Step 4: Wait for bridge
+    # Drop the existing connection so we don't use a stale socket
+    bridge.sock = None
+    bridge._buf = b""
+
+    max_wait = 30
+    start = _time.time()
+    connected = False
+    while _time.time() - start < max_wait:
+        _time.sleep(2)
+        try:
+            r = bridge.call("system.version")
+            if not _err(r):
+                connected = True
+                break
+        except Exception:
+            pass
+        bridge.sock = None  # reset on failure
+        bridge._buf = b""
+
+    if connected:
+        results.append(f"Bridge connected ({_time.time() - start:.1f}s)")
+        return "\n".join(results)
+    else:
+        results.append(f"Bridge NOT connected after {max_wait}s — FCP may still be loading")
+        return "\n".join(results)
 
 
 # ============================================================
@@ -4173,6 +4518,97 @@ def verify_native_captions() -> str:
     generate_native_captions() to confirm captions were placed correctly.
     """
     r = bridge.call("nativeCaptions.verify")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+# ── Lua Scripting ────────────────────────────────────────────────────────────
+
+
+@mcp.tool(annotations=_tool_annotations("lua_execute"))
+def lua_execute(code: str) -> str:
+    """Execute Lua code in SpliceKit's embedded Lua 5.4 VM running inside FCP.
+
+    The VM is persistent — variables and state survive between calls.
+    Use the `sk` module for FCP operations:
+      sk.blade(), sk.clips(), sk.seek(5.0), sk.rpc("method", {params}), etc.
+
+    Returns output (from print()), result (last expression value), and any error.
+
+    Examples:
+      lua_execute("sk.blade()")
+      lua_execute("local clips = sk.clips(); return #clips")
+      lua_execute("for i=1,5 do sk.next_frame() end")
+      lua_execute("x = 42")  -- persists: lua_execute("return x") → 42
+    """
+    r = bridge.call("lua.execute", code=code)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    parts = []
+    if r.get("output"):
+        parts.append(r["output"].rstrip())
+    if r.get("result"):
+        parts.append(f"→ {r['result']}")
+    if r.get("error"):
+        parts.append(f"Error: {r['error']}")
+    return "\n".join(parts) if parts else "ok"
+
+
+@mcp.tool(annotations=_tool_annotations("lua_execute_file"))
+def lua_execute_file(path: str) -> str:
+    """Execute a Lua script file in SpliceKit's VM.
+
+    Path can be absolute or relative to ~/Library/Application Support/SpliceKit/lua/.
+
+    Examples:
+      lua_execute_file("examples/blade_every_n_seconds.lua")
+      lua_execute_file("/tmp/my_script.lua")
+    """
+    r = bridge.call("lua.executeFile", path=path)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    parts = []
+    if r.get("output"):
+        parts.append(r["output"].rstrip())
+    if r.get("result"):
+        parts.append(f"→ {r['result']}")
+    if r.get("error"):
+        parts.append(f"Error: {r['error']}")
+    return "\n".join(parts) if parts else "ok"
+
+
+@mcp.tool(annotations=_tool_annotations("lua_reset"))
+def lua_reset() -> str:
+    """Reset the Lua VM. All state (variables, loaded modules) is cleared and the sk module is re-registered."""
+    r = bridge.call("lua.reset")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return "Lua VM reset"
+
+
+@mcp.tool(annotations=_tool_annotations("lua_watch"))
+def lua_watch(action: str = "list", path: str = "") -> str:
+    """Manage Lua file watching for live coding.
+
+    Actions:
+      list   — show watched directories
+      add    — watch a directory (files in auto/ subdirs execute on save)
+      remove — stop watching a directory
+
+    The default watched directory is ~/Library/Application Support/SpliceKit/lua/.
+    Save .lua files to the auto/ subdirectory and they execute automatically on every save.
+    """
+    r = bridge.call("lua.watch", action=action, path=path)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("lua_state"))
+def lua_state() -> str:
+    """Get Lua VM state: memory usage, user-defined globals, watched paths, scripts directory."""
+    r = bridge.call("lua.getState")
     if _err(r):
         return f"Error: {r.get('error', r)}"
     return _fmt(r)

@@ -17,10 +17,24 @@ mkdir -p "$APP_RESOURCES/Sources"
 rsync -a --delete "$REPO_DIR/Sources/" "$APP_RESOURCES/Sources/"
 echo "Bundled Sources/"
 
+# Copy Lua vendor sources (for from-source builds)
+if [ -d "$REPO_DIR/vendor/lua-5.4.7" ]; then
+    mkdir -p "$APP_RESOURCES/vendor/lua-5.4.7/src"
+    rsync -a "$REPO_DIR/vendor/lua-5.4.7/src/" "$APP_RESOURCES/vendor/lua-5.4.7/src/"
+    echo "Bundled vendor/lua-5.4.7/"
+fi
+
 # Copy MCP server
 mkdir -p "$APP_RESOURCES/mcp"
 cp "$REPO_DIR/mcp/server.py" "$APP_RESOURCES/mcp/server.py"
 echo "Bundled mcp/server.py"
+
+# Copy Lua scripts
+if [ -d "$REPO_DIR/Scripts/lua" ]; then
+    mkdir -p "$APP_RESOURCES/Scripts/lua"
+    rsync -a --delete "$REPO_DIR/Scripts/lua/" "$APP_RESOURCES/Scripts/lua/"
+    echo "Bundled Scripts/lua/"
+fi
 
 # Copy tools
 mkdir -p "$APP_RESOURCES/tools"

@@ -164,6 +164,7 @@ Task {
         case .v2: versionName = "v2 (English)"
         case .v3: versionName = "v3 (Multilingual)"
         case .tdtCtc110m: versionName = "110M (Compact)"
+        default: versionName = "\(modelVersion)"
         }
         // Check if models need downloading
         let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -173,6 +174,7 @@ Task {
         case .v2: versionFolder = "parakeet-tdt-0.6b-v2"
         case .v3: versionFolder = "parakeet-tdt-0.6b-v3"
         case .tdtCtc110m: versionFolder = "parakeet-tdt-ctc-110m"
+        default: versionFolder = "parakeet-\(modelVersion)"
         }
         let modelPath = modelDir.appendingPathComponent(versionFolder)
         let needsDownload = !FileManager.default.fileExists(atPath: modelPath.path) ||
@@ -207,7 +209,7 @@ Task {
 
         let manager = AsrManager(config: .default)
         do {
-            try await manager.initialize(models: models)
+            try await manager.loadModels(models)
         } catch {
             printError("Failed to initialize Parakeet engine: \(error.localizedDescription)")
             printError("TIP: This may happen on Intel Macs (Neural Engine required) or with insufficient RAM.")

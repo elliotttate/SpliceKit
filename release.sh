@@ -32,7 +32,7 @@ echo ""
 # BUILD
 # ──────────────────────────────────────────────
 
-echo "[1/13] Bumping version to ${VERSION}..."
+echo "[1/14] Bumping version to ${VERSION}..."
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "patcher/SpliceKit/Resources/Info.plist"
 sed -i '' "s/MARKETING_VERSION = \"[^\"]*\"/MARKETING_VERSION = \"${VERSION}\"/g" "${XCODE_PROJECT}/project.pbxproj"
 sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = ${VERSION}/g" "${XCODE_PROJECT}/project.pbxproj"
@@ -58,16 +58,29 @@ xcodebuild -project "${XCODE_PROJECT}" \
     clean build
 
 echo "[5/14] Syncing bundled resources into app..."
-mkdir -p "${BUILT_APP}/Contents/Resources/Sources"
-mkdir -p "${BUILT_APP}/Contents/Resources/mcp"
-mkdir -p "${BUILT_APP}/Contents/Resources/tools"
-cp build/SpliceKit "${BUILT_APP}/Contents/Resources/SpliceKit"
-cp build/silence-detector "${BUILT_APP}/Contents/Resources/tools/silence-detector"
-cp mcp/server.py "${BUILT_APP}/Contents/Resources/mcp/server.py"
-rsync -a --delete Sources/ "${BUILT_APP}/Contents/Resources/Sources/"
+APP_RES="${BUILT_APP}/Contents/Resources"
+mkdir -p "${APP_RES}/Sources"
+mkdir -p "${APP_RES}/mcp"
+mkdir -p "${APP_RES}/tools"
+cp build/SpliceKit "${APP_RES}/SpliceKit"
+cp build/silence-detector "${APP_RES}/tools/silence-detector"
+cp mcp/server.py "${APP_RES}/mcp/server.py"
+rsync -a --delete Sources/ "${APP_RES}/Sources/"
+# Bundle Lua vendor sources (for from-source builds)
+if [ -d "vendor/lua-5.4.7" ]; then
+    mkdir -p "${APP_RES}/vendor/lua-5.4.7/src"
+    rsync -a vendor/lua-5.4.7/src/ "${APP_RES}/vendor/lua-5.4.7/src/"
+    echo "  Bundled vendor/lua-5.4.7/"
+fi
+# Bundle Lua scripts
+if [ -d "Scripts/lua" ]; then
+    mkdir -p "${APP_RES}/Scripts/lua"
+    rsync -a --delete Scripts/lua/ "${APP_RES}/Scripts/lua/"
+    echo "  Bundled Scripts/lua/"
+fi
 # Bundle pre-built parakeet binary (no source build needed on user's machine)
 if [ -f "$PARAKEET_BIN" ]; then
-    cp "$PARAKEET_BIN" "${BUILT_APP}/Contents/Resources/tools/parakeet-transcriber"
+    cp "$PARAKEET_BIN" "${APP_RES}/tools/parakeet-transcriber"
     echo "  Bundled parakeet-transcriber binary"
 fi
 
@@ -75,7 +88,34 @@ fi
 # SIGN
 # ──────────────────────────────────────────────
 
-echo "[6/14] Signing embedded binaries..."
+echo "[6/14] Signing embedded binaries (inner-to-outer)..."
+SPARKLE_FW="${BUILT_APP}/Contents/Frameworks/Sparkle.framework"
+
+# Sign Sparkle XPC services first (innermost)
+for xpc in "${SPARKLE_FW}/Versions/B/XPCServices/"*.xpc; do
+    if [ -d "$xpc" ]; then
+        codesign --force --options runtime --timestamp --sign "${SIGN_ID}" "$xpc"
+        echo "  Signed: $(basename "$xpc")"
+    fi
+done
+
+# Sign Sparkle Updater.app
+if [ -d "${SPARKLE_FW}/Versions/B/Updater.app" ]; then
+    codesign --force --options runtime --timestamp --sign "${SIGN_ID}" "${SPARKLE_FW}/Versions/B/Updater.app"
+    echo "  Signed: Updater.app"
+fi
+
+# Sign Sparkle Autoupdate helper
+if [ -f "${SPARKLE_FW}/Versions/B/Autoupdate" ]; then
+    codesign --force --options runtime --timestamp --sign "${SIGN_ID}" "${SPARKLE_FW}/Versions/B/Autoupdate"
+    echo "  Signed: Autoupdate"
+fi
+
+# Sign Sparkle framework
+codesign --force --options runtime --timestamp --sign "${SIGN_ID}" "${SPARKLE_FW}"
+echo "  Signed: Sparkle.framework"
+
+# Sign all Mach-O binaries in Resources (dylib, tools)
 find "${BUILT_APP}/Contents/Resources" -type f | while read f; do
     if file -b "$f" 2>/dev/null | grep -q "Mach-O"; then
         codesign --force --options runtime --timestamp --sign "${SIGN_ID}" "$f"
@@ -84,7 +124,7 @@ find "${BUILT_APP}/Contents/Resources" -type f | while read f; do
 done
 
 echo "[7/14] Signing app bundle..."
-codesign --force --deep --options runtime --timestamp --sign "${SIGN_ID}" "${BUILT_APP}"
+codesign --force --options runtime --timestamp --sign "${SIGN_ID}" "${BUILT_APP}"
 codesign --verify --deep --strict "${BUILT_APP}"
 echo "  Verification passed"
 

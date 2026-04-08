@@ -2604,7 +2604,7 @@ improvement. Phase 6 (pasteboard import) is the linchpin — without it, phases
 
 ## 24. mCaptions Architecture (from Decompilation)
 
-mCaptions (by motionVFX) is a commercial FCP Workflow Extension that generates
+mCaptions is a commercial FCP Workflow Extension that generates
 word-by-word highlighted captions. Its decompiled binaries reveal a three-tier
 architecture that we can replicate — with advantages — using SpliceKit's
 in-process approach.
@@ -2647,7 +2647,7 @@ in-process approach.
 │  • TranscriptionRepository — persistence (JSON)              │
 │  • Sentry — crash/error reporting                            │
 └───────────────────────┬──────────────────────────────────────┘
-                        │ XPC (com.motionvfx.mCaptionsDaemon)
+                        │ XPC (mCaptionsDaemon)
                         ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ mCaptionsDaemon (Background LaunchAgent)                     │
@@ -2755,7 +2755,7 @@ so this validation is inherent.
 **7. XPC daemon with launchd lifecycle**
 
 ```
-Service: com.motionvfx.mCaptionsDaemon
+Service: mCaptionsDaemon
 Plist:   mCaptionsDaemon-Launchd.plist
 Helper:  mCaptionsLauncher.app
 Kill:    mCaptionsTerminator.app

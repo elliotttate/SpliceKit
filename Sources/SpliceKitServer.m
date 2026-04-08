@@ -18,6 +18,7 @@
 #import "SpliceKitCaptionPanel.h"
 #import "SpliceKitCommandPalette.h"
 #import "SpliceKitDebugUI.h"
+#import "SpliceKitLua.h"
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
@@ -3553,6 +3554,113 @@ static NSDictionary *SpliceKit_handleBatchAddMarkers(NSDictionary *params) {
     return result ?: @{@"error": @"Failed to add markers"};
 }
 
+// Batch blade at specific times using seek + blade (no manual playhead stepping needed)
+static NSDictionary *SpliceKit_handleBladeAtTimes(NSDictionary *params) {
+    NSArray *times = params[@"times"];
+    if (!times || ![times isKindOfClass:[NSArray class]] || times.count == 0) {
+        return @{@"error": @"times array required (list of seconds, e.g. [3.0, 6.0, 9.0])"};
+    }
+
+    // Sort times ascending so we blade left-to-right (avoids offset issues)
+    NSArray *sortedTimes = [times sortedArrayUsingSelector:@selector(compare:)];
+
+    __block NSDictionary *result = nil;
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id timeline = SpliceKit_getActiveTimelineModule();
+            if (!timeline) { result = @{@"error": @"No active timeline module"}; return; }
+
+            NSUInteger applied = 0;
+            NSMutableArray *results = [NSMutableArray array];
+
+            for (NSNumber *timeNum in sortedTimes) {
+                double t = [timeNum doubleValue];
+                SpliceKit_handlePlaybackSeek(@{@"seconds": @(t)});
+                [NSThread sleepForTimeInterval:0.03];
+                NSDictionary *bladeResult = SpliceKit_handleTimelineAction(@{@"action": @"blade"});
+
+                BOOL ok = bladeResult && !bladeResult[@"error"];
+                if (ok) {
+                    applied++;
+                    [results addObject:@{@"time": @(t), @"success": @YES}];
+                } else {
+                    [results addObject:@{@"time": @(t), @"success": @NO,
+                        @"error": bladeResult[@"error"] ?: @"blade failed"}];
+                }
+            }
+
+            result = @{
+                @"status": @"ok",
+                @"count": @(sortedTimes.count),
+                @"applied": @(applied),
+                @"cuts": results,
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to blade at times"};
+}
+
+// Batch timeline/playback actions executed server-side (no per-action round-trip)
+static NSDictionary *SpliceKit_handleBatchActions(NSDictionary *params) {
+    NSArray *actions = params[@"actions"];
+    if (!actions || ![actions isKindOfClass:[NSArray class]] || actions.count == 0) {
+        return @{@"error": @"actions array required"};
+    }
+
+    __block NSDictionary *result = nil;
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            NSMutableArray *results = [NSMutableArray array];
+            NSUInteger executed = 0;
+
+            for (NSDictionary *act in actions) {
+                NSString *type = act[@"type"] ?: @"timeline";
+                NSString *actionName = act[@"action"] ?: @"";
+                NSInteger repeat = [act[@"repeat"] integerValue];
+                if (repeat < 1) repeat = 1;
+
+                if ([type isEqualToString:@"wait"]) {
+                    double secs = [act[@"seconds"] doubleValue];
+                    if (secs <= 0) secs = 0.5;
+                    [NSThread sleepForTimeInterval:secs];
+                    [results addObject:[NSString stringWithFormat:@"wait %.2fs", secs]];
+                } else if ([type isEqualToString:@"playback"]) {
+                    for (NSInteger i = 0; i < repeat; i++) {
+                        SpliceKit_handlePlayback(@{@"action": actionName});
+                    }
+                    [results addObject:[NSString stringWithFormat:@"playback.%@%@",
+                        actionName, repeat > 1 ? [NSString stringWithFormat:@" x%ld", (long)repeat] : @""]];
+                } else if ([type isEqualToString:@"timeline"]) {
+                    for (NSInteger i = 0; i < repeat; i++) {
+                        SpliceKit_handleTimelineAction(@{@"action": actionName});
+                    }
+                    [results addObject:[NSString stringWithFormat:@"timeline.%@%@",
+                        actionName, repeat > 1 ? [NSString stringWithFormat:@" x%ld", (long)repeat] : @""]];
+                } else if ([type isEqualToString:@"seek"]) {
+                    double secs = [act[@"seconds"] doubleValue];
+                    SpliceKit_handlePlaybackSeek(@{@"seconds": @(secs)});
+                    [results addObject:[NSString stringWithFormat:@"seek %.2fs", secs]];
+                } else {
+                    [results addObject:[NSString stringWithFormat:@"unknown type: %@", type]];
+                    continue;
+                }
+                executed++;
+            }
+
+            result = @{
+                @"status": @"ok",
+                @"executed": @(executed),
+                @"results": results,
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to execute batch actions"};
+}
+
 static NSDictionary *SpliceKit_handleSetRange(NSDictionary *params) {
     NSNumber *startSec = params[@"startSeconds"];
     NSNumber *endSec = params[@"endSeconds"];
@@ -5237,11 +5345,26 @@ NSDictionary *SpliceKit_handleEffectsListAvailable(NSDictionary *params) {
                     else if ([typeStr isEqualToString:@"effect.audio.effect"]) friendlyType = @"audio";
                     else if ([typeStr isEqualToString:@"effect.video.transition"]) friendlyType = @"transition";
 
-                    // Apply name filter
+                    // Apply name filter (with normalization for underscores, &, etc.)
                     if (filter.length > 0) {
                         NSString *lowerFilter = [filter lowercaseString];
                         BOOL matches = [[displayName lowercaseString] containsString:lowerFilter] ||
                                        [[catName lowercaseString] containsString:lowerFilter];
+                        if (!matches) {
+                            // Normalize: strip non-alphanumeric for fuzzy match
+                            NSString *(^norm)(NSString *) = ^NSString *(NSString *s) {
+                                NSMutableString *out = [NSMutableString stringWithCapacity:s.length];
+                                NSString *lower = [s lowercaseString];
+                                for (NSUInteger i = 0; i < lower.length; i++) {
+                                    unichar c = [lower characterAtIndex:i];
+                                    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                                        [out appendFormat:@"%C", c];
+                                }
+                                return out;
+                            };
+                            matches = [norm(displayName) containsString:norm(filter)] ||
+                                      [norm(catName) containsString:norm(filter)];
+                        }
                         if (!matches) continue;
                     }
 
@@ -5289,9 +5412,31 @@ NSDictionary *SpliceKit_handleEffectsApply(NSDictionary *params) {
                 SEL nameSel = @selector(displayNameForEffectID:);
                 NSString *lowerName = [name lowercaseString];
 
-                // Exact match first
+                // Normalize: strip non-alphanumeric, replace "&" with "and" for fuzzy comparison
+                // so "Black and White" matches "Black & White" and vice versa
+                NSString *(^normalize)(NSString *) = ^NSString *(NSString *s) {
+                    NSString *lower = [[s lowercaseString] stringByReplacingOccurrencesOfString:@"&" withString:@"and"];
+                    NSMutableString *out = [NSMutableString stringWithCapacity:lower.length];
+                    for (NSUInteger i = 0; i < lower.length; i++) {
+                        unichar c = [lower characterAtIndex:i];
+                        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                            [out appendFormat:@"%C", c];
+                    }
+                    return out;
+                };
+                NSString *normalizedName = normalize(name);
+
+                // Helper: check if effectID is a built-in FCP effect (not third-party)
+                BOOL (^isBuiltIn)(NSString *) = ^BOOL(NSString *eid) {
+                    return [eid hasPrefix:@"..."] || [eid hasPrefix:@"/"];
+                };
+
+                // Search in three phases: exact, normalized, partial.
+                // Always prefer built-in over third-party across ALL phases.
+                NSString *thirdPartyFallback = nil;
+
+                // Phase 1: Exact match (case-insensitive)
                 for (NSString *eid in allIDs) {
-                    // Skip transitions — use transitions.apply for those
                     id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
                     if ([type isKindOfClass:[NSString class]] &&
                         [(NSString *)type isEqualToString:@"effect.video.transition"]) continue;
@@ -5299,11 +5444,36 @@ NSDictionary *SpliceKit_handleEffectsApply(NSDictionary *params) {
                     id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
                     if ([dn isKindOfClass:[NSString class]] &&
                         [[(NSString *)dn lowercaseString] isEqualToString:lowerName]) {
-                        resolvedID = eid;
-                        break;
+                        if (isBuiltIn(eid)) {
+                            resolvedID = eid;
+                            break;
+                        } else if (!thirdPartyFallback) {
+                            thirdPartyFallback = eid;
+                        }
                     }
                 }
-                // Partial match fallback
+
+                // Phase 2: Normalized match (handles &/and, underscores, punctuation)
+                if (!resolvedID) {
+                    for (NSString *eid in allIDs) {
+                        id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
+                        if ([type isKindOfClass:[NSString class]] &&
+                            [(NSString *)type isEqualToString:@"effect.video.transition"]) continue;
+
+                        id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                        if ([dn isKindOfClass:[NSString class]] &&
+                            [normalize((NSString *)dn) isEqualToString:normalizedName]) {
+                            if (isBuiltIn(eid)) {
+                                resolvedID = eid;
+                                break;
+                            } else if (!thirdPartyFallback) {
+                                thirdPartyFallback = eid;
+                            }
+                        }
+                    }
+                }
+
+                // Phase 3: Partial/substring match
                 if (!resolvedID) {
                     for (NSString *eid in allIDs) {
                         id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
@@ -5313,11 +5483,18 @@ NSDictionary *SpliceKit_handleEffectsApply(NSDictionary *params) {
                         id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
                         if ([dn isKindOfClass:[NSString class]] &&
                             [[(NSString *)dn lowercaseString] containsString:lowerName]) {
-                            resolvedID = eid;
-                            break;
+                            if (isBuiltIn(eid)) {
+                                resolvedID = eid;
+                                break;
+                            } else if (!thirdPartyFallback) {
+                                thirdPartyFallback = eid;
+                            }
                         }
                     }
                 }
+
+                // Only use third-party if no built-in match was found in any phase
+                if (!resolvedID) resolvedID = thirdPartyFallback;
                 if (!resolvedID) {
                     result = @{@"error": [NSString stringWithFormat:@"No effect found matching '%@'", name]};
                     return;
@@ -5433,6 +5610,21 @@ NSDictionary *SpliceKit_handleTitleInsert(NSDictionary *params) {
                 id allIDs = ((id (*)(id, SEL))objc_msgSend)((id)ffEffect, @selector(userVisibleEffectIDs));
                 SEL nameSel = @selector(displayNameForEffectID:);
                 NSString *lowerName = [name lowercaseString];
+
+                // Normalize: strip non-alphanumeric chars for fuzzy comparison
+                NSString *(^normalize)(NSString *) = ^NSString *(NSString *s) {
+                    NSMutableString *out = [NSMutableString stringWithCapacity:s.length];
+                    NSString *lower = [s lowercaseString];
+                    for (NSUInteger i = 0; i < lower.length; i++) {
+                        unichar c = [lower characterAtIndex:i];
+                        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                            [out appendFormat:@"%C", c];
+                    }
+                    return out;
+                };
+                NSString *normalizedName = normalize(name);
+
+                // Exact match first
                 for (NSString *eid in allIDs) {
                     id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
                     if ([dn isKindOfClass:[NSString class]] &&
@@ -5441,6 +5633,18 @@ NSDictionary *SpliceKit_handleTitleInsert(NSDictionary *params) {
                         break;
                     }
                 }
+                // Normalized match
+                if (!resolvedID) {
+                    for (NSString *eid in allIDs) {
+                        id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                        if ([dn isKindOfClass:[NSString class]] &&
+                            [normalize((NSString *)dn) isEqualToString:normalizedName]) {
+                            resolvedID = eid;
+                            break;
+                        }
+                    }
+                }
+                // Partial match fallback
                 if (!resolvedID) {
                     for (NSString *eid in allIDs) {
                         id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
@@ -6373,6 +6577,8 @@ static NSDictionary *SpliceKit_handleOptionsGet(NSDictionary *params) {
         @"lLadder": SpliceKit_getLLadder(),
         @"jLadder": SpliceKit_getJLadder(),
         @"defaultSpatialConformType": SpliceKit_getDefaultSpatialConformType(),
+        @"aiEngine": @([SpliceKitCommandPalette sharedPalette].aiEngine),
+        @"gemmaModel": [SpliceKitCommandPalette sharedPalette].gemmaModel ?: @"unsloth/gemma-4-E4B-it-UD-MLX-4bit",
     };
 }
 
@@ -6432,6 +6638,19 @@ static NSDictionary *SpliceKit_handleOptionsSet(NSDictionary *params) {
         SpliceKit_setDefaultSpatialConformType(value);
         return @{@"status": @"ok",
                  @"defaultSpatialConformType": SpliceKit_getDefaultSpatialConformType()};
+    } else if ([option isEqualToString:@"aiEngine"]) {
+        NSNumber *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' parameter required (0=Apple Intelligence, 1=Gemma 4)"};
+        SpliceKitAIEngine engine = (SpliceKitAIEngine)[value integerValue];
+        [SpliceKitCommandPalette sharedPalette].aiEngine = engine;
+        [[NSUserDefaults standardUserDefaults] setInteger:engine forKey:@"SpliceKitAIEngine"];
+        return @{@"status": @"ok", @"aiEngine": @(engine)};
+    } else if ([option isEqualToString:@"gemmaModel"]) {
+        NSString *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' parameter required (HuggingFace model ID)"};
+        [SpliceKitCommandPalette sharedPalette].gemmaModel = value;
+        [[NSUserDefaults standardUserDefaults] setObject:value forKey:@"SpliceKitGemmaModel"];
+        return @{@"status": @"ok", @"gemmaModel": value};
     }
 
     return @{@"error": [NSString stringWithFormat:@"Unknown option: %@", option]};
@@ -9907,6 +10126,19 @@ NSDictionary *SpliceKit_handleTransitionsApply(NSDictionary *params) {
                 NSString *transitionType = @"effect.video.transition";
                 NSString *lowerName = [name lowercaseString];
 
+                // Normalize: strip non-alphanumeric chars for fuzzy comparison
+                NSString *(^normalize)(NSString *) = ^NSString *(NSString *s) {
+                    NSMutableString *out = [NSMutableString stringWithCapacity:s.length];
+                    NSString *lower = [s lowercaseString];
+                    for (NSUInteger i = 0; i < lower.length; i++) {
+                        unichar c = [lower characterAtIndex:i];
+                        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                            [out appendFormat:@"%C", c];
+                    }
+                    return out;
+                };
+                NSString *normalizedName = normalize(name);
+
                 // Exact match first
                 for (NSString *eid in allIDs) {
                     id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
@@ -9917,6 +10149,20 @@ NSDictionary *SpliceKit_handleTransitionsApply(NSDictionary *params) {
                         [[(NSString *)dn lowercaseString] isEqualToString:lowerName]) {
                         resolvedID = eid;
                         break;
+                    }
+                }
+                // Normalized match
+                if (!resolvedID) {
+                    for (NSString *eid in allIDs) {
+                        id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
+                        if (![type isKindOfClass:[NSString class]] ||
+                            ![(NSString *)type isEqualToString:transitionType]) continue;
+                        id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                        if ([dn isKindOfClass:[NSString class]] &&
+                            [normalize((NSString *)dn) isEqualToString:normalizedName]) {
+                            resolvedID = eid;
+                            break;
+                        }
                     }
                 }
                 // Partial match fallback
@@ -10170,10 +10416,24 @@ static NSDictionary *SpliceKit_handleCommandExecute(NSDictionary *params) {
     return [[SpliceKitCommandPalette sharedPalette] executeCommand:action type:type];
 }
 
+// Forward declarations for AI engine handlers
+static NSDictionary *SpliceKit_handleCommandAIGemma(NSDictionary *params);
+static NSDictionary *SpliceKit_handleCommandAIAppleAgentic(NSDictionary *params);
+
 static NSDictionary *SpliceKit_handleCommandAI(NSDictionary *params) {
     NSString *query = params[@"query"];
     if (!query) return @{@"error": @"query parameter required"};
 
+    // Route to the configured AI engine
+    SpliceKitAIEngine engine = [SpliceKitCommandPalette sharedPalette].aiEngine;
+    if (engine == SpliceKitAIEngineAppleAgentic) {
+        return SpliceKit_handleCommandAIAppleAgentic(params);
+    }
+    if (engine == SpliceKitAIEngineGemma4) {
+        return SpliceKit_handleCommandAIGemma(params);
+    }
+
+    // Default: non-agentic Apple Intelligence
     __block NSDictionary *result = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 
@@ -10189,6 +10449,54 @@ static NSDictionary *SpliceKit_handleCommandAI(NSDictionary *params) {
 
     dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC));
     return result ?: @{@"error": @"AI request timed out"};
+}
+
+static NSDictionary *SpliceKit_handleCommandAIGemma(NSDictionary *params) {
+    NSString *query = params[@"query"];
+    if (!query) return @{@"error": @"query parameter required"};
+
+    NSString *model = params[@"model"];
+    if (model) {
+        [SpliceKitCommandPalette sharedPalette].gemmaModel = model;
+    }
+
+    __block NSDictionary *result = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+
+    [[SpliceKitCommandPalette sharedPalette] executeNaturalLanguageGemma:query
+        completion:^(NSString *summary, NSString *error) {
+            if (error) {
+                result = @{@"error": error};
+            } else {
+                result = @{@"summary": summary ?: @"Done."};
+            }
+            dispatch_semaphore_signal(sem);
+        }];
+
+    // 5 minute timeout — multi-turn loops take longer than single-shot AI
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_SEC));
+    return result ?: @{@"error": @"Gemma AI request timed out"};
+}
+
+static NSDictionary *SpliceKit_handleCommandAIAppleAgentic(NSDictionary *params) {
+    NSString *query = params[@"query"];
+    if (!query) return @{@"error": @"query parameter required"};
+
+    __block NSDictionary *result = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+
+    [[SpliceKitCommandPalette sharedPalette] executeNaturalLanguageAppleAgentic:query
+        completion:^(NSString *summary, NSString *error) {
+            if (error) {
+                result = @{@"error": error};
+            } else {
+                result = @{@"summary": summary ?: @"Done."};
+            }
+            dispatch_semaphore_signal(sem);
+        }];
+
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_SEC));
+    return result ?: @{@"error": @"Apple Intelligence+ request timed out"};
 }
 
 #pragma mark - Browser Clip Handlers
@@ -11357,6 +11665,665 @@ static NSDictionary *SpliceKit_handleEventCreate(NSDictionary *params) {
 
 static NSDictionary *SpliceKit_handleLibraryCreate(NSDictionary *params) {
     return SpliceKit_sendAppAction(@"newLibrary:");
+}
+
+#pragma mark - Open Project by Name
+
+static NSDictionary *SpliceKit_handleProjectOpen(NSDictionary *params) {
+    NSString *nameFilter = params[@"name"];
+    NSString *eventFilter = params[@"event"];
+    if (!nameFilter) return @{@"error": @"name parameter required"};
+
+    __block NSDictionary *result = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            // Step 1: Get active libraries
+            Class libDocClass = objc_getClass("FFLibraryDocument");
+            if (!libDocClass) {
+                result = @{@"error": @"FFLibraryDocument class not found"};
+                return;
+            }
+
+            SEL copyLibsSel = NSSelectorFromString(@"copyActiveLibraries");
+            if (![libDocClass respondsToSelector:copyLibsSel]) {
+                result = @{@"error": @"copyActiveLibraries not available"};
+                return;
+            }
+
+            id libs = ((id (*)(id, SEL))objc_msgSend)((id)libDocClass, copyLibsSel);
+            if (!libs || ![libs isKindOfClass:[NSArray class]] || [(NSArray *)libs count] == 0) {
+                result = @{@"error": @"No active libraries found"};
+                return;
+            }
+
+            // Step 2: Search across all libraries for matching sequence
+            id foundSequence = nil;
+            NSString *foundName = nil;
+            NSString *foundEvent = nil;
+            NSString *foundLibrary = nil;
+            NSMutableArray *allSequences = [NSMutableArray array];
+
+            for (id lib in (NSArray *)libs) {
+                NSString *libName = @"";
+                if ([lib respondsToSelector:@selector(displayName)]) {
+                    libName = ((id (*)(id, SEL))objc_msgSend)(lib, @selector(displayName)) ?: @"";
+                }
+
+                // Get deep loaded sequences
+                SEL deepSeqSel = NSSelectorFromString(@"_deepLoadedSequences");
+                if (![lib respondsToSelector:deepSeqSel]) continue;
+
+                id seqSet = ((id (*)(id, SEL))objc_msgSend)(lib, deepSeqSel);
+                if (!seqSet) continue;
+
+                id seqArray = nil;
+                if ([seqSet respondsToSelector:@selector(allObjects)]) {
+                    seqArray = ((id (*)(id, SEL))objc_msgSend)(seqSet, @selector(allObjects));
+                } else if ([seqSet isKindOfClass:[NSArray class]]) {
+                    seqArray = seqSet;
+                }
+                if (!seqArray || ![seqArray isKindOfClass:[NSArray class]]) continue;
+
+                for (id seq in (NSArray *)seqArray) {
+                    NSString *seqName = @"";
+                    if ([seq respondsToSelector:@selector(displayName)]) {
+                        seqName = ((id (*)(id, SEL))objc_msgSend)(seq, @selector(displayName)) ?: @"";
+                    }
+
+                    // Get event name for this sequence
+                    NSString *seqEvent = @"";
+                    SEL eventSel = NSSelectorFromString(@"event");
+                    if ([seq respondsToSelector:eventSel]) {
+                        id event = ((id (*)(id, SEL))objc_msgSend)(seq, eventSel);
+                        if (event && [event respondsToSelector:@selector(displayName)]) {
+                            seqEvent = ((id (*)(id, SEL))objc_msgSend)(event, @selector(displayName)) ?: @"";
+                        }
+                    }
+
+                    // Check if sequence has content
+                    BOOL hasContent = NO;
+                    SEL hasItemsSel = NSSelectorFromString(@"hasContainedItems");
+                    if ([seq respondsToSelector:hasItemsSel]) {
+                        hasContent = ((BOOL (*)(id, SEL))objc_msgSend)(seq, hasItemsSel);
+                    }
+
+                    [allSequences addObject:@{
+                        @"name": seqName,
+                        @"event": seqEvent,
+                        @"library": libName,
+                        @"hasContent": @(hasContent),
+                    }];
+
+                    // Match by name (case-insensitive contains)
+                    BOOL nameMatch = [seqName localizedCaseInsensitiveContainsString:nameFilter];
+                    BOOL eventMatch = !eventFilter || eventFilter.length == 0 ||
+                        [seqEvent localizedCaseInsensitiveContainsString:eventFilter];
+
+                    if (nameMatch && eventMatch && !foundSequence) {
+                        foundSequence = seq;
+                        foundName = seqName;
+                        foundEvent = seqEvent;
+                        foundLibrary = libName;
+                    }
+                }
+            }
+
+            if (!foundSequence) {
+                result = @{@"error": [NSString stringWithFormat:
+                    @"No project matching name='%@'%@ found. Available: %@",
+                    nameFilter,
+                    eventFilter ? [NSString stringWithFormat:@" event='%@'", eventFilter] : @"",
+                    allSequences]};
+                return;
+            }
+
+            // Step 3: Load the sequence into the editor
+            id app = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("NSApplication"), @selector(sharedApplication));
+            id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
+            if (!delegate) {
+                result = @{@"error": @"No app delegate"};
+                return;
+            }
+
+            SEL aecSel = @selector(activeEditorContainer);
+            if (![delegate respondsToSelector:aecSel]) {
+                result = @{@"error": @"No activeEditorContainer"};
+                return;
+            }
+            id editorContainer = ((id (*)(id, SEL))objc_msgSend)(delegate, aecSel);
+            if (!editorContainer) {
+                result = @{@"error": @"Editor container is nil"};
+                return;
+            }
+
+            SEL loadSel = NSSelectorFromString(@"loadEditorForSequence:");
+            if (![editorContainer respondsToSelector:loadSel]) {
+                result = @{@"error": @"loadEditorForSequence: not available on editor container"};
+                return;
+            }
+
+            ((void (*)(id, SEL, id))objc_msgSend)(editorContainer, loadSel, foundSequence);
+
+            result = @{
+                @"status": @"ok",
+                @"project": foundName ?: @"",
+                @"event": foundEvent ?: @"",
+                @"library": foundLibrary ?: @"",
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
+#pragma mark - Select Clip at Playhead with Lane
+
+static NSDictionary *SpliceKit_handleSelectClipAtPlayheadLane(NSDictionary *params) {
+    NSNumber *laneParam = params[@"lane"];
+    if (!laneParam) return @{@"error": @"lane parameter required"};
+    long long targetLane = [laneParam longLongValue];
+
+    __block NSDictionary *result = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id timeline = SpliceKit_getActiveTimelineModule();
+            if (!timeline) {
+                result = @{@"error": @"No active timeline module"};
+                return;
+            }
+
+            id sequence = nil;
+            if ([timeline respondsToSelector:@selector(sequence)]) {
+                sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+            }
+            if (!sequence) {
+                result = @{@"error": @"No sequence in timeline"};
+                return;
+            }
+
+            // Get playhead time
+            SpliceKit_CMTime playhead = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
+                timeline, @selector(playheadTime));
+
+            // Get all items including connected clips (anchoredItems)
+            id primaryObj = nil;
+            if ([sequence respondsToSelector:@selector(primaryObject)]) {
+                primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject));
+            }
+            if (!primaryObj) {
+                result = @{@"error": @"No primary object on sequence"};
+                return;
+            }
+
+            // Collect spine items + their anchored items
+            NSMutableArray *candidates = [NSMutableArray array];
+
+            id spineItems = nil;
+            if ([primaryObj respondsToSelector:@selector(containedItems)]) {
+                spineItems = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
+            }
+
+            SEL erSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+            BOOL canGetRange = [primaryObj respondsToSelector:erSel];
+
+            if (spineItems && [spineItems isKindOfClass:[NSArray class]]) {
+                for (id item in (NSArray *)spineItems) {
+                    // Check this spine item's anchored (connected) items
+                    SEL anchoredSel = NSSelectorFromString(@"anchoredItems");
+                    if ([item respondsToSelector:anchoredSel]) {
+                        id anchored = ((id (*)(id, SEL))objc_msgSend)(item, anchoredSel);
+                        if (anchored && [anchored isKindOfClass:[NSArray class]]) {
+                            for (id connected in (NSArray *)anchored) {
+                                long long lane = 0;
+                                if ([connected respondsToSelector:@selector(anchoredLane)]) {
+                                    lane = ((long long (*)(id, SEL))objc_msgSend)(
+                                        connected, @selector(anchoredLane));
+                                }
+                                if (lane == targetLane) {
+                                    [candidates addObject:connected];
+                                }
+                            }
+                        }
+                    }
+
+                    // Also check spine items themselves (lane 0)
+                    if (targetLane == 0) {
+                        [candidates addObject:item];
+                    }
+                }
+            }
+
+            // Find candidate under playhead
+            id bestMatch = nil;
+            for (id item in candidates) {
+                // Try to get time range of item
+                if (canGetRange) {
+                    @try {
+                        SpliceKit_CMTimeRange range = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                            primaryObj, erSel, item);
+                        double startSec = (double)range.start.value / range.start.timescale;
+                        double durSec = (double)range.duration.value / range.duration.timescale;
+                        double endSec = startSec + durSec;
+                        double playheadSec = (double)playhead.value / playhead.timescale;
+
+                        if (playheadSec >= startSec - 0.001 && playheadSec <= endSec + 0.001) {
+                            bestMatch = item;
+                            break;
+                        }
+                    } @catch (NSException *e) {
+                        continue;
+                    }
+                }
+
+                // Fallback: check anchoredOffset for connected clips
+                SEL offsetSel = NSSelectorFromString(@"anchoredOffset");
+                if (!bestMatch && [item respondsToSelector:offsetSel]) {
+                    SpliceKit_CMTime offset = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, offsetSel);
+                    SpliceKit_CMTime dur = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
+                    double startSec = (double)offset.value / offset.timescale;
+                    double durSec = (double)dur.value / dur.timescale;
+                    double endSec = startSec + durSec;
+                    double playheadSec = (double)playhead.value / playhead.timescale;
+
+                    if (playheadSec >= startSec - 0.001 && playheadSec <= endSec + 0.001) {
+                        bestMatch = item;
+                        break;
+                    }
+                }
+            }
+
+            if (!bestMatch) {
+                result = @{@"error": [NSString stringWithFormat:
+                    @"No clip found at playhead in lane %lld. Found %lu candidates in that lane.",
+                    targetLane, (unsigned long)candidates.count]};
+                return;
+            }
+
+            // Select using setSelectedItems: on the timeline module
+            NSArray *selArray = @[bestMatch];
+            SEL setSelSel = NSSelectorFromString(@"setSelectedItems:");
+            if ([timeline respondsToSelector:setSelSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(timeline, setSelSel, selArray);
+            } else {
+                // Fallback: try selectItems:
+                SEL selectSel = NSSelectorFromString(@"selectItems:");
+                if ([timeline respondsToSelector:selectSel]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(timeline, selectSel, selArray);
+                }
+            }
+
+            NSString *clipName = @"";
+            if ([bestMatch respondsToSelector:@selector(displayName)]) {
+                clipName = ((id (*)(id, SEL))objc_msgSend)(bestMatch, @selector(displayName)) ?: @"";
+            }
+
+            NSString *handle = SpliceKit_storeHandle(bestMatch);
+
+            result = @{
+                @"status": @"ok",
+                @"lane": @(targetLane),
+                @"clip": clipName,
+                @"class": NSStringFromClass([bestMatch class]),
+                @"handle": handle,
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
+#pragma mark - Capture Viewer Screenshot
+
+static NSDictionary *SpliceKit_handleCaptureViewer(NSDictionary *params) {
+    NSString *outputPath = params[@"path"] ?: @"/tmp/splicekit_viewer.png";
+
+    __block NSDictionary *result = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            // Find the main FCP window
+            NSWindow *mainWindow = [NSApp mainWindow];
+            if (!mainWindow) {
+                for (NSWindow *w in [NSApp windows]) {
+                    if ([w isVisible] && (!mainWindow || w.frame.size.width > mainWindow.frame.size.width)) {
+                        mainWindow = w;
+                    }
+                }
+            }
+            if (!mainWindow) {
+                result = @{@"error": @"No visible FCP window found"};
+                return;
+            }
+
+            CGWindowID windowID = (CGWindowID)[mainWindow windowNumber];
+
+            // Capture the full window using CGWindowListCreateImage (captures GPU/Metal content)
+            // CGRectNull = capture the entire window bounds
+            CGImageRef fullImage = CGWindowListCreateImage(
+                CGRectNull,
+                kCGWindowListOptionIncludingWindow,
+                windowID,
+                kCGWindowImageBoundsIgnoreFraming | kCGWindowImageNominalResolution
+            );
+
+            if (!fullImage) {
+                result = @{@"error": @"CGWindowListCreateImage returned nil — screen recording permission may be needed"};
+                return;
+            }
+
+            // Find the LARGEST FFPlayerView in the main window for cropping
+            Class playerViewClass = objc_getClass("FFPlayerView");
+            NSView *largestPlayerView = nil;
+            CGFloat largestArea = 0;
+
+            if (playerViewClass) {
+                NSMutableArray *queue = [NSMutableArray arrayWithObject:[mainWindow contentView]];
+                while (queue.count > 0) {
+                    NSView *view = queue.firstObject;
+                    [queue removeObjectAtIndex:0];
+                    if (!view) continue;
+                    if ([view isKindOfClass:playerViewClass]) {
+                        CGFloat area = view.bounds.size.width * view.bounds.size.height;
+                        if (area > largestArea) {
+                            largestArea = area;
+                            largestPlayerView = view;
+                        }
+                    }
+                    NSArray *subs = [view subviews];
+                    if (subs) [queue addObjectsFromArray:subs];
+                }
+            }
+
+            NSData *pngData = nil;
+            int outWidth = (int)CGImageGetWidth(fullImage);
+            int outHeight = (int)CGImageGetHeight(fullImage);
+            BOOL cropped = NO;
+
+            if (largestPlayerView) {
+                // Convert view frame to window coordinates (flipped for image)
+                NSRect viewFrameInWindow = [largestPlayerView convertRect:[largestPlayerView bounds] toView:nil];
+                CGFloat imgScaleX = (CGFloat)CGImageGetWidth(fullImage) / mainWindow.frame.size.width;
+                CGFloat imgScaleY = (CGFloat)CGImageGetHeight(fullImage) / mainWindow.frame.size.height;
+                CGFloat windowHeight = mainWindow.frame.size.height;
+
+                CGRect cropRect = CGRectMake(
+                    viewFrameInWindow.origin.x * imgScaleX,
+                    (windowHeight - viewFrameInWindow.origin.y - viewFrameInWindow.size.height) * imgScaleY,
+                    viewFrameInWindow.size.width * imgScaleX,
+                    viewFrameInWindow.size.height * imgScaleY
+                );
+
+                CGImageRef croppedImage = CGImageCreateWithImageInRect(fullImage, cropRect);
+                if (croppedImage) {
+                    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:croppedImage];
+                    pngData = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+                    outWidth = (int)CGImageGetWidth(croppedImage);
+                    outHeight = (int)CGImageGetHeight(croppedImage);
+                    CGImageRelease(croppedImage);
+                    cropped = YES;
+                }
+            }
+
+            // Fallback: full window
+            if (!pngData) {
+                NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:fullImage];
+                pngData = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            }
+
+            CGImageRelease(fullImage);
+
+            if (!pngData) {
+                result = @{@"error": @"Failed to generate PNG data"};
+                return;
+            }
+
+            BOOL written = [pngData writeToFile:outputPath atomically:YES];
+            if (!written) {
+                result = @{@"error": [NSString stringWithFormat:@"Failed to write to %@", outputPath]};
+                return;
+            }
+
+            result = @{
+                @"status": @"ok",
+                @"path": outputPath,
+                @"width": @(outWidth),
+                @"height": @(outHeight),
+                @"bytes": @(pngData.length),
+                @"cropped": @(cropped),
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
+#pragma mark - Export FCPXML Programmatically
+
+static NSDictionary *SpliceKit_handleFCPXMLExport(NSDictionary *params) {
+    NSString *outputPath = params[@"path"] ?: @"/tmp/splicekit_export.fcpxml";
+
+    __block NSDictionary *result = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            // Use the same safe export path as FCP's own exportXML: action:
+            //   1. Get the active sequence
+            //   2. FFLibrary.eventClipForSequence: → get the event clip
+            //   3. FFXMLTranslationTask.translationTaskForClips: → create export task
+            //   4. task.exportToFile:withOptions: → write directly to file
+            //
+            // This uses FFXMLTranslationEventClipsExporter which only serializes the
+            // sequence/clips, avoiding the whole-document crash in FFXMLExporter.
+
+            id timeline = SpliceKit_getActiveTimelineModule();
+            if (!timeline) {
+                result = @{@"error": @"No active timeline module"};
+                return;
+            }
+
+            id sequence = nil;
+            if ([timeline respondsToSelector:@selector(sequence)]) {
+                sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+            }
+            if (!sequence) {
+                result = @{@"error": @"No sequence in timeline"};
+                return;
+            }
+
+            // Step 1: Get the event clip for this sequence
+            Class ffLibrary = objc_getClass("FFLibrary");
+            if (!ffLibrary) {
+                result = @{@"error": @"FFLibrary class not found"};
+                return;
+            }
+
+            SEL eventClipSel = NSSelectorFromString(@"eventClipForSequence:");
+            if (![ffLibrary respondsToSelector:eventClipSel]) {
+                result = @{@"error": @"FFLibrary does not respond to eventClipForSequence:"};
+                return;
+            }
+
+            id eventClip = ((id (*)(id, SEL, id))objc_msgSend)((id)ffLibrary, eventClipSel, sequence);
+            if (!eventClip) {
+                // eventClipForSequence: returns nil if the sequence IS the event clip
+                // (happens for top-level sequences). Fall back to the sequence itself.
+                eventClip = sequence;
+            }
+
+            // Step 2: Create translation task for export
+            Class taskClass = objc_getClass("FFXMLTranslationTask");
+            if (!taskClass) {
+                result = @{@"error": @"FFXMLTranslationTask class not found"};
+                return;
+            }
+
+            SEL taskForClipsSel = NSSelectorFromString(@"translationTaskForClips:");
+            if (![taskClass respondsToSelector:taskForClipsSel]) {
+                result = @{@"error": @"translationTaskForClips: not available"};
+                return;
+            }
+
+            NSArray *clips = @[eventClip];
+            id task = ((id (*)(id, SEL, id))objc_msgSend)((id)taskClass, taskForClipsSel, clips);
+            if (!task) {
+                result = @{@"error": @"Failed to create FFXMLTranslationTask"};
+                return;
+            }
+
+            // Step 3: Create export options
+            Class optionsClass = objc_getClass("FFXMLExportOptions");
+            id options = nil;
+            if (optionsClass) {
+                SEL initDefSel = NSSelectorFromString(@"initWithUserDefaults");
+                id optObj = [[optionsClass alloc] init];
+                if ([optObj respondsToSelector:initDefSel]) {
+                    options = ((id (*)(id, SEL))objc_msgSend)(optObj, initDefSel);
+                } else {
+                    options = optObj;
+                }
+            }
+
+            // Step 4: Export to file
+            NSURL *outURL = [NSURL fileURLWithPath:outputPath];
+            SEL exportSel = NSSelectorFromString(@"exportToFile:withOptions:");
+            if (![task respondsToSelector:exportSel]) {
+                result = @{@"error": @"exportToFile:withOptions: not available on task"};
+                return;
+            }
+
+            BOOL success = ((BOOL (*)(id, SEL, id, id))objc_msgSend)(
+                task, exportSel, outURL, options);
+
+            // Check for error on the task
+            NSError *taskError = nil;
+            SEL errorSel = NSSelectorFromString(@"error");
+            if ([task respondsToSelector:errorSel]) {
+                taskError = ((id (*)(id, SEL))objc_msgSend)(task, errorSel);
+            }
+
+            if (!success || taskError) {
+                NSString *errMsg = taskError ? [taskError localizedDescription] : @"Export returned false";
+                result = @{@"error": [NSString stringWithFormat:@"Export failed: %@", errMsg]};
+                return;
+            }
+
+            // Verify the file was written
+            NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:outputPath error:nil];
+            unsigned long long fileSize = [attrs[NSFileSize] unsignedLongLongValue];
+
+            result = @{
+                @"status": @"ok",
+                @"path": outputPath,
+                @"bytes": @(fileSize),
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
+#pragma mark - Auto-Dismiss Known Dialogs
+
+// Check for and auto-dismiss known blocking dialogs (e.g. "video properties not recognized").
+// Called at the start of every request to clear stale dialogs that block interaction.
+static void SpliceKit_autoDismissBlockingDialogs(void) {
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            // Check for sheets on all windows
+            for (NSWindow *window in [NSApp windows]) {
+                NSWindow *sheet = [window attachedSheet];
+                if (!sheet) continue;
+
+                // Scan text labels in the sheet for known blocking messages
+                NSMutableArray *labels = [NSMutableArray array];
+                NSMutableArray *buttons = [NSMutableArray array];
+
+                // Recursive BFS to find text fields and buttons
+                NSMutableArray *queue = [NSMutableArray arrayWithObject:[sheet contentView]];
+                while (queue.count > 0) {
+                    NSView *view = queue.firstObject;
+                    [queue removeObjectAtIndex:0];
+                    if (!view) continue;
+
+                    if ([view isKindOfClass:[NSTextField class]] && ![(NSTextField *)view isEditable]) {
+                        NSString *val = [(NSTextField *)view stringValue];
+                        if (val.length > 0) [labels addObject:val];
+                    }
+                    if ([view isKindOfClass:[NSButton class]]) {
+                        [buttons addObject:(NSButton *)view];
+                    }
+                    NSArray *subs = [view subviews];
+                    if (subs) [queue addObjectsFromArray:subs];
+                }
+
+                // Check for "video properties" dialog
+                BOOL isVideoPropsDialog = NO;
+                for (NSString *label in labels) {
+                    if ([label localizedCaseInsensitiveContainsString:@"video properties"] &&
+                        [label localizedCaseInsensitiveContainsString:@"not recognized"]) {
+                        isVideoPropsDialog = YES;
+                        break;
+                    }
+                }
+
+                if (isVideoPropsDialog) {
+                    // Click "Continue" or "OK" or the default button
+                    for (NSButton *btn in buttons) {
+                        NSString *title = [btn title] ?: @"";
+                        if ([title localizedCaseInsensitiveContainsString:@"continue"] ||
+                            [title localizedCaseInsensitiveContainsString:@"ok"] ||
+                            [[btn keyEquivalent] isEqualToString:@"\r"]) {
+                            [btn performClick:nil];
+                            SpliceKit_log(@"Auto-dismissed 'video properties not recognized' dialog");
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Also check modal windows
+            NSWindow *modalWindow = [NSApp modalWindow];
+            if (modalWindow) {
+                NSMutableArray *labels = [NSMutableArray array];
+                NSMutableArray *queue = [NSMutableArray arrayWithObject:[modalWindow contentView]];
+                while (queue.count > 0) {
+                    NSView *view = queue.firstObject;
+                    [queue removeObjectAtIndex:0];
+                    if (!view) continue;
+                    if ([view isKindOfClass:[NSTextField class]] && ![(NSTextField *)view isEditable]) {
+                        NSString *val = [(NSTextField *)view stringValue];
+                        if (val.length > 0) [labels addObject:val];
+                    }
+                    NSArray *subs = [view subviews];
+                    if (subs) [queue addObjectsFromArray:subs];
+                }
+
+                for (NSString *label in labels) {
+                    if ([label localizedCaseInsensitiveContainsString:@"video properties"] &&
+                        [label localizedCaseInsensitiveContainsString:@"not recognized"]) {
+                        // Try to end the modal session
+                        [NSApp stopModal];
+                        [modalWindow close];
+                        SpliceKit_log(@"Auto-dismissed modal 'video properties' dialog");
+                        break;
+                    }
+                }
+            }
+        } @catch (NSException *e) {
+            // Silently ignore - auto-dismiss is best-effort
+        }
+    });
 }
 
 #pragma mark - Tool Selection Handler
@@ -16769,7 +17736,7 @@ static NSDictionary *SpliceKit_handleDebugBreakpoint(NSDictionary *params) {
 // works fine. The string comparisons are fast enough — we're not doing thousands per second.
 //
 
-static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
+NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
     NSString *method = request[@"method"];
     NSDictionary *params = request[@"params"] ?: @{};
 
@@ -16778,6 +17745,9 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
     }
 
     SpliceKit_installEffectDragSwizzlesNow();
+
+    // Auto-dismiss known blocking dialogs before processing any request
+    SpliceKit_autoDismissBlockingDialogs();
 
     NSDictionary *result = nil;
 
@@ -16828,6 +17798,10 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleSetRange(params);
     } else if ([method isEqualToString:@"timeline.addMarkers"]) {
         result = SpliceKit_handleBatchAddMarkers(params);
+    } else if ([method isEqualToString:@"timeline.bladeAtTimes"]) {
+        result = SpliceKit_handleBladeAtTimes(params);
+    } else if ([method isEqualToString:@"timeline.batchActions"]) {
+        result = SpliceKit_handleBatchActions(params);
     } else if ([method isEqualToString:@"timeline.batchExport"]) {
         result = SpliceKit_handleBatchExport(params);
     }
@@ -16942,6 +17916,10 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleCommandExecute(params);
     } else if ([method isEqualToString:@"command.ai"]) {
         result = SpliceKit_handleCommandAI(params);
+    } else if ([method isEqualToString:@"command.aiGemma"]) {
+        result = SpliceKit_handleCommandAIGemma(params);
+    } else if ([method isEqualToString:@"command.aiAppleAgentic"]) {
+        result = SpliceKit_handleCommandAIAppleAgentic(params);
     }
     // browser.* namespace
     else if ([method isEqualToString:@"browser.listClips"]) {
@@ -16984,6 +17962,20 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleEventCreate(params);
     } else if ([method isEqualToString:@"project.createLibrary"]) {
         result = SpliceKit_handleLibraryCreate(params);
+    } else if ([method isEqualToString:@"project.open"]) {
+        result = SpliceKit_handleProjectOpen(params);
+    }
+    // timeline lane selection
+    else if ([method isEqualToString:@"timeline.selectClipInLane"]) {
+        result = SpliceKit_handleSelectClipAtPlayheadLane(params);
+    }
+    // viewer capture
+    else if ([method isEqualToString:@"viewer.capture"]) {
+        result = SpliceKit_handleCaptureViewer(params);
+    }
+    // fcpxml export (programmatic, no dialog)
+    else if ([method isEqualToString:@"fcpxml.export"]) {
+        result = SpliceKit_handleFCPXMLExport(params);
     }
     // tool.* namespace
     else if ([method isEqualToString:@"tool.select"]) {
@@ -17086,6 +18078,18 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleDebugInstallMenuBar(params);
     } else if ([method isEqualToString:@"debug.breakpoint"]) {
         result = SpliceKit_handleDebugBreakpoint(params);
+    }
+    // lua.* namespace — embedded Lua scripting engine
+    else if ([method isEqualToString:@"lua.execute"]) {
+        result = SpliceKit_handleLuaExecute(params);
+    } else if ([method isEqualToString:@"lua.executeFile"]) {
+        result = SpliceKit_handleLuaExecuteFile(params);
+    } else if ([method isEqualToString:@"lua.reset"]) {
+        result = SpliceKit_handleLuaReset(params);
+    } else if ([method isEqualToString:@"lua.getState"]) {
+        result = SpliceKit_handleLuaGetState(params);
+    } else if ([method isEqualToString:@"lua.watch"]) {
+        result = SpliceKit_handleLuaWatch(params);
     }
     else {
         return @{@"error": @{@"code": @(-32601), @"message":

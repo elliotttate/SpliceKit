@@ -17,11 +17,15 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
 
 // These are defined in SpliceKitServer.m — we call them directly to avoid
 // going through the TCP socket when executing commands from within the process.
 extern NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params);
 extern NSDictionary *SpliceKit_handlePlayback(NSDictionary *params);
+extern NSDictionary *SpliceKit_handleRequest(NSDictionary *request);
 
 #pragma mark - SpliceKitCommand
 
@@ -235,19 +239,25 @@ static CGFloat FCPFuzzyScore(NSString *query, NSString *target) {
         _spinner.translatesAutoresizingMaskIntoConstraints = NO;
         [_spinner startAnimation:nil];
 
-        _label = [NSTextField labelWithString:@"Asking Apple Intelligence..."];
+        _label = [NSTextField wrappingLabelWithString:@""];
         _label.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
         _label.textColor = [NSColor controlAccentColor];
         _label.translatesAutoresizingMaskIntoConstraints = NO;
+        _label.maximumNumberOfLines = 0; // unlimited lines
+        _label.cell.truncatesLastVisibleLine = YES;
+        // Prevent the label from pushing the panel wider — wrap instead
+        [_label setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         [self addSubview:_spinner];
         [self addSubview:_label];
 
         [NSLayoutConstraint activateConstraints:@[
             [_spinner.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
-            [_spinner.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_spinner.topAnchor constraintEqualToAnchor:self.topAnchor constant:12],
             [_label.leadingAnchor constraintEqualToAnchor:_spinner.trailingAnchor constant:8],
-            [_label.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_label.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-12],
+            [_label.topAnchor constraintEqualToAnchor:self.topAnchor constant:8],
+            [_label.bottomAnchor constraintLessThanOrEqualToAnchor:self.bottomAnchor constant:-8],
         ]];
     }
     return self;
@@ -308,6 +318,15 @@ static NSString * const kAIRowID = @"FCPAIRow";
 // Favorites
 @property (nonatomic, strong) NSMutableSet<NSString *> *favoriteKeys; // "type::action" for O(1) lookup
 @property (nonatomic, strong) NSArray<SpliceKitCommand *> *rawBrowseCommands; // pre-injection list
+
+// Gemma 4 (MLX) AI engine
+@property (nonatomic, strong) NSPopUpButton *aiEnginePopup;
+@property (nonatomic, strong) NSMutableArray *gemmaMessages;
+@property (nonatomic, assign) NSInteger gemmaIterationCount;
+@property (nonatomic, assign) NSInteger gemmaMaxIterations;
+@property (nonatomic, strong) NSArray *gemmaToolSchema;
+@property (nonatomic, assign) BOOL gemmaCancelled;
+@property (nonatomic, strong) NSString *gemmaCurrentTask;
 @end
 
 static NSString * const kSpliceKitFavoritesKey = @"SpliceKitCommandPaletteFavorites";
@@ -328,6 +347,16 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         [self registerCommands];
         _filteredCommands = _allCommands;
         [self loadFavorites];
+
+        // Gemma 4 defaults
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        if ([defaults objectForKey:@"SpliceKitAIEngine"]) {
+            _aiEngine = [defaults integerForKey:@"SpliceKitAIEngine"];
+        } else {
+            _aiEngine = SpliceKitAIEngineAppleAgentic; // default to Apple Intelligence+
+        }
+        _gemmaModel = [defaults stringForKey:@"SpliceKitGemmaModel"] ?: @"unsloth/gemma-4-E4B-it-UD-MLX-4bit";
+        _gemmaMaxIterations = 100;
     }
     return self;
 }
@@ -814,6 +843,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     panel.releasedWhenClosed = NO;
     panel.delegate = self;
     panel.minSize = NSMakeSize(400, 200);
+    panel.maxSize = NSMakeSize(620, 800);
     panel.backgroundColor = [NSColor clearColor];
 
     // Vibrancy background
@@ -887,6 +917,19 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     [bg addSubview:statusLabel];
     self.statusLabel = statusLabel;
 
+    // AI engine popup (Apple Intelligence / Gemma 4)
+    NSPopUpButton *aiPopup = [[NSPopUpButton alloc] init];
+    aiPopup.translatesAutoresizingMaskIntoConstraints = NO;
+    [aiPopup addItemsWithTitles:@[@"Apple Intelligence", @"Gemma 4", @"Apple Intelligence+"]];
+    aiPopup.target = self;
+    aiPopup.action = @selector(aiEngineChanged:);
+    aiPopup.font = [NSFont systemFontOfSize:10];
+    aiPopup.controlSize = NSControlSizeMini;
+    [aiPopup setContentHuggingPriority:NSLayoutPriorityDefaultHigh forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [aiPopup selectItemAtIndex:(NSInteger)self.aiEngine];
+    [bg addSubview:aiPopup];
+    self.aiEnginePopup = aiPopup;
+
     // Layout
     [NSLayoutConstraint activateConstraints:@[
         [searchField.topAnchor constraintEqualToAnchor:bg.topAnchor constant:38],
@@ -904,9 +947,12 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
         [scroll.bottomAnchor constraintEqualToAnchor:statusLabel.topAnchor constant:-2],
 
         [statusLabel.leadingAnchor constraintEqualToAnchor:bg.leadingAnchor constant:12],
-        [statusLabel.trailingAnchor constraintEqualToAnchor:bg.trailingAnchor constant:-12],
+        [statusLabel.trailingAnchor constraintEqualToAnchor:aiPopup.leadingAnchor constant:-8],
         [statusLabel.bottomAnchor constraintEqualToAnchor:bg.bottomAnchor constant:-4],
         [statusLabel.heightAnchor constraintEqualToConstant:16],
+
+        [aiPopup.trailingAnchor constraintEqualToAnchor:bg.trailingAnchor constant:-12],
+        [aiPopup.centerYAnchor constraintEqualToAnchor:statusLabel.centerYAnchor],
     ]];
 
     self.panel = panel;
@@ -920,12 +966,26 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     NSString *text = [NSString stringWithFormat:@"%lu command%@ | Return to execute | Tab for AI | Esc to close",
                       (unsigned long)count, count == 1 ? @"" : @"s"];
     if (self.aiLoading) {
-        text = @"Asking Apple Intelligence...";
+        if ((self.aiEngine == SpliceKitAIEngineGemma4 || self.aiEngine == SpliceKitAIEngineAppleAgentic)
+            && self.gemmaCurrentTask.length > 0) {
+            text = self.gemmaCurrentTask;
+        } else if (self.aiEngine == SpliceKitAIEngineGemma4) {
+            text = @"Asking Gemma 4...";
+        } else if (self.aiEngine == SpliceKitAIEngineAppleAgentic) {
+            text = @"Asking Apple Intelligence+...";
+        } else {
+            text = @"Asking Apple Intelligence...";
+        }
     } else if (self.aiError) {
         text = [NSString stringWithFormat:@"AI: %@", self.aiError];
     } else if (self.aiResults.count > 0) {
-        text = [NSString stringWithFormat:@"AI suggested %lu action%@ | Return to execute",
-                (unsigned long)self.aiResults.count, self.aiResults.count == 1 ? @"" : @"s"];
+        // Check if this is a Gemma summary result
+        if (self.aiResults.count == 1 && [self.aiResults[0][@"type"] isEqualToString:@"gemma_summary"]) {
+            text = self.aiResults[0][@"summary"] ?: @"Done.";
+        } else {
+            text = [NSString stringWithFormat:@"AI suggested %lu action%@ | Return to execute",
+                    (unsigned long)self.aiResults.count, self.aiResults.count == 1 ? @"" : @"s"];
+        }
     }
     self.statusLabel.stringValue = text;
 }
@@ -943,6 +1003,8 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     self.aiQuery = nil;
     self.aiResults = nil;
     self.aiError = nil;
+    self.gemmaCancelled = NO;
+    self.gemmaCurrentTask = nil;
     [self.tableView reloadData];
     [self updateStatusLabel];
 
@@ -976,8 +1038,13 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
             handler:^NSEvent *(NSEvent *event) {
                 if (!weakSelf.panel.isVisible) return event;
 
-                // Escape -> go back to main if in browse mode, else close
+                // Escape -> cancel Gemma if running, go back to main if in browse mode, else close
                 if (event.keyCode == 53) {
+                    if (weakSelf.aiLoading && (weakSelf.aiEngine == SpliceKitAIEngineGemma4 ||
+                                                weakSelf.aiEngine == SpliceKitAIEngineAppleAgentic)) {
+                        weakSelf.gemmaCancelled = YES;
+                        return nil;
+                    }
                     if (weakSelf.inBrowseMode) {
                         [weakSelf exitBrowseMode];
                     } else {
@@ -1223,7 +1290,16 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
             cell = [[FCPAIResultRowView alloc] initWithFrame:NSMakeRect(0, 0, 500, 40)];
             cell.identifier = kAIRowID;
         }
-        cell.label.stringValue = @"Asking Apple Intelligence...";
+        if ((self.aiEngine == SpliceKitAIEngineGemma4 || self.aiEngine == SpliceKitAIEngineAppleAgentic)
+            && self.gemmaCurrentTask.length > 0) {
+            cell.label.stringValue = self.gemmaCurrentTask;
+        } else if (self.aiEngine == SpliceKitAIEngineGemma4) {
+            cell.label.stringValue = @"Asking Gemma 4...";
+        } else if (self.aiEngine == SpliceKitAIEngineAppleAgentic) {
+            cell.label.stringValue = @"Asking Apple Intelligence+...";
+        } else {
+            cell.label.stringValue = @"Asking Apple Intelligence...";
+        }
         [cell.spinner startAnimation:nil];
         cell.spinner.hidden = NO;
         return cell;
@@ -1236,14 +1312,21 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
             cell.identifier = kAIRowID;
         }
         cell.spinner.hidden = YES;
-        NSMutableString *desc = [NSMutableString stringWithString:@"AI: "];
-        for (NSDictionary *a in self.aiResults) {
-            NSString *label = a[@"action"] ?: a[@"name"] ?: nil;
-            if (!label && a[@"seconds"]) {
-                label = [NSString stringWithFormat:@"%@s", a[@"seconds"]];
+        NSString *desc;
+        // Gemma summary results use a single entry with type=gemma_summary
+        if (self.aiResults.count == 1 && [self.aiResults[0][@"type"] isEqualToString:@"gemma_summary"]) {
+            desc = self.aiResults[0][@"summary"] ?: @"Done.";
+        } else {
+            NSMutableString *mDesc = [NSMutableString stringWithString:@"AI: "];
+            for (NSDictionary *a in self.aiResults) {
+                NSString *label = a[@"action"] ?: a[@"name"] ?: nil;
+                if (!label && a[@"seconds"]) {
+                    label = [NSString stringWithFormat:@"%@s", a[@"seconds"]];
+                }
+                [mDesc appendFormat:@"%@ %@", a[@"type"], label ?: @"?"];
+                if (a != self.aiResults.lastObject) [mDesc appendString:@" -> "];
             }
-            [desc appendFormat:@"%@ %@", a[@"type"], label ?: @"?"];
-            if (a != self.aiResults.lastObject) [desc appendString:@" -> "];
+            desc = mDesc;
         }
         cell.label.stringValue = desc;
         cell.label.textColor = [NSColor controlAccentColor];
@@ -1276,6 +1359,22 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
 - (CGFloat)tableView:(NSTableView *)tableView heightOfRow:(NSInteger)row {
     SpliceKitCommand *cmd = [self commandForDisplayRow:row];
     if (cmd && cmd.isSeparatorRow) return 20;
+
+    // Gemma summary result row — compute height for wrapped text
+    if (row == 0 && !self.aiLoading && self.aiResults.count == 1 &&
+        [self.aiResults[0][@"type"] isEqualToString:@"gemma_summary"]) {
+        NSString *text = self.aiResults[0][@"summary"] ?: @"Done.";
+        CGFloat availableWidth = tableView.bounds.size.width - 50; // 12+16+8 leading + 12 trailing
+        if (availableWidth < 100) availableWidth = 480;
+        NSFont *font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+        NSRect boundingRect = [text boundingRectWithSize:NSMakeSize(availableWidth, CGFLOAT_MAX)
+                                                 options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                              attributes:@{NSFontAttributeName: font}
+                                                 context:nil];
+        CGFloat height = ceil(boundingRect.size.height) + 20; // 8 top + 8 bottom + 4 padding
+        return MAX(height, 40);
+    }
+
     return 40;
 }
 
@@ -2612,6 +2711,17 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
             continue;
         }
 
+        // Handle menu command: {"type":"menu","path":["File","New","Project..."]}
+        if ([type isEqualToString:@"menu"]) {
+            NSArray *menuPath = action[@"path"];
+            if ([menuPath isKindOfClass:[NSArray class]] && menuPath.count > 0) {
+                extern NSDictionary *SpliceKit_handleMenuExecute(NSDictionary *params);
+                NSDictionary *result = SpliceKit_handleMenuExecute(@{@"menuPath": menuPath});
+                SpliceKit_log(@"AI executed menu: %@ -> %@", [menuPath componentsJoinedByString:@" > "], result);
+            }
+            continue;
+        }
+
         int repeats = repeatCount ? repeatCount.intValue : 1;
         for (int i = 0; i < repeats; i++) {
             [self executeCommand:name type:type];
@@ -2643,10 +2753,93 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     [self.tableView reloadData];
     [self updateStatusLabel];
 
+    // Intercept repetitive patterns (all engines) — models can't reliably loop 40+ times
+    if ([self handleRepeatPatternIfNeeded:query completion:^(NSString *summary, NSString *error) {
+        self.aiLoading = NO;
+        if (error) {
+            self.aiError = error;
+        } else {
+            self.aiResults = @[@{@"type": @"gemma_summary", @"summary": summary}];
+            self.aiCompletedQuery = query;
+        }
+        [self.tableView reloadData];
+        [self updateStatusLabel];
+    }]) return;
+
+    // Dispatch to Gemma 4 if selected
+    if (self.aiEngine == SpliceKitAIEngineGemma4) {
+        [self executeNaturalLanguageGemma:query completion:^(NSString *summary, NSString *error) {
+            self.aiLoading = NO;
+
+            if (error) {
+                self.aiError = error;
+                self.aiResults = nil;
+                SpliceKit_log(@"[Gemma] Palette completion: error=%@", error);
+            } else {
+                // Wrap summary as a single display-only result
+                self.aiResults = @[@{@"type": @"gemma_summary", @"summary": summary ?: @"Done."}];
+                self.aiError = nil;
+                self.aiCompletedQuery = query;
+                SpliceKit_log(@"[Gemma] Palette completion: summary=%@",
+                              summary.length > 200 ? [summary substringToIndex:200] : summary);
+            }
+            [self.tableView reloadData];
+            [self updateStatusLabel];
+            if (self.aiResults.count > 0) {
+                [self.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                            byExtendingSelection:NO];
+            }
+        }];
+        return;
+    }
+
+    // Dispatch to Apple Intelligence+ (agentic with tools)
+    if (self.aiEngine == SpliceKitAIEngineAppleAgentic) {
+        [self executeNaturalLanguageAppleAgentic:query completion:^(NSString *summary, NSString *error) {
+            self.aiLoading = NO;
+
+            if (error) {
+                self.aiError = error;
+                self.aiResults = nil;
+                SpliceKit_log(@"[AppleAI+] Palette completion: error=%@", error);
+            } else {
+                self.aiResults = @[@{@"type": @"gemma_summary", @"summary": summary ?: @"Done."}];
+                self.aiError = nil;
+                self.aiCompletedQuery = query;
+                SpliceKit_log(@"[AppleAI+] Palette completion: summary=%@",
+                              summary.length > 200 ? [summary substringToIndex:200] : summary);
+            }
+            [self.tableView reloadData];
+            [self updateStatusLabel];
+            if (self.aiResults.count > 0) {
+                [self.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                            byExtendingSelection:NO];
+            }
+        }];
+        return;
+    }
+
+    // Detect question-type queries that Apple Intelligence can't answer
+    // (it can only return actions, not information)
+    NSString *lowerQuery = [query lowercaseString];
+    BOOL isQuestion = [lowerQuery hasSuffix:@"?"] ||
+        [lowerQuery hasPrefix:@"how "] || [lowerQuery hasPrefix:@"what "] ||
+        [lowerQuery hasPrefix:@"which "] || [lowerQuery hasPrefix:@"where "] ||
+        [lowerQuery hasPrefix:@"when "] || [lowerQuery hasPrefix:@"why "] ||
+        [lowerQuery hasPrefix:@"who "] || [lowerQuery hasPrefix:@"tell me"] ||
+        [lowerQuery hasPrefix:@"show me"] || [lowerQuery hasPrefix:@"list "] ||
+        [lowerQuery hasPrefix:@"describe "];
+    if (isQuestion) {
+        self.aiLoading = NO;
+        self.aiError = @"Apple Intelligence can only execute actions, not answer questions. Switch to Gemma 4 for questions.";
+        [self.tableView reloadData];
+        [self updateStatusLabel];
+        SpliceKit_log(@"[AppleAI] Question detected — Apple Intelligence cannot answer questions, suggesting Gemma 4");
+        return;
+    }
+
     [self executeNaturalLanguage:query completion:^(NSArray<NSDictionary *> *actions, NSString *error) {
         self.aiLoading = NO;
-        // Only apply results if the query hasn't changed while we were waiting
-        if (![query isEqualToString:self.searchField.stringValue]) return;
 
         if (error) {
             self.aiError = error;
@@ -2697,22 +2890,37 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     NSMutableDictionary *ctx = [NSMutableDictionary dictionary];
     NSDictionary *dur = state[@"duration"];
     NSDictionary *playhead = state[@"playheadTime"];
-    if (dur[@"seconds"]) ctx[@"durationSeconds"] = dur[@"seconds"];
-    if (dur[@"timescale"]) ctx[@"timescale"] = dur[@"timescale"];
+    if (dur[@"seconds"] && [dur[@"seconds"] doubleValue] > 0) {
+        ctx[@"durationSeconds"] = dur[@"seconds"];
+    }
     if (playhead[@"seconds"]) ctx[@"playheadSeconds"] = playhead[@"seconds"];
     if (state[@"itemCount"]) ctx[@"clipCount"] = state[@"itemCount"];
     if (state[@"sequenceName"]) ctx[@"sequenceName"] = state[@"sequenceName"];
 
-    // Derive fps from timescale (common: 24000/1001=23.976, 30000/1001=29.97, 24, 30, 60)
-    NSNumber *timescale = dur[@"timescale"];
-    if (timescale) {
-        int ts = timescale.intValue;
-        int fps = 24; // default
-        if (ts == 30000 || ts == 30) fps = 30;
-        else if (ts == 60000 || ts == 60) fps = 60;
-        else if (ts == 25 || ts == 25000) fps = 25;
-        else if (ts == 24000 || ts == 24) fps = 24;
-        ctx[@"fps"] = @(fps);
+    // If duration is missing or zero, compute from items
+    if (!ctx[@"durationSeconds"] || [ctx[@"durationSeconds"] doubleValue] <= 0) {
+        NSArray *items = state[@"items"];
+        double maxEnd = 0;
+        for (NSDictionary *item in items) {
+            NSDictionary *endTime = item[@"endTime"];
+            double end = [endTime[@"seconds"] doubleValue];
+            if (end > maxEnd) maxEnd = end;
+        }
+        if (maxEnd > 0) {
+            ctx[@"durationSeconds"] = @(maxEnd);
+        }
+    }
+
+    // Use frameRate directly if available, otherwise derive from frameDuration
+    if (state[@"frameRate"]) {
+        ctx[@"fps"] = state[@"frameRate"];
+    } else {
+        NSDictionary *fd = state[@"frameDuration"];
+        if (fd[@"seconds"] && [fd[@"seconds"] doubleValue] > 0) {
+            ctx[@"fps"] = @((int)round(1.0 / [fd[@"seconds"] doubleValue]));
+        } else {
+            ctx[@"fps"] = @(24);
+        }
     }
     return ctx;
 }
@@ -2720,17 +2928,28 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
 - (void)executeNaturalLanguage:(NSString *)query
                     completion:(void(^)(NSArray<NSDictionary *> *actions, NSString *error))completion {
 
+    NSDate *totalStart = [NSDate date];
+    SpliceKit_log(@"[AppleAI] ═══ Starting query: \"%@\" ═══", query);
+
     // Fetch timeline context (duration, fps, clip count) for the LLM
+    NSDate *phaseStart = [NSDate date];
     NSDictionary *timelineCtx = [self getTimelineContext];
+    SpliceKit_log(@"[AppleAI] Timeline context: %.1fs | clips=%@ duration=%@s",
+                  -[phaseStart timeIntervalSinceNow],
+                  timelineCtx[@"clipCount"] ?: @"?",
+                  timelineCtx[@"durationSeconds"] ?: @"?");
 
     // Build a Swift script that uses FoundationModels (Apple Intelligence)
+    phaseStart = [NSDate date];
     NSString *swiftScript = [self buildSwiftScript:query timelineContext:timelineCtx];
+    SpliceKit_log(@"[AppleAI] Script built: %.3fs (%lu bytes)", -[phaseStart timeIntervalSinceNow], (unsigned long)swiftScript.length);
 
     // Write script to temp file
     NSString *scriptPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"splicekit_ai.swift"];
     NSError *writeError = nil;
     [swiftScript writeToFile:scriptPath atomically:YES encoding:NSUTF8StringEncoding error:&writeError];
     if (writeError) {
+        SpliceKit_log(@"[AppleAI] Failed to write script: %@", writeError.localizedDescription);
         dispatch_async(dispatch_get_main_queue(), ^{
             completion(nil, [NSString stringWithFormat:@"Failed to write script: %@", writeError.localizedDescription]);
         });
@@ -2738,6 +2957,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     }
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSDate *swiftStart = [NSDate date];
         NSTask *task = [[NSTask alloc] init];
         task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/swift"];
         task.arguments = @[scriptPath];
@@ -2750,23 +2970,33 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         NSError *launchError = nil;
         [task launchAndReturnError:&launchError];
         if (launchError) {
+            SpliceKit_log(@"[AppleAI] Failed to launch swift: %@", launchError.localizedDescription);
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(nil, [NSString stringWithFormat:@"Failed to launch AI: %@", launchError.localizedDescription]);
             });
             return;
         }
 
+        SpliceKit_log(@"[AppleAI] Swift process launched, waiting for response...");
         [task waitUntilExit];
+        NSTimeInterval swiftElapsed = -[swiftStart timeIntervalSinceNow];
 
         NSData *outputData = [outputPipe.fileHandleForReading readDataToEndOfFile];
         NSData *errorData = [errorPipe.fileHandleForReading readDataToEndOfFile];
         NSString *output = [[NSString alloc] initWithData:outputData encoding:NSUTF8StringEncoding];
         NSString *errorOutput = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
 
+        SpliceKit_log(@"[AppleAI] Swift process exited: status=%d, elapsed=%.1fs, output=%lu bytes, stderr=%lu bytes",
+                      task.terminationStatus, swiftElapsed,
+                      (unsigned long)outputData.length, (unsigned long)errorData.length);
+
         if (task.terminationStatus != 0) {
             // If FoundationModels isn't available, fall back to keyword matching
-            SpliceKit_log(@"AI script failed (status %d): %@", task.terminationStatus, errorOutput);
+            SpliceKit_log(@"[AppleAI] Script failed (status %d): %@", task.terminationStatus, errorOutput);
             NSArray *fallback = [self keywordFallback:query];
+            NSTimeInterval totalElapsed = -[totalStart timeIntervalSinceNow];
+            SpliceKit_log(@"[AppleAI] ═══ Done: %.1fs total | fallback=%lu actions | FAILED ═══",
+                          totalElapsed, (unsigned long)fallback.count);
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (fallback.count > 0) {
                     completion(fallback, nil);
@@ -2778,6 +3008,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         }
 
         // Parse JSON output
+        NSDate *parseStart = [NSDate date];
         output = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 
         // Extract JSON from output (may have extra text around it)
@@ -2792,11 +3023,16 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         NSError *jsonError = nil;
         id parsed = [NSJSONSerialization JSONObjectWithData:[output dataUsingEncoding:NSUTF8StringEncoding]
                                                     options:0 error:&jsonError];
+        NSTimeInterval parseElapsed = -[parseStart timeIntervalSinceNow];
 
         dispatch_async(dispatch_get_main_queue(), ^{
+            NSTimeInterval totalElapsed = -[totalStart timeIntervalSinceNow];
             if (jsonError || ![parsed isKindOfClass:[NSArray class]]) {
                 // Try keyword fallback
+                SpliceKit_log(@"[AppleAI] JSON parse failed (%.3fs): %@", parseElapsed, jsonError ?: @"not an array");
                 NSArray *fallback = [self keywordFallback:query];
+                SpliceKit_log(@"[AppleAI] ═══ Done: %.1fs total (swift=%.1fs parse=%.3fs) | fallback=%lu actions ═══",
+                              totalElapsed, swiftElapsed, parseElapsed, (unsigned long)fallback.count);
                 if (fallback.count > 0) {
                     completion(fallback, nil);
                 } else if ([parsed isKindOfClass:[NSDictionary class]] && parsed[@"error"]) {
@@ -2807,9 +3043,214 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
                 }
                 return;
             }
-            completion(parsed, nil);
+            NSArray *corrected = [self postProcessActions:parsed query:query];
+            SpliceKit_log(@"[AppleAI] ═══ Done: %.1fs total (swift=%.1fs parse=%.3fs) | %lu action(s) ═══",
+                          totalElapsed, swiftElapsed, parseElapsed, (unsigned long)corrected.count);
+            completion(corrected, nil);
         });
     });
+}
+
+#pragma mark - Post-Process AI Output
+
+- (NSArray<NSDictionary *> *)postProcessActions:(NSArray *)actions query:(NSString *)query {
+    // Known effect names — if the LLM puts these as timeline actions, fix them
+    static NSSet *effectNames = nil;
+    static NSSet *transitionNames = nil;
+    static NSSet *validTimelineActions = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        effectNames = [NSSet setWithArray:@[
+            @"Gaussian Blur", @"Zoom Blur", @"Radial Blur", @"Prism Blur", @"Channel Blur", @"Soft Focus",
+            @"Sharpen", @"Unsharp Mask", @"Keyer", @"Luma Keyer", @"Chroma Keyer",
+            @"Black & White", @"Sepia", @"Tint", @"Negative", @"Color Monochrome",
+            @"Vignette", @"Bloom", @"Glow", @"Gloom", @"Aged Film", @"Bad TV", @"Vintage", @"Film Grain",
+            @"Underwater", @"Earthquake", @"Fisheye", @"Mirror", @"Kaleidoscope", @"Pixellate",
+            @"Light Rays", @"Lens Flare", @"Light Wrap",
+            @"Noise Reduction", @"Stabilization", @"Rolling Shutter", @"Broadcast Safe",
+            @"Draw Mask", @"Shape Mask", @"Vignette Mask", @"Image Mask",
+            @"Drop Shadow", @"Letterbox", @"Flipped", @"Invert", @"Posterize", @"Tilt-Shift",
+            @"Custom LUT", @"Bump Map", @"Color Correction", @"Night Vision", @"X-Ray", @"Prism",
+        ]];
+        transitionNames = [NSSet setWithArray:@[
+            @"Cross Dissolve", @"Flow", @"Fade To Color", @"Wipe", @"Push",
+            @"Slide", @"Spin", @"Doorway", @"Page Curl", @"Star", @"Band", @"Zoom",
+            @"Bloom", @"Mosaic",
+        ]];
+        validTimelineActions = [NSSet setWithArray:@[
+            @"blade", @"bladeAll", @"delete", @"cut", @"copy", @"paste", @"undo", @"redo",
+            @"selectAll", @"deselectAll", @"selectClipAtPlayhead", @"selectToPlayhead",
+            @"trimToPlayhead", @"insertGap", @"joinClips", @"replaceWithGap",
+            @"addMarker", @"addTodoMarker", @"addChapterMarker", @"deleteMarker",
+            @"deleteMarkersInSelection", @"nextMarker", @"previousMarker",
+            @"addTransition", @"nextEdit", @"previousEdit",
+            @"addColorBoard", @"addColorWheels", @"addColorCurves", @"addColorAdjustment",
+            @"addHueSaturation", @"addEnhanceLightAndColor", @"balanceColor", @"matchColor",
+            @"adjustVolumeUp", @"adjustVolumeDown", @"detachAudio",
+            @"addBasicTitle", @"addBasicLowerThird",
+            @"retimeNormal", @"retimeFast2x", @"retimeFast4x", @"retimeFast8x", @"retimeFast20x",
+            @"retimeSlow50", @"retimeSlow25", @"retimeSlow10", @"retimeReverse", @"retimeHold",
+            @"freezeFrame", @"retimeBladeSpeed", @"retimeSpeedRampToZero", @"retimeSpeedRampFromZero",
+            @"addKeyframe", @"deleteKeyframes", @"nextKeyframe", @"previousKeyframe",
+            @"solo", @"disable", @"createCompoundClip", @"removeEffects",
+            @"breakApartClipItems", @"addAdjustmentClip",
+            @"zoomToFit", @"zoomIn", @"zoomOut", @"toggleSnapping", @"toggleSkimming",
+            @"renderSelection", @"renderAll", @"analyzeAndFix", @"exportXML",
+            @"shareSelection", @"autoReframe", @"addVideoGenerator",
+            @"pasteEffects", @"pasteAttributes", @"removeAttributes", @"copyAttributes",
+            @"expandAudio", @"expandAudioComponents", @"favorite", @"reject", @"unrate",
+            @"createStoryline", @"pasteAsConnected",
+        ]];
+    });
+
+    // Map hallucinated timeline action names to correct effect/transition
+    static NSDictionary *hallToEffect = nil;
+    static NSDictionary *hallToTransition = nil;
+    static dispatch_once_t onceToken2;
+    dispatch_once(&onceToken2, ^{
+        hallToEffect = @{
+            @"addGaussianBlur": @"Gaussian Blur", @"addBlur": @"Gaussian Blur",
+            @"blur": @"Gaussian Blur", @"gaussianBlur": @"Gaussian Blur",
+            @"addKeyer": @"Keyer", @"addLumaKeyer": @"Luma Keyer",
+            @"addVignette": @"Vignette", @"addSharpen": @"Sharpen",
+            @"stabilize": @"Stabilization", @"addStabilization": @"Stabilization",
+            @"addNoiseReduction": @"Noise Reduction", @"noiseReduction": @"Noise Reduction",
+            @"addFilmGrain": @"Film Grain", @"filmGrain": @"Film Grain",
+            @"addLetterbox": @"Letterbox", @"addDropShadow": @"Drop Shadow",
+            @"addLensFlare": @"Lens Flare", @"addSepia": @"Sepia",
+            @"addFlipped": @"Flipped", @"flip": @"Flipped", @"flipHorizontal": @"Flipped",
+            @"addInvert": @"Invert", @"invertColors": @"Invert",
+            @"addPosterize": @"Posterize", @"addPixellate": @"Pixellate",
+            @"addUnderwater": @"Underwater", @"addBloom": @"Bloom",
+            @"addGlow": @"Glow", @"addGloom": @"Gloom",
+            @"addAgedFilm": @"Aged Film", @"agedFilm": @"Aged Film",
+            @"addTiltShift": @"Tilt-Shift", @"tiltShift": @"Tilt-Shift",
+            @"addRollingShutter": @"Rolling Shutter",
+            @"addBlackAndWhite": @"Black & White", @"blackAndWhite": @"Black & White",
+            @"addBroadcastSafe": @"Broadcast Safe",
+            @"addCustomLUT": @"Custom LUT",
+            @"addNightVision": @"Night Vision",
+            @"blendVideo": @"Flipped",
+        };
+        hallToTransition = @{
+            @"crossDissolve": @"Cross Dissolve",
+            @"flow": @"Flow",
+            @"fadeToColor": @"Fade To Color", @"fadeToBlack": @"Fade To Color",
+            @"wipe": @"Wipe",
+            @"push": @"Push",
+            @"slide": @"Slide",
+            @"spin": @"Spin",
+            @"pageCurl": @"Page Curl",
+            @"star": @"Star",
+            @"zoom": @"Zoom",
+        };
+    });
+
+    NSMutableArray *result = [NSMutableArray array];
+
+    for (NSDictionary *act in actions) {
+        if (![act isKindOfClass:[NSDictionary class]]) continue;
+
+        NSMutableDictionary *fixed = [act mutableCopy];
+        NSString *type = fixed[@"type"];
+        NSString *action = fixed[@"action"];
+        NSString *name = fixed[@"name"];
+
+        // Fix 1: timeline action with "name" field that matches a transition name
+        if ([type isEqualToString:@"timeline"] && [action isEqualToString:@"addTransition"] && name) {
+            if ([transitionNames containsObject:name]) {
+                fixed = [@{@"type": @"transition", @"name": name} mutableCopy];
+                SpliceKit_log(@"[AppleAI-fix] timeline.addTransition(%@) -> transition(%@)", name, name);
+            }
+        }
+        // Fix 2: timeline action with "name" field that matches an effect name
+        else if ([type isEqualToString:@"timeline"] && name) {
+            if ([effectNames containsObject:name]) {
+                fixed = [@{@"type": @"effect", @"name": name} mutableCopy];
+                SpliceKit_log(@"[AppleAI-fix] timeline.%@(name=%@) -> effect(%@)", action, name, name);
+            }
+        }
+        // Fix 3: timeline action whose action name IS an effect name
+        else if ([type isEqualToString:@"timeline"] && action && [effectNames containsObject:action]) {
+            fixed = [@{@"type": @"effect", @"name": action} mutableCopy];
+            SpliceKit_log(@"[AppleAI-fix] timeline.action(%@) -> effect(%@)", action, action);
+        }
+        // Fix 4: hallucinated timeline action name maps to an effect
+        else if ([type isEqualToString:@"timeline"] && action && hallToEffect[action]) {
+            NSString *effectName = hallToEffect[action];
+            fixed = [@{@"type": @"effect", @"name": effectName} mutableCopy];
+            SpliceKit_log(@"[AppleAI-fix] timeline.%@ -> effect(%@)", action, effectName);
+        }
+        // Fix 5: hallucinated timeline action name maps to a transition
+        else if ([type isEqualToString:@"timeline"] && action && hallToTransition[action]) {
+            NSString *transName = hallToTransition[action];
+            fixed = [@{@"type": @"transition", @"name": transName} mutableCopy];
+            SpliceKit_log(@"[AppleAI-fix] timeline.%@ -> transition(%@)", action, transName);
+        }
+        // Fix 6: invalid action type (e.g. "audio" instead of "timeline")
+        else if (type && ![type isEqualToString:@"timeline"] && ![type isEqualToString:@"playback"]
+                 && ![type isEqualToString:@"seek"] && ![type isEqualToString:@"effect"]
+                 && ![type isEqualToString:@"transition"] && ![type isEqualToString:@"repeat_pattern"]
+                 && ![type isEqualToString:@"scene_detect"] && ![type isEqualToString:@"scene_markers"]) {
+            // Try to map the action to a valid timeline action
+            if (action && [validTimelineActions containsObject:action]) {
+                fixed[@"type"] = @"timeline";
+                SpliceKit_log(@"[AppleAI-fix] %@.%@ -> timeline.%@", type, action, action);
+            } else if (action && hallToEffect[action]) {
+                fixed = [@{@"type": @"effect", @"name": hallToEffect[action]} mutableCopy];
+            }
+        }
+        // Fix 7: playback action that should be timeline (e.g. detachAudio in playback)
+        else if ([type isEqualToString:@"playback"] && action && [validTimelineActions containsObject:action]) {
+            if (![@[@"playPause", @"goToStart", @"goToEnd", @"nextFrame", @"prevFrame", @"nextFrame10", @"prevFrame10", @"playAroundCurrent"] containsObject:action]) {
+                fixed[@"type"] = @"timeline";
+                SpliceKit_log(@"[AppleAI-fix] playback.%@ -> timeline.%@", action, action);
+            }
+        }
+        // Fix 7b: "pause" or "play" as playback action -> playPause
+        else if ([type isEqualToString:@"playback"] && ([action isEqualToString:@"pause"] || [action isEqualToString:@"play"])) {
+            fixed[@"action"] = @"playPause";
+            SpliceKit_log(@"[AppleAI-fix] playback.%@ -> playback.playPause", action);
+        }
+
+        // Fix 8: drop invalid timeline actions (not in known set and not a hallucination we mapped)
+        if ([fixed[@"type"] isEqualToString:@"timeline"] && fixed[@"action"]
+            && ![validTimelineActions containsObject:fixed[@"action"]]) {
+            SpliceKit_log(@"[AppleAI-fix] dropping invalid timeline.%@", fixed[@"action"]);
+            continue; // skip this action entirely
+        }
+
+        [result addObject:fixed];
+    }
+
+    // Fix 9: limit to 10 actions max to prevent over-generation
+    if (result.count > 10) {
+        SpliceKit_log(@"[AppleAI-fix] trimming %lu actions to 10", (unsigned long)result.count);
+        result = [[result subarrayWithRange:NSMakeRange(0, 10)] mutableCopy];
+    }
+
+    // Fix 10: deduplicate consecutive identical actions (except seek)
+    NSMutableArray *deduped = [NSMutableArray array];
+    NSDictionary *prev = nil;
+    for (NSDictionary *act in result) {
+        if (prev && [act isEqualToDictionary:prev] && ![act[@"type"] isEqualToString:@"seek"]) {
+            SpliceKit_log(@"[AppleAI-fix] dedup: skipping duplicate %@.%@", act[@"type"], act[@"action"] ?: act[@"name"]);
+            continue;
+        }
+        [deduped addObject:act];
+        prev = act;
+    }
+
+    // Fix 11: if AI returned garbage but we have good keyword fallback, prefer it
+    if (deduped.count == 0) {
+        NSArray *fallback = [self keywordFallback:query];
+        if (fallback.count > 0) {
+            SpliceKit_log(@"[AppleAI-fix] all actions filtered, using keyword fallback (%lu)", (unsigned long)fallback.count);
+            return fallback;
+        }
+    }
+
+    return deduped;
 }
 
 - (NSString *)buildSwiftScript:(NSString *)query timelineContext:(NSDictionary *)ctx {
@@ -2840,117 +3281,78 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         "let timelineContext = \"%@\"\n"
         "\n"
         "let instructions = \"\"\"\n"
-        "You are a Final Cut Pro command interpreter. Given a natural language video editing instruction,\n"
-        "return ONLY a JSON array of actions to execute. No explanation, no markdown, just the JSON array.\n"
+        "You are a Final Cut Pro command interpreter. Given a video editing instruction,\n"
+        "return ONLY a JSON array of actions. No explanation, no markdown, just the JSON array.\n"
+        "Output the MINIMUM actions needed. Never output more than 10 actions.\n"
         "\n"
-        "Available action types:\n"
-        "1. {\"type\":\"timeline\",\"action\":\"NAME\"} where NAME is one of:\n"
-        "   blade, bladeAll, delete, cut, copy, paste, undo, redo, selectAll, deselectAll,\n"
-        "   selectClipAtPlayhead, selectToPlayhead, trimToPlayhead, insertGap,\n"
-        "   addMarker, addTodoMarker, addChapterMarker, deleteMarker, deleteMarkersInSelection, nextMarker, previousMarker,\n"
-        "   addTransition, nextEdit, previousEdit,\n"
-        "   addColorBoard, addColorWheels, addColorCurves, addColorAdjustment, addHueSaturation, addEnhanceLightAndColor,\n"
-        "   adjustVolumeUp, adjustVolumeDown, addBasicTitle, addBasicLowerThird,\n"
-        "   retimeNormal, retimeFast2x, retimeFast4x, retimeFast8x, retimeFast20x,\n"
-        "   retimeSlow50, retimeSlow25, retimeSlow10, retimeReverse, retimeHold, freezeFrame, retimeBladeSpeed,\n"
-        "   addKeyframe, deleteKeyframes, nextKeyframe, previousKeyframe,\n"
-        "   solo, disable, createCompoundClip, removeEffects, detachAudio, breakApartClipItems,\n"
-        "   zoomToFit, zoomIn, zoomOut, toggleSnapping, toggleSkimming, renderSelection, renderAll,\n"
-        "   analyzeAndFix, exportXML, shareSelection, autoReframe, addVideoGenerator\n"
+        "ACTION TYPES:\n"
         "\n"
-        "2. {\"type\":\"playback\",\"action\":\"NAME\"} where NAME is one of:\n"
+        "1. Timeline: {\"type\":\"timeline\",\"action\":\"NAME\"}\n"
+        "   Editing: blade, bladeAll, delete, cut, copy, paste, undo, redo, joinClips, replaceWithGap\n"
+        "   Selection: selectAll, deselectAll, selectClipAtPlayhead, trimToPlayhead\n"
+        "   Markers: addMarker, addTodoMarker, addChapterMarker, deleteMarker, deleteMarkersInSelection, nextMarker, previousMarker\n"
+        "   Navigation: nextEdit, previousEdit, addTransition\n"
+        "   Color: addColorBoard, addColorWheels, addColorCurves, addColorAdjustment, addHueSaturation, addEnhanceLightAndColor, balanceColor\n"
+        "   Audio: adjustVolumeUp, adjustVolumeDown, detachAudio\n"
+        "   Titles: addBasicTitle, addBasicLowerThird\n"
+        "   Speed: retimeNormal, retimeFast2x, retimeFast4x, retimeFast8x, retimeFast20x, retimeSlow50, retimeSlow25, retimeSlow10, retimeReverse, retimeHold, freezeFrame, retimeBladeSpeed\n"
+        "   Clips: solo, disable, createCompoundClip, removeEffects, breakApartClipItems, addAdjustmentClip\n"
+        "   View: zoomToFit, zoomIn, zoomOut, toggleSnapping, renderAll, analyzeAndFix, exportXML\n"
+        "   App: showPreferences (open app preferences/settings)\n"
+        "\n"
+        "2. Playback: {\"type\":\"playback\",\"action\":\"NAME\"}\n"
         "   playPause, goToStart, goToEnd, nextFrame, prevFrame, nextFrame10, prevFrame10\n"
         "\n"
-        "3. {\"type\":\"seek\",\"seconds\":N} - Move playhead to exact time N (in seconds).\n"
-        "   This is INSTANT — no playback. Use this for ALL time-based positioning.\n"
-        "   Examples: {\"type\":\"seek\",\"seconds\":0} = go to start,\n"
-        "   {\"type\":\"seek\",\"seconds\":3.5} = go to 3.5 seconds\n"
+        "3. Seek: {\"type\":\"seek\",\"seconds\":N} — jump to exact timestamp\n"
         "\n"
-        "4. {\"type\":\"effect\",\"name\":\"EFFECT_NAME\"} - Apply a specific video effect by name.\n"
-        "   Automatically selects the clip at playhead first.\n"
-        "   Common effects: Gaussian Blur, Sharpen, Keyer, Luma Keyer, Chroma Keyer,\n"
-        "   Vignette, Noise Reduction, Broadcast Safe, Letterbox, Flipped, Black & White,\n"
-        "   Sepia, Aged Film, Bad TV, Prism, Underwater, Night Vision, X-Ray,\n"
-        "   Tilt-Shift, Bloom, Glow, Gloom, Pixellate, Posterize, Invert,\n"
-        "   Draw Mask, Shape Mask, Stabilization, Rolling Shutter,\n"
-        "   Color Correction, Custom LUT, Bump Map, Light Wrap, Drop Shadow\n"
+        "4. Effect: {\"type\":\"effect\",\"name\":\"NAME\"} — apply a video effect\n"
+        "   Gaussian Blur, Sharpen, Keyer, Luma Keyer, Vignette, Noise Reduction,\n"
+        "   Letterbox, Flipped, Black & White, Sepia, Aged Film, Film Grain,\n"
+        "   Bloom, Glow, Pixellate, Posterize, Invert, Tilt-Shift, Drop Shadow,\n"
+        "   Lens Flare, Stabilization, Rolling Shutter, Underwater\n"
         "\n"
-        "4. {\"type\":\"transition\",\"name\":\"TRANSITION_NAME\"} - Apply a specific transition.\n"
-        "   Common transitions: Cross Dissolve, Flow, Fade To Color, Wipe, Push,\n"
-        "   Slide, Spin, Doorway, Page Curl, Star, Band, Zoom\n"
+        "5. Transition: {\"type\":\"transition\",\"name\":\"NAME\"} — apply a transition\n"
+        "   Cross Dissolve, Flow, Fade To Color, Wipe, Push, Slide, Spin, Page Curl, Star, Zoom\n"
         "\n"
-        "6. Add \"repeat\":N to repeat an action N times\n"
+        "6. Menu: {\"type\":\"menu\",\"path\":[\"TopMenu\",\"SubMenu\",\"Item\"]} — execute any menu command\n"
+        "   Use for app-level commands not in the lists above.\n"
+        "   Example: open preferences = {\"type\":\"timeline\",\"action\":\"showPreferences\"}\n"
+        "   Example: new project = {\"type\":\"menu\",\"path\":[\"File\",\"New\",\"Project...\"]}\n"
         "\n"
-        "7. {\"type\":\"repeat_pattern\",\"count\":N,\"actions\":[...]} - Repeat inner actions N times.\n"
-        "   For time-based repeats, use seek with computed times instead of frame stepping.\n"
+        "CRITICAL RULES:\n"
+        "- Effects MUST use {\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"...\\\"}. NEVER put effect names in timeline actions.\n"
+        "- Transitions MUST use {\\\"type\\\":\\\"transition\\\",\\\"name\\\":\\\"...\\\"}. NEVER put transition names in timeline actions.\n"
+        "- ONLY use action names from the lists above. NEVER invent names like addGaussianBlur, addVignette, addPosterize, adjustHueSaturation, hold.\n"
+        "- goToStart = go to beginning. goToEnd = go to end. NEVER use seek for start/end.\n"
+        "- nextFrame/prevFrame = advance/go back one frame. nextFrame10/prevFrame10 = 10 frames.\n"
+        "- Use seek ONLY for specific timestamps (e.g. \\\"go to 5 seconds\\\").\n"
+        "- \\\"cut here\\\" or \\\"blade\\\" with no time = just blade, no seek needed.\n"
+        "- Each action does ONE thing. Do not add extra unrelated actions.\n"
+        "- Speed actions need selectClipAtPlayhead first: 50%%=retimeSlow50, 25%%=retimeSlow25, 10%%=retimeSlow10, 2x=retimeFast2x, 4x=retimeFast4x, 8x=retimeFast8x, 20x=retimeFast20x.\n"
+        "- \\\"stabilize\\\" or \\\"reduce camera shake\\\" = effect Stabilization. \\\"rolling shutter\\\" = effect Rolling Shutter.\n"
         "\n"
-        "Key knowledge:\n"
-        "- ALWAYS use {\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":N} to move the playhead. NEVER use nextFrame with repeat.\n"
-        "- seek is instant. No playback needed. seek seconds=0 goes to start.\n"
-        "- For effects: {\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"...\\\"} — auto-selects clip.\n"
-        "- For transitions: {\\\"type\\\":\\\"transition\\\",\\\"name\\\":\\\"...\\\"}\n"
-        "- blade splits at playhead. Delete a segment: seek to start, blade, seek to end, blade, select, delete.\n"
-        "- selectClipAtPlayhead selects whatever is under the playhead.\n"
-        "- For \\\"every N seconds\\\": use repeat_pattern with seek to computed times.\n"
-        "  count = floor(duration/N), each iteration: seek to i*N seconds, then do action.\n"
-        "\n"
-        "Workflow patterns:\n"
-        "- Remove first N seconds: seek 0, blade at N, seek 0, selectClipAtPlayhead, delete\n"
-        "- Remove last N seconds: seek (duration-N), blade, seek (duration-N), selectClipAtPlayhead (next clip), delete\n"
-        "- Blade at time T: seek T, blade\n"
-        "- Marker every N seconds (D sec timeline): repeat_pattern count=floor(D/N), each: seek i*N, addMarker\n"
-        "  But since repeat_pattern doesn't give an index, use: seek N, addMarker, seek 2*N, addMarker, etc.\n"
-        "  Or better: seek 0, then repeat_pattern with playback nextFrame repeat N*fps + addMarker\n"
-        "  Actually best: generate explicit seek+action pairs for each position.\n"
-        "- Transitions at every cut: repeat_pattern with nextEdit + addTransition\n"
-        "- Select and color correct: selectClipAtPlayhead + addColorBoard\n"
-        "- Select Nth clip: goToStart + nextEdit repeat N + selectClipAtPlayhead\n"
-        "- Detach audio: selectClipAtPlayhead + detachAudio\n"
-        "\n"
-        "Common effect names (use with type=effect):\n"
-        "  Blur: Gaussian Blur, Zoom Blur, Radial Blur, Prism Blur, Channel Blur, Soft Focus\n"
-        "  Keying: Keyer, Luma Keyer, Chroma Keyer\n"
-        "  Color: Black & White, Sepia, Tint, Negative, Color Monochrome\n"
-        "  Stylize: Vignette, Bloom, Glow, Gloom, Aged Film, Bad TV, Vintage, Film Grain\n"
-        "  Distortion: Underwater, Earthquake, Fisheye, Mirror, Kaleidoscope, Pixellate\n"
-        "  Sharpen: Sharpen, Unsharp Mask\n"
-        "  Light: Light Rays, Lens Flare, Light Wrap\n"
-        "  Fix: Noise Reduction, Stabilization, Rolling Shutter, Broadcast Safe\n"
-        "  Mask: Draw Mask, Shape Mask, Vignette Mask, Image Mask\n"
-        "  Other: Drop Shadow, Letterbox, Flipped, Invert, Posterize, Tilt-Shift, Custom LUT\n"
-        "\n"
-        "Common transition names (use with type=transition):\n"
-        "  Cross Dissolve, Flow, Fade To Color, Wipe, Push, Slide, Spin, Doorway,\n"
-        "  Page Curl, Star, Band, Zoom, Bloom, Mosaic\n"
-        "\n"
-        "Examples:\n"
-        "- \\\"add a keyer\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Keyer\\\"}]\n"
-        "- \\\"blur this clip\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Gaussian Blur\\\"}]\n"
-        "- \\\"make it black and white\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Black & White\\\"}]\n"
+        "EXAMPLES:\n"
+        "- \\\"blur\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Gaussian Blur\\\"}]\n"
+        "- \\\"black and white\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Black & White\\\"}]\n"
+        "- \\\"add vignette\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Vignette\\\"}]\n"
         "- \\\"stabilize\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Stabilization\\\"}]\n"
-        "- \\\"add noise reduction\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Noise Reduction\\\"}]\n"
-        "- \\\"add film grain\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Film Grain\\\"}]\n"
-        "- \\\"add a drop shadow\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Drop Shadow\\\"}]\n"
-        "- \\\"add a lens flare\\\" -> [{\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"Lens Flare\\\"}]\n"
-        "- \\\"add a flow transition\\\" -> [{\\\"type\\\":\\\"transition\\\",\\\"name\\\":\\\"Flow\\\"}]\n"
-        "- \\\"add a wipe transition\\\" -> [{\\\"type\\\":\\\"transition\\\",\\\"name\\\":\\\"Wipe\\\"}]\n"
-        "- \\\"cut at 3 seconds\\\" -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":3},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"}]\n"
-        "- \\\"remove the first 2 seconds\\\" -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":2},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"},{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":0},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"delete\\\"}]\n"
-        "- \\\"remove the last 3 seconds\\\" (10s timeline) -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":7},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"nextEdit\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"delete\\\"}]\n"
-        "- \\\"add markers every 3 seconds\\\" (12s timeline) -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":3},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addMarker\\\"},{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":6},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addMarker\\\"},{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":9},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addMarker\\\"},{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":12},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addMarker\\\"}]\n"
-        "- \\\"blade every 5 seconds\\\" (20s timeline) -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":5},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"},{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":10},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"},{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":15},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"}]\n"
-        "- \\\"slow to half speed\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"retimeSlow50\\\"}]\n"
-        "- \\\"go to 5 seconds\\\" -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":5}]\n"
-        "- \\\"go to the third clip\\\" -> [{\\\"type\\\":\\\"playback\\\",\\\"action\\\":\\\"goToStart\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"nextEdit\\\",\\\"repeat\\\":3}]\n"
-        "- \\\"add transitions at every cut\\\" (5 clips) -> [{\\\"type\\\":\\\"playback\\\",\\\"action\\\":\\\"goToStart\\\"},{\\\"type\\\":\\\"repeat_pattern\\\",\\\"count\\\":4,\\\"actions\\\":[{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"nextEdit\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addTransition\\\"}]}]\n"
-        "- \\\"strip effects\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"removeEffects\\\"}]\n"
-        "- \\\"remove all markers\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectAll\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"deleteMarkersInSelection\\\"}]\n"
-        "- \\\"detach audio\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"detachAudio\\\"}]\n"
-        "- \\\"detect scene changes\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectAll\\\"},{\\\"type\\\":\\\"scene_detect\\\"}]\n"
-        "- \\\"add markers at every cut\\\" -> [{\\\"type\\\":\\\"scene_markers\\\"}]\n"
-        "- \\\"render the timeline\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"renderAll\\\"}]\n"
+        "- \\\"cross dissolve\\\" -> [{\\\"type\\\":\\\"transition\\\",\\\"name\\\":\\\"Cross Dissolve\\\"}]\n"
+        "- \\\"flow transition\\\" -> [{\\\"type\\\":\\\"transition\\\",\\\"name\\\":\\\"Flow\\\"}]\n"
+        "- \\\"cut at 3s\\\" -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":3},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"}]\n"
+        "- \\\"blade here\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"}]\n"
+        "- \\\"slow to half\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"retimeSlow50\\\"}]\n"
+        "- \\\"go to start\\\" -> [{\\\"type\\\":\\\"playback\\\",\\\"action\\\":\\\"goToStart\\\"}]\n"
+        "- \\\"go to end\\\" -> [{\\\"type\\\":\\\"playback\\\",\\\"action\\\":\\\"goToEnd\\\"}]\n"
+        "- \\\"next frame\\\" -> [{\\\"type\\\":\\\"playback\\\",\\\"action\\\":\\\"nextFrame\\\"}]\n"
+        "- \\\"advance 10 frames\\\" -> [{\\\"type\\\":\\\"playback\\\",\\\"action\\\":\\\"nextFrame10\\\"}]\n"
         "- \\\"undo\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"undo\\\"}]\n"
-        "- \\\"play from the start\\\" -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":0},{\\\"type\\\":\\\"playback\\\",\\\"action\\\":\\\"playPause\\\"}]\n"
+        "- \\\"remove first 2s\\\" -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":2},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"},{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":0},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"delete\\\"}]\n"
+        "- \\\"remove last 3s\\\" (10s timeline) -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":7},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"blade\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"nextEdit\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"delete\\\"}]\n"
+        "- \\\"markers every 5s\\\" (15s) -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":5},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addMarker\\\"},{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":10},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addMarker\\\"}]\n"
+        "- \\\"remove all markers\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectAll\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"deleteMarkersInSelection\\\"}]\n"
+        "- \\\"select and remove effects\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"removeEffects\\\"}]\n"
+        "- \\\"open preferences\\\" or \\\"settings\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"showPreferences\\\"}]\n"
+        "- \\\"new project\\\" -> [{\\\"type\\\":\\\"menu\\\",\\\"path\\\":[\\\"File\\\",\\\"New\\\",\\\"Project...\\\"]}]\n"
         "\"\"\"\n"
         "\n"
         "let fullQuery = \"\\(timelineContext)\\n\\nUser request: \\(query)\"\n"
@@ -2976,71 +3378,202 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     NSString *q = [query lowercaseString];
     NSMutableArray *actions = [NSMutableArray array];
 
-    // Simple keyword patterns
+    // ── Undo / Redo ──
     if ([q containsString:@"undo"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"undo"}];
     } else if ([q containsString:@"redo"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"redo"}];
-    } else if ([q containsString:@"play"] || [q containsString:@"pause"] || [q containsString:@"stop"]) {
+    }
+    // ── Playback ──
+    else if ([q containsString:@"play"] || [q containsString:@"pause"] || [q containsString:@"stop"]) {
         [actions addObject:@{@"type": @"playback", @"action": @"playPause"}];
     } else if ([q containsString:@"beginning"] || [q containsString:@"start"] || [q containsString:@"rewind"]) {
         [actions addObject:@{@"type": @"playback", @"action": @"goToStart"}];
-    } else if ([q containsString:@"end"]) {
+    } else if ([q containsString:@"go to the end"] || [q containsString:@"go to end"] || [q containsString:@"jump to end"]) {
         [actions addObject:@{@"type": @"playback", @"action": @"goToEnd"}];
+    } else if ([q containsString:@"next frame"] || [q containsString:@"advance one frame"] || [q containsString:@"forward one frame"]) {
+        [actions addObject:@{@"type": @"playback", @"action": @"nextFrame"}];
+    } else if ([q containsString:@"previous frame"] || [q containsString:@"prev frame"] || [q containsString:@"back one frame"]) {
+        [actions addObject:@{@"type": @"playback", @"action": @"prevFrame"}];
+    } else if ([q containsString:@"10 frame"] || [q containsString:@"ten frame"]) {
+        if ([q containsString:@"back"] || [q containsString:@"prev"]) {
+            [actions addObject:@{@"type": @"playback", @"action": @"prevFrame10"}];
+        } else {
+            [actions addObject:@{@"type": @"playback", @"action": @"nextFrame10"}];
+        }
+    }
+    // ── Blade / Cut ──
+    else if ([q containsString:@"blade all"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"bladeAll"}];
     } else if ([q containsString:@"cut"] || [q containsString:@"split"] || [q containsString:@"blade"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"blade"}];
+    }
+    // ── Delete ──
+    else if ([q containsString:@"replace"] && [q containsString:@"gap"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"replaceWithGap"}];
+    } else if ([q containsString:@"join"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"joinClips"}];
+    } else if ([q containsString:@"trim to playhead"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"trimToPlayhead"}];
     } else if ([q containsString:@"delete"] || [q containsString:@"remove"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"delete"}];
-    } else if ([q containsString:@"transition"] || [q containsString:@"dissolve"] || [q containsString:@"fade"]) {
+    }
+    // ── Transitions (by specific name) ──
+    else if ([q containsString:@"cross dissolve"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Cross Dissolve"}];
+    } else if ([q containsString:@"flow transition"] || [q containsString:@"add flow"] || [q containsString:@"apply flow"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Flow"}];
+    } else if ([q containsString:@"wipe"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Wipe"}];
+    } else if ([q containsString:@"push transition"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Push"}];
+    } else if ([q containsString:@"spin transition"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Spin"}];
+    } else if ([q containsString:@"page curl"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Page Curl"}];
+    } else if ([q containsString:@"slide transition"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Slide"}];
+    } else if ([q containsString:@"zoom transition"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Zoom"}];
+    } else if ([q containsString:@"star transition"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Star"}];
+    } else if ([q containsString:@"fade to"] || [q containsString:@"fade out"]) {
+        [actions addObject:@{@"type": @"transition", @"name": @"Fade To Color"}];
+    } else if ([q containsString:@"transition"] || [q containsString:@"dissolve"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"addTransition"}];
-    } else if ([q containsString:@"marker"]) {
-        if ([q containsString:@"chapter"]) {
+    }
+    // ── Markers ──
+    else if ([q containsString:@"marker"]) {
+        if ([q containsString:@"remove all"] || [q containsString:@"delete all"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"selectAll"}];
+            [actions addObject:@{@"type": @"timeline", @"action": @"deleteMarkersInSelection"}];
+        } else if ([q containsString:@"chapter"]) {
             [actions addObject:@{@"type": @"timeline", @"action": @"addChapterMarker"}];
         } else if ([q containsString:@"todo"] || [q containsString:@"to-do"]) {
             [actions addObject:@{@"type": @"timeline", @"action": @"addTodoMarker"}];
+        } else if ([q containsString:@"delete"] || [q containsString:@"remove"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"deleteMarker"}];
+        } else if ([q containsString:@"next"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"nextMarker"}];
+        } else if ([q containsString:@"previous"] || [q containsString:@"prev"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"previousMarker"}];
         } else {
             [actions addObject:@{@"type": @"timeline", @"action": @"addMarker"}];
         }
+    }
+    // ── Color correction ──
+    else if ([q containsString:@"color wheel"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"addColorWheels"}];
+    } else if ([q containsString:@"color curve"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"addColorCurves"}];
+    } else if ([q containsString:@"hue"] && [q containsString:@"sat"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"addHueSaturation"}];
+    } else if ([q containsString:@"enhance"] && ([q containsString:@"light"] || [q containsString:@"color"])) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"addEnhanceLightAndColor"}];
+    } else if ([q containsString:@"balance"] && [q containsString:@"color"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"balanceColor"}];
     } else if ([q containsString:@"color"] || [q containsString:@"grade"] || [q containsString:@"correct"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
         [actions addObject:@{@"type": @"timeline", @"action": @"addColorBoard"}];
-    } else if ([q containsString:@"slow"]) {
+    }
+    // ── Speed ──
+    else if ([q containsString:@"slow"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
-        if ([q containsString:@"25"] || [q containsString:@"quarter"]) {
+        if ([q containsString:@"10"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"retimeSlow10"}];
+        } else if ([q containsString:@"25"] || [q containsString:@"quarter"]) {
             [actions addObject:@{@"type": @"timeline", @"action": @"retimeSlow25"}];
         } else {
             [actions addObject:@{@"type": @"timeline", @"action": @"retimeSlow50"}];
         }
     } else if ([q containsString:@"fast"] || [q containsString:@"speed up"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
-        [actions addObject:@{@"type": @"timeline", @"action": @"retimeFast2x"}];
+        if ([q containsString:@"20"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"retimeFast20x"}];
+        } else if ([q containsString:@"8"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"retimeFast8x"}];
+        } else if ([q containsString:@"4"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"retimeFast4x"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"retimeFast2x"}];
+        }
     } else if ([q containsString:@"reverse"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
         [actions addObject:@{@"type": @"timeline", @"action": @"retimeReverse"}];
     } else if ([q containsString:@"freeze"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
         [actions addObject:@{@"type": @"timeline", @"action": @"freezeFrame"}];
-    } else if ([q containsString:@"title"]) {
-        if ([q containsString:@"lower"]) {
-            [actions addObject:@{@"type": @"timeline", @"action": @"addBasicLowerThird"}];
-        } else {
-            [actions addObject:@{@"type": @"timeline", @"action": @"addBasicTitle"}];
-        }
-    } else if ([q containsString:@"volume up"] || [q containsString:@"louder"]) {
+    } else if ([q containsString:@"hold"] && [q containsString:@"frame"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"retimeHold"}];
+    } else if ([q containsString:@"normal speed"] || [q containsString:@"reset speed"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"retimeNormal"}];
+    } else if ([q containsString:@"blade speed"] || [q containsString:@"speed segment"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"retimeBladeSpeed"}];
+    }
+    // ── Titles ──
+    else if ([q containsString:@"lower third"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"addBasicLowerThird"}];
+    } else if ([q containsString:@"title"] || [q containsString:@"text overlay"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"addBasicTitle"}];
+    }
+    // ── Audio ──
+    else if ([q containsString:@"volume up"] || [q containsString:@"louder"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"adjustVolumeUp"}];
     } else if ([q containsString:@"volume down"] || [q containsString:@"quieter"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"adjustVolumeDown"}];
-    } else if ([q containsString:@"export"] || [q containsString:@"xml"]) {
-        [actions addObject:@{@"type": @"timeline", @"action": @"exportXML"}];
-    } else if ([q containsString:@"select all"]) {
+    } else if ([q containsString:@"detach audio"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"detachAudio"}];
+    }
+    // ── Selection & Organization ──
+    else if ([q containsString:@"select all"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"selectAll"}];
+    } else if ([q containsString:@"deselect"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"deselectAll"}];
     } else if ([q containsString:@"select"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
     } else if ([q containsString:@"compound"] || [q containsString:@"nest"] || [q containsString:@"group"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"createCompoundClip"}];
+    } else if ([q containsString:@"solo"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"solo"}];
+    } else if ([q containsString:@"disable"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"disable"}];
     }
-    // Effect keywords — try to extract the effect name and apply it
-    else if ([q containsString:@"keyer"]) {
+    // ── View ──
+    else if ([q containsString:@"zoom to fit"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"zoomToFit"}];
+    } else if ([q containsString:@"zoom in"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"zoomIn"}];
+    } else if ([q containsString:@"zoom out"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"zoomOut"}];
+    } else if ([q containsString:@"snapping"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"toggleSnapping"}];
+    } else if ([q containsString:@"render"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"renderAll"}];
+    } else if ([q containsString:@"export"] || [q containsString:@"xml"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"exportXML"}];
+    } else if ([q containsString:@"analyze"] || [q containsString:@"fix"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"analyzeAndFix"}];
+    } else if ([q containsString:@"adjustment layer"] || [q containsString:@"adjustment clip"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"addAdjustmentClip"}];
+    }
+    // ── App ──
+    else if ([q containsString:@"preference"] || [q containsString:@"settings"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"showPreferences"}];
+    }
+    // ── Effects (by keyword) ──
+    else if ([q containsString:@"luma keyer"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Luma Keyer"}];
+    } else if ([q containsString:@"chroma keyer"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Chroma Keyer"}];
+    } else if ([q containsString:@"keyer"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Keyer"}];
     } else if ([q containsString:@"blur"] || [q containsString:@"gaussian"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Gaussian Blur"}];
@@ -3048,21 +3581,1441 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         [actions addObject:@{@"type": @"effect", @"name": @"Vignette"}];
     } else if ([q containsString:@"sharpen"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Sharpen"}];
-    } else if ([q containsString:@"stabiliz"]) {
+    } else if ([q containsString:@"stabiliz"] || [q containsString:@"camera shake"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Stabilization"}];
+    } else if ([q containsString:@"rolling shutter"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Rolling Shutter"}];
     } else if ([q containsString:@"noise reduction"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Noise Reduction"}];
     } else if ([q containsString:@"black and white"] || [q containsString:@"b&w"] || [q containsString:@"monochrome"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Black & White"}];
+    } else if ([q containsString:@"sepia"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Sepia"}];
+    } else if ([q containsString:@"aged film"] || [q containsString:@"old film"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Aged Film"}];
+    } else if ([q containsString:@"film grain"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Film Grain"}];
+    } else if ([q containsString:@"bloom"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Bloom"}];
     } else if ([q containsString:@"glow"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Glow"}];
     } else if ([q containsString:@"letterbox"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Letterbox"}];
     } else if ([q containsString:@"drop shadow"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Drop Shadow"}];
+    } else if ([q containsString:@"lens flare"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Lens Flare"}];
+    } else if ([q containsString:@"tilt"] && [q containsString:@"shift"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Tilt-Shift"}];
+    } else if ([q containsString:@"flip"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Flipped"}];
+    } else if ([q containsString:@"invert"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Invert"}];
+    } else if ([q containsString:@"posterize"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Posterize"}];
+    } else if ([q containsString:@"pixelat"] || [q containsString:@"pixellat"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Pixellate"}];
+    } else if ([q containsString:@"underwater"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Underwater"}];
     }
 
     return actions;
+}
+
+#pragma mark - Gemma 4 (MLX) AI Engine
+//
+// Multi-turn agentic loop using Gemma 4 via Apple's MLX framework.
+// The mlx-lm server exposes an OpenAI-compatible HTTP API at localhost:8080.
+// Each turn: send messages + tool schema -> parse tool_calls -> execute via
+// SpliceKit_handleRequest -> append results -> repeat until text response.
+//
+
+- (BOOL)isMLXServerAvailable {
+    NSURL *url = [NSURL URLWithString:@"http://localhost:8080/v1/models"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.timeoutInterval = 3.0;
+    req.HTTPMethod = @"GET";
+
+    __block BOOL available = NO;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+            if (!err && [(NSHTTPURLResponse *)resp statusCode] == 200) {
+                available = YES;
+            }
+            dispatch_semaphore_signal(sem);
+        }];
+    [task resume];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC));
+    return available;
+}
+
+// Find a working python3 path (checks brew, pyenv, conda, system, common locations)
+- (NSString *)findPython3Path {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *home = NSHomeDirectory();
+
+    // Check well-known locations first (fast, no subprocess)
+    NSArray *candidates = @[
+        @"/opt/homebrew/bin/python3",                                              // Apple Silicon brew
+        @"/usr/local/bin/python3",                                                 // Intel brew
+        [home stringByAppendingPathComponent:@".pyenv/shims/python3"],             // pyenv
+        [home stringByAppendingPathComponent:@"miniforge3/bin/python3"],           // miniforge / conda
+        [home stringByAppendingPathComponent:@"miniconda3/bin/python3"],           // miniconda
+        [home stringByAppendingPathComponent:@"anaconda3/bin/python3"],            // anaconda
+        @"/usr/bin/python3",                                                       // Xcode CLT / system
+    ];
+    for (NSString *path in candidates) {
+        if ([fm isExecutableFileAtPath:path]) return path;
+    }
+
+    // Fallback: shell out to find python3 on the user's PATH
+    // Use login shell so .zprofile / .bash_profile PATH additions are picked up
+    NSString *shell = [NSProcessInfo processInfo].environment[@"SHELL"] ?: @"/bin/zsh";
+    NSTask *which = [[NSTask alloc] init];
+    which.executableURL = [NSURL fileURLWithPath:shell];
+    which.arguments = @[@"-l", @"-c", @"which python3"];
+    NSPipe *pipe = [NSPipe pipe];
+    which.standardOutput = pipe;
+    which.standardError = [NSPipe pipe];
+    @try {
+        [which launch];
+        [which waitUntilExit];
+        if (which.terminationStatus == 0) {
+            NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
+            NSString *path = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            path = [path stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (path.length > 0 && [fm isExecutableFileAtPath:path]) return path;
+        }
+    } @catch (NSException *e) {
+        SpliceKit_log(@"[Gemma] Shell which python3 failed: %@", e.reason);
+    }
+    return nil;
+}
+
+// Check if mlx_lm is installed for the given python
+- (BOOL)isMLXLMInstalledForPython:(NSString *)pythonPath {
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:pythonPath];
+    task.arguments = @[@"-c", @"import mlx_lm"];
+    task.standardOutput = [NSPipe pipe];
+    task.standardError = [NSPipe pipe];
+    @try {
+        [task launch];
+        [task waitUntilExit];
+        return task.terminationStatus == 0;
+    } @catch (NSException *e) {
+        return NO;
+    }
+}
+
+// Install mlx-lm via pip. Tries normal install first, then --user, then --break-system-packages.
+- (BOOL)installMLXLMForPython:(NSString *)pythonPath {
+    SpliceKit_log(@"[Gemma] Installing mlx-lm package via %@", pythonPath);
+
+    // Try install strategies in order of preference
+    NSArray *argSets = @[
+        @[@"-m", @"pip", @"install", @"mlx-lm"],                                         // normal
+        @[@"-m", @"pip", @"install", @"--user", @"mlx-lm"],                              // no write to site-packages
+        @[@"-m", @"pip", @"install", @"--break-system-packages", @"mlx-lm"],             // PEP 668 (macOS 14+)
+    ];
+
+    for (NSArray *args in argSets) {
+        NSTask *task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:pythonPath];
+        task.arguments = args;
+        NSPipe *outPipe = [NSPipe pipe];
+        NSPipe *errPipe = [NSPipe pipe];
+        task.standardOutput = outPipe;
+        task.standardError = errPipe;
+        @try {
+            SpliceKit_log(@"[Gemma] Trying: %@ %@", pythonPath, [args componentsJoinedByString:@" "]);
+            [task launch];
+            [task waitUntilExit];
+            if (task.terminationStatus == 0) {
+                SpliceKit_log(@"[Gemma] pip install succeeded with: %@", [args componentsJoinedByString:@" "]);
+                return YES;
+            }
+            NSData *errData = [errPipe.fileHandleForReading readDataToEndOfFile];
+            NSString *errStr = [[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding];
+            SpliceKit_log(@"[Gemma] pip install failed (status %d): %@", task.terminationStatus, errStr);
+
+            // If error is "externally managed" (PEP 668), continue to next strategy
+            // If error is something else, try next strategy anyway
+        } @catch (NSException *e) {
+            SpliceKit_log(@"[Gemma] pip install exception: %@", e.reason);
+        }
+    }
+
+    return NO;
+}
+
+// Check if port 8080 is already in use (by another MLX server or something else)
+- (BOOL)isPortInUse:(int)port {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return NO;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    int result = connect(sock, (struct sockaddr *)&addr, sizeof(addr));
+    close(sock);
+    return result == 0;
+}
+
+// Kill any existing mlx_lm.server process that we didn't start
+- (void)killOrphanedMLXServer {
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/pkill"];
+    task.arguments = @[@"-f", @"mlx_lm.server"];
+    task.standardOutput = [NSPipe pipe];
+    task.standardError = [NSPipe pipe];
+    @try {
+        [task launch];
+        [task waitUntilExit];
+    } @catch (NSException *e) {}
+    // Give it a moment to release the port
+    [NSThread sleepForTimeInterval:1.0];
+}
+
+// Tail the last N bytes of a log file for user-facing error messages
+static NSString *SpliceKit_tailLogFile(NSString *path, NSUInteger maxBytes) {
+    NSString *log = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (!log.length) return @"(empty log)";
+    if (log.length <= maxBytes) return log;
+    // Find a newline boundary near the cut point so we don't show a partial line
+    NSRange search = [log rangeOfString:@"\n" options:0
+                                  range:NSMakeRange(log.length - maxBytes, maxBytes)];
+    NSUInteger start = (search.location != NSNotFound) ? search.location + 1 : log.length - maxBytes;
+    return [log substringFromIndex:start];
+}
+
+// Auto-start MLX server, installing mlx-lm first if needed.
+// Returns nil on success, or an error string on failure.
+// Model is auto-downloaded by Hugging Face Hub on first server start.
+- (NSString *)autoStartMLXServer {
+    NSString *model = self.gemmaModel ?: @"unsloth/gemma-4-E4B-it-UD-MLX-4bit";
+
+    // If we already started a server and it's still running, just wait for it
+    if (self.mlxServerTask && self.mlxServerTask.isRunning) {
+        SpliceKit_log(@"[Gemma] MLX server already launched (PID %d), waiting for it to become ready...", self.mlxServerTask.processIdentifier);
+        for (int i = 0; i < 60; i++) {
+            if ([self isMLXServerAvailable]) return nil;
+            if (!self.mlxServerTask.isRunning) break;
+            [NSThread sleepForTimeInterval:1.0];
+            [self updateGemmaStatus:[NSString stringWithFormat:@"Waiting for server... (%ds)", i]];
+        }
+        // Fall through to full restart below
+        SpliceKit_log(@"[Gemma] Previously launched server didn't become ready, restarting...");
+    }
+
+    // Find Python
+    [self updateGemmaStatus:@"Finding Python..."];
+    NSString *python = [self findPython3Path];
+    if (!python) {
+        return @"Python 3 not found. Install via: brew install python3";
+    }
+    SpliceKit_log(@"[Gemma] Using Python: %@", python);
+
+    // Verify it's a real Python (not a stub that prompts Xcode CLT install)
+    {
+        NSTask *verify = [[NSTask alloc] init];
+        verify.executableURL = [NSURL fileURLWithPath:python];
+        verify.arguments = @[@"--version"];
+        NSPipe *outPipe = [NSPipe pipe];
+        verify.standardOutput = outPipe;
+        verify.standardError = [NSPipe pipe];
+        @try {
+            [verify launch];
+            [verify waitUntilExit];
+            if (verify.terminationStatus != 0) {
+                return @"Python 3 found but not functional. Install via: brew install python3";
+            }
+            NSData *data = [outPipe.fileHandleForReading readDataToEndOfFile];
+            NSString *version = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            SpliceKit_log(@"[Gemma] Python version: %@", [version stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]);
+        } @catch (NSException *e) {
+            return [NSString stringWithFormat:@"Python 3 failed to run: %@", e.reason];
+        }
+    }
+
+    // Check / install mlx-lm
+    [self updateGemmaStatus:@"Checking mlx-lm..."];
+    if (![self isMLXLMInstalledForPython:python]) {
+        [self updateGemmaStatus:@"Installing mlx-lm (first-time setup)..."];
+        SpliceKit_log(@"[Gemma] mlx-lm not installed, installing...");
+        if (![self installMLXLMForPython:python]) {
+            return @"Failed to install mlx-lm. Try manually: pip3 install mlx-lm";
+        }
+        SpliceKit_log(@"[Gemma] mlx-lm installed successfully");
+
+        // Verify the install actually worked (pip can exit 0 but fail silently)
+        if (![self isMLXLMInstalledForPython:python]) {
+            SpliceKit_log(@"[Gemma] mlx-lm still not importable after pip install");
+            return @"mlx-lm installed but import failed. Try: pip3 install --force-reinstall mlx-lm";
+        }
+    }
+
+    // Check for port conflict before starting
+    if ([self isPortInUse:8080]) {
+        SpliceKit_log(@"[Gemma] Port 8080 is in use but server not responding to /v1/models");
+        // Something else is on 8080, or a stale mlx server is half-alive. Kill orphans.
+        [self updateGemmaStatus:@"Clearing stale server on port 8080..."];
+        [self killOrphanedMLXServer];
+
+        // Check again — if still occupied by a non-mlx process, fail clearly
+        if ([self isPortInUse:8080] && ![self isMLXServerAvailable]) {
+            return @"Port 8080 is in use by another process. Stop it or set a custom port.";
+        }
+        // If it's now responding, great — we're done
+        if ([self isMLXServerAvailable]) return nil;
+    }
+
+    // Start server in background
+    [self updateGemmaStatus:@"Starting MLX server (downloading model if first run)..."];
+    SpliceKit_log(@"[Gemma] Starting MLX server with model: %@", model);
+
+    NSString *logPath = @"/tmp/mlx_server.log";
+
+    NSTask *server = [[NSTask alloc] init];
+    server.executableURL = [NSURL fileURLWithPath:python];
+    server.arguments = @[@"-m", @"mlx_lm.server", @"--model", model];
+
+    // Redirect output to log file for diagnostics (truncate previous log)
+    [[NSFileManager defaultManager] createFileAtPath:logPath contents:nil attributes:nil];
+    NSFileHandle *logHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (logHandle) {
+        [logHandle truncateFileAtOffset:0];
+        server.standardOutput = logHandle;
+        server.standardError = logHandle;
+    }
+
+    @try {
+        [server launch];
+    } @catch (NSException *e) {
+        SpliceKit_log(@"[Gemma] Failed to launch MLX server: %@", e.reason);
+        return [NSString stringWithFormat:@"Failed to start MLX server: %@", e.reason];
+    }
+
+    // Store reference for lifecycle management
+    self.mlxServerTask = server;
+    SpliceKit_log(@"[Gemma] MLX server process launched (PID %d), waiting for it to be ready...", server.processIdentifier);
+
+    // Poll until server is ready
+    // First run with model download: could be several minutes (model is ~2-3 GB)
+    // Subsequent runs with cached model: typically 5-30 seconds
+    int maxAttempts = 300; // 5 minutes total (300 x 1s) — generous for first-run download
+    for (int i = 0; i < maxAttempts; i++) {
+        if (self.gemmaCancelled) {
+            [server terminate];
+            self.mlxServerTask = nil;
+            return @"Cancelled by user";
+        }
+        if (!server.isRunning) {
+            NSString *tail = SpliceKit_tailLogFile(logPath, 800);
+            SpliceKit_log(@"[Gemma] MLX server exited (status %d). Log tail:\n%@", server.terminationStatus, tail);
+
+            // Provide actionable error based on common failure patterns
+            if ([tail containsString:@"No module named"]) {
+                return @"MLX server failed: missing Python module. Try: pip3 install mlx-lm";
+            } else if ([tail containsString:@"Address already in use"]) {
+                return @"Port 8080 already in use. Kill the existing process: pkill -f mlx_lm.server";
+            } else if ([tail containsString:@"out of memory"] || [tail containsString:@"MemoryError"]) {
+                return @"Not enough memory to load model. Close other apps and try again.";
+            } else if ([tail containsString:@"FileNotFoundError"] || [tail containsString:@"does not appear to have"]) {
+                return [NSString stringWithFormat:@"Model '%@' not found. Check the model ID.", model];
+            }
+            return [NSString stringWithFormat:@"MLX server exited unexpectedly. Log:\n%@", tail];
+        }
+        if ([self isMLXServerAvailable]) {
+            SpliceKit_log(@"[Gemma] MLX server ready after %d seconds", i);
+            [logHandle closeFile];
+            return nil; // success
+        }
+
+        // Show progress with download context for first ~60s
+        if (i <= 5) {
+            [self updateGemmaStatus:@"Starting MLX server..."];
+        } else if (i <= 30) {
+            [self updateGemmaStatus:[NSString stringWithFormat:@"Loading model... (%ds)", i]];
+        } else {
+            // After 30s it's likely downloading — read log for progress hints
+            NSString *tail = SpliceKit_tailLogFile(logPath, 200);
+            if ([tail containsString:@"Fetching"] || [tail containsString:@"Downloading"] || [tail containsString:@"%"]) {
+                [self updateGemmaStatus:[NSString stringWithFormat:@"Downloading model... (%ds)", i]];
+            } else {
+                [self updateGemmaStatus:[NSString stringWithFormat:@"Loading model... (%ds)", i]];
+            }
+        }
+        [NSThread sleepForTimeInterval:1.0];
+    }
+
+    [logHandle closeFile];
+    return @"MLX server started but didn't respond within 5 minutes. Check /tmp/mlx_server.log";
+}
+
+- (NSDictionary *)gemmaCallMLXOnce:(NSArray *)messages tools:(NSArray *)tools {
+    NSURL *url = [NSURL URLWithString:@"http://localhost:8080/v1/chat/completions"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.HTTPMethod = @"POST";
+    req.timeoutInterval = 120.0;
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+
+    NSMutableDictionary *body = [@{
+        @"model": self.gemmaModel ?: @"unsloth/gemma-4-E4B-it-UD-MLX-4bit",
+        @"messages": messages,
+        @"stream": @NO,
+        @"temperature": @(0.2),
+        @"max_tokens": @(2048),
+    } mutableCopy];
+    if (tools.count > 0) body[@"tools"] = tools;
+
+    NSError *jsonErr = nil;
+    req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:&jsonErr];
+    if (jsonErr) return @{@"error": jsonErr.localizedDescription};
+
+    NSUInteger bodySize = req.HTTPBody.length;
+    SpliceKit_log(@"[Gemma] POST /v1/chat/completions (%lu bytes, %lu messages, %lu tools)",
+                  (unsigned long)bodySize, (unsigned long)messages.count, (unsigned long)tools.count);
+
+    __block NSDictionary *result = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+            if (err) {
+                result = @{@"error": err.localizedDescription, @"_connection_error": @YES};
+            } else if ([(NSHTTPURLResponse *)resp statusCode] != 200) {
+                NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+                result = @{@"error": [NSString stringWithFormat:@"HTTP %ld: %@",
+                           (long)[(NSHTTPURLResponse *)resp statusCode], body]};
+            } else {
+                NSError *parseErr = nil;
+                id parsed = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseErr];
+                if (parseErr || ![parsed isKindOfClass:[NSDictionary class]]) {
+                    result = @{@"error": @"Failed to parse MLX response"};
+                } else {
+                    result = parsed;
+                }
+            }
+            dispatch_semaphore_signal(sem);
+        }];
+    [task resume];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 125 * NSEC_PER_SEC));
+    return result ?: @{@"error": @"MLX request timed out"};
+}
+
+- (NSDictionary *)gemmaCallMLX:(NSArray *)messages tools:(NSArray *)tools {
+    NSDate *callStart = [NSDate date];
+    NSDictionary *result = [self gemmaCallMLXOnce:messages tools:tools];
+    NSTimeInterval elapsed = -[callStart timeIntervalSinceNow];
+
+    // Log token usage if available
+    NSDictionary *usage = result[@"usage"];
+    if (usage) {
+        SpliceKit_log(@"[Gemma] LLM response: %.1fs | prompt=%@ completion=%@ total=%@ tokens",
+                      elapsed, usage[@"prompt_tokens"], usage[@"completion_tokens"], usage[@"total_tokens"]);
+    }
+
+    // Retry on connection error (mlx-lm tool parser crash drops the connection)
+    if (result[@"_connection_error"]) {
+        SpliceKit_log(@"[Gemma] Connection lost (likely mlx-lm tool parser crash) — waiting 2s for recovery...");
+        [NSThread sleepForTimeInterval:2.0];
+
+        // Check if server recovered on its own
+        if (![self isMLXServerAvailable]) {
+            // Server died — try auto-restart
+            SpliceKit_log(@"[Gemma] MLX server did not recover, attempting auto-restart...");
+            [self updateGemmaStatus:@"MLX server crashed, restarting..."];
+            self.mlxServerTask = nil; // clear stale reference
+            NSString *startErr = [self autoStartMLXServer];
+            if (startErr) {
+                SpliceKit_log(@"[Gemma] Auto-restart failed: %@", startErr);
+                return @{@"error": [NSString stringWithFormat:@"MLX server crashed and restart failed: %@", startErr]};
+            }
+            SpliceKit_log(@"[Gemma] MLX server restarted successfully");
+        }
+
+        callStart = [NSDate date];
+        result = [self gemmaCallMLXOnce:messages tools:tools];
+        elapsed = -[callStart timeIntervalSinceNow];
+
+        if (result[@"_connection_error"]) {
+            SpliceKit_log(@"[Gemma] Retry also failed with connection error");
+            return @{@"error": @"MLX server keeps crashing. Check /tmp/mlx_server.log for errors."};
+        }
+
+        usage = result[@"usage"];
+        if (usage) {
+            SpliceKit_log(@"[Gemma] LLM retry response: %.1fs | prompt=%@ completion=%@ total=%@ tokens",
+                          elapsed, usage[@"prompt_tokens"], usage[@"completion_tokens"], usage[@"total_tokens"]);
+        }
+    }
+
+    if (result[@"error"]) {
+        SpliceKit_log(@"[Gemma] LLM error after %.1fs: %@", elapsed, result[@"error"]);
+    }
+
+    return result;
+}
+
+- (NSArray *)buildGemmaToolSchema {
+    if (self.gemmaToolSchema) return self.gemmaToolSchema;
+
+    // Each tool maps to a bridge method via the lookup in gemmaExecuteTool:arguments:
+    NSMutableArray *tools = [NSMutableArray array];
+
+    void (^addTool)(NSString *, NSString *, NSDictionary *) =
+        ^(NSString *name, NSString *desc, NSDictionary *params) {
+        [tools addObject:@{
+            @"type": @"function",
+            @"function": @{
+                @"name": name,
+                @"description": desc,
+                @"parameters": params ?: @{@"type": @"object", @"properties": @{}}
+            }
+        }];
+    };
+
+    // Timeline actions
+    addTool(@"timeline_action",
+        @"Execute a timeline editing action (blade, delete, markers, color, speed, etc). "
+        @"Common actions: blade, bladeAll, delete, cut, copy, paste, undo, redo, "
+        @"selectClipAtPlayhead, selectAll, deselectAll, addMarker, addChapterMarker, addTodoMarker, "
+        @"deleteMarker, nextMarker, previousMarker, nextEdit, previousEdit, addTransition, "
+        @"trimToPlayhead, insertGap, addColorBoard, addColorWheels, addColorCurves, "
+        @"retimeNormal, retimeSlow50, retimeSlow25, retimeFast2x, retimeFast4x, retimeReverse, freezeFrame, "
+        @"addBasicTitle, addBasicLowerThird, adjustVolumeUp, adjustVolumeDown, "
+        @"solo, disable, removeEffects, detachAudio, zoomToFit, renderAll, exportXML, "
+        @"favorite, reject, unrate, createCompoundClip, autoReframe, addKeyframe, deleteKeyframes, "
+        @"showPreferences (open app preferences/settings)",
+        @{@"type": @"object",
+          @"properties": @{
+              @"action": @{@"type": @"string", @"description": @"Action name"}
+          },
+          @"required": @[@"action"]});
+
+    // Playback actions
+    addTool(@"playback_action",
+        @"Execute a playback action: playPause, goToStart, goToEnd, nextFrame, prevFrame, nextFrame10, prevFrame10, playAroundCurrent",
+        @{@"type": @"object",
+          @"properties": @{
+              @"action": @{@"type": @"string", @"description": @"Playback action name"}
+          },
+          @"required": @[@"action"]});
+
+    // Seek
+    addTool(@"seek_to_time",
+        @"Move playhead to exact time in seconds. Instant — no playback. Use for all time-based positioning.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"seconds": @{@"type": @"number", @"description": @"Time in seconds"}
+          },
+          @"required": @[@"seconds"]});
+
+    // Timeline state
+    addTool(@"get_timeline_clips",
+        @"Get all clips on the timeline with positions, durations, and names. Call this first to understand timeline contents.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"limit": @{@"type": @"integer", @"description": @"Max clips to return (default 50)"}
+          }});
+
+    // Playhead position
+    addTool(@"get_playhead_position",
+        @"Get current playhead time, total duration, frame rate, and whether playback is active.",
+        @{@"type": @"object", @"properties": @{}});
+
+    // Selected clips
+    addTool(@"get_selected_clips",
+        @"Get details of currently selected clips in the timeline.",
+        @{@"type": @"object", @"properties": @{}});
+
+    // Transitions
+    addTool(@"apply_transition",
+        @"Apply a transition at the current edit point. Navigate to an edit point first with timeline_action(nextEdit).",
+        @{@"type": @"object",
+          @"properties": @{
+              @"name": @{@"type": @"string", @"description": @"Transition name (e.g. Cross Dissolve, Flow, Wipe)"},
+              @"effectID": @{@"type": @"string", @"description": @"Effect ID (alternative to name)"},
+              @"freeze_extend": @{@"type": @"boolean", @"description": @"Auto freeze-extend if not enough media handles"}
+          }});
+
+    addTool(@"list_transitions",
+        @"List available transitions, optionally filtered by name or category.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"filter": @{@"type": @"string", @"description": @"Filter by name or category"}
+          }});
+
+    // Effects
+    addTool(@"apply_effect",
+        @"Apply a video/audio effect to the selected clip.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"name": @{@"type": @"string", @"description": @"Effect name (e.g. Gaussian Blur, Keyer, Vignette)"},
+              @"effectID": @{@"type": @"string", @"description": @"Effect ID (alternative to name)"}
+          }});
+
+    addTool(@"list_effects",
+        @"List available video/audio effects, optionally filtered.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"filter": @{@"type": @"string", @"description": @"Filter by name or category"}
+          }});
+
+    addTool(@"get_clip_effects",
+        @"Get effects applied to the currently selected clip.",
+        @{@"type": @"object", @"properties": @{}});
+
+    // Inspector
+    addTool(@"get_inspector_properties",
+        @"Read properties of the selected clip (transform, compositing, text, audio, etc).",
+        @{@"type": @"object",
+          @"properties": @{
+              @"section": @{@"type": @"string", @"description": @"Section: transform, compositing, text, audio, or omit for all"}
+          }});
+
+    addTool(@"set_inspector_property",
+        @"Set a property on the selected clip (opacity, volume, positionX, positionY, rotation, scaleX, scaleY, etc).",
+        @{@"type": @"object",
+          @"properties": @{
+              @"property": @{@"type": @"string", @"description": @"Property name"},
+              @"value": @{@"type": @"number", @"description": @"New value"}
+          },
+          @"required": @[@"property", @"value"]});
+
+    // Menu
+    addTool(@"execute_menu_command",
+        @"Execute any FCP menu command by menu path (e.g. ['File','New','Project']).",
+        @{@"type": @"object",
+          @"properties": @{
+              @"menu_path": @{@"type": @"array", @"items": @{@"type": @"string"},
+                              @"description": @"Menu path from top to bottom"}
+          },
+          @"required": @[@"menu_path"]});
+
+    // Project
+    addTool(@"open_project",
+        @"Open a project by name.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"name": @{@"type": @"string", @"description": @"Project name"},
+              @"event": @{@"type": @"string", @"description": @"Optional event name to filter by"}
+          },
+          @"required": @[@"name"]});
+
+    // Transcript
+    addTool(@"open_transcript",
+        @"Open the transcript panel and transcribe timeline clips.",
+        @{@"type": @"object", @"properties": @{}});
+
+    addTool(@"get_transcript",
+        @"Get transcribed words with timestamps, speakers, and silences.",
+        @{@"type": @"object", @"properties": @{}});
+
+    addTool(@"delete_transcript_silences",
+        @"Remove silence gaps from the timeline.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"min_duration": @{@"type": @"number", @"description": @"Only remove silences longer than this (seconds)"}
+          }});
+
+    // Captions
+    addTool(@"generate_captions",
+        @"Generate social media captions on the timeline.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"style": @{@"type": @"string", @"description": @"Style preset: bold_pop, neon_glow, clean_minimal, etc"}
+          }});
+
+    // FCPXML
+    addTool(@"generate_fcpxml",
+        @"Generate FCPXML for import (create projects, gaps, titles, markers).",
+        @{@"type": @"object",
+          @"properties": @{
+              @"project_name": @{@"type": @"string", @"description": @"Project name"},
+              @"frame_rate": @{@"type": @"string", @"description": @"Frame rate (24, 25, 30, etc)"},
+              @"items": @{@"type": @"string", @"description": @"JSON array of items"}
+          },
+          @"required": @[@"project_name"]});
+
+    addTool(@"import_fcpxml",
+        @"Import FCPXML into FCP.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"xml": @{@"type": @"string", @"description": @"FCPXML content string"},
+              @"internal": @{@"type": @"boolean", @"description": @"Use internal import (no dialog)"}
+          },
+          @"required": @[@"xml"]});
+
+    addTool(@"export_xml",
+        @"Export current project as FCPXML to a file path.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"path": @{@"type": @"string", @"description": @"Output path (default /tmp/splicekit_export.fcpxml)"}
+          }});
+
+    // Scene detection
+    addTool(@"detect_scene_changes",
+        @"Detect scene changes in the timeline. Can add markers or blade at cuts.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"threshold": @{@"type": @"number", @"description": @"Sensitivity (0.0-1.0, lower=more sensitive)"},
+              @"action": @{@"type": @"string", @"description": @"'markers' to add markers, 'blade' to cut at changes"}
+          }});
+
+    // Panels/View
+    addTool(@"toggle_panel",
+        @"Show or hide a panel: videoScopes, inspector, effectsBrowser, timeline, timelineIndex.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"panel": @{@"type": @"string", @"description": @"Panel name"}
+          },
+          @"required": @[@"panel"]});
+
+    // Viewer
+    addTool(@"capture_viewer",
+        @"Take a screenshot of the FCP viewer.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"path": @{@"type": @"string", @"description": @"Output path (default /tmp/splicekit_viewer.png)"}
+          }});
+
+    // Batch actions
+    addTool(@"batch_timeline_actions",
+        @"Execute multiple timeline/playback actions in sequence. Each action: {type:'timeline'|'playback'|'seek', action:'name', repeat:N, seconds:N}.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"actions": @{@"type": @"string", @"description": @"JSON array of action objects"}
+          },
+          @"required": @[@"actions"]});
+
+    // Batch blade — the fastest way to make many cuts
+    addTool(@"blade_at_times",
+        @"Blade (cut) the timeline at multiple times in one call. For repetitive cuts (e.g. every 3s), compute all times and pass them as an array. Example: [3.0, 6.0, 9.0, 12.0]",
+        @{@"type": @"object",
+          @"properties": @{
+              @"times": @{@"type": @"string", @"description": @"JSON array of times in seconds, e.g. [3.0, 6.0, 9.0]"}
+          },
+          @"required": @[@"times"]});
+
+    // Lane selection
+    addTool(@"select_clip_in_lane",
+        @"Select a clip in a specific lane (connected clips). Lane 0 = primary, 1 = above, -1 = below.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"lane": @{@"type": @"integer", @"description": @"Lane number (0=primary, positive=above, negative=below)"}
+          },
+          @"required": @[@"lane"]});
+
+    // Roles
+    addTool(@"assign_role",
+        @"Assign a role to the selected clip.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"type": @{@"type": @"string", @"description": @"Role type: audio or video"},
+              @"role": @{@"type": @"string", @"description": @"Role name (e.g. Dialogue, Music, Titles)"}
+          },
+          @"required": @[@"type", @"role"]});
+
+    // Share/Export
+    addTool(@"share_project",
+        @"Export the project using a share destination.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"destination": @{@"type": @"string", @"description": @"Share destination name (default: default destination)"}
+          }});
+
+    // Timeline range
+    addTool(@"set_timeline_range",
+        @"Set the in/out range on the timeline.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"start_seconds": @{@"type": @"number", @"description": @"Range start in seconds"},
+              @"end_seconds": @{@"type": @"number", @"description": @"Range end in seconds"}
+          },
+          @"required": @[@"start_seconds", @"end_seconds"]});
+
+    // Markers at times
+    addTool(@"add_markers_at_times",
+        @"Add markers at specific times (seconds). More efficient than seeking + adding one at a time.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"times": @{@"type": @"array", @"items": @{@"type": @"number"},
+                          @"description": @"Array of times in seconds"},
+              @"name": @{@"type": @"string", @"description": @"Marker name"},
+              @"kind": @{@"type": @"string", @"description": @"Marker kind: standard, todo, chapter"}
+          },
+          @"required": @[@"times"]});
+
+    // Analyze timeline
+    addTool(@"analyze_timeline",
+        @"Analyze timeline for pacing, flash frames, clip statistics.",
+        @{@"type": @"object", @"properties": @{}});
+
+    self.gemmaToolSchema = tools;
+    return tools;
+}
+
+// Static mapping from Gemma tool names to bridge methods
+static NSDictionary *SpliceKit_gemmaToolBridgeMap(void) {
+    static NSDictionary *map = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        map = @{
+            @"timeline_action":          @"timeline.action",
+            @"playback_action":          @"playback.action",
+            @"seek_to_time":             @"playback.seekToTime",
+            @"get_timeline_clips":       @"timeline.getDetailedState",
+            @"get_playhead_position":    @"playback.getPosition",
+            @"get_selected_clips":       @"timeline.getSelectedClips",
+            @"apply_transition":         @"transitions.apply",
+            @"list_transitions":         @"transitions.list",
+            @"apply_effect":             @"effects.apply",
+            @"list_effects":             @"effects.list",
+            @"get_clip_effects":         @"effects.getClipEffects",
+            @"get_inspector_properties": @"inspector.get",
+            @"set_inspector_property":   @"inspector.set",
+            @"execute_menu_command":      @"menu.execute",
+            @"open_project":             @"project.open",
+            @"open_transcript":          @"transcript.open",
+            @"get_transcript":           @"transcript.get",
+            @"delete_transcript_silences": @"transcript.deleteSilences",
+            @"generate_captions":        @"captions.generate",
+            @"generate_fcpxml":          @"fcpxml.generate",
+            @"import_fcpxml":            @"fcpxml.import",
+            @"export_xml":               @"fcpxml.export",
+            @"detect_scene_changes":     @"scene.detect",
+            @"toggle_panel":             @"view.toggle",
+            @"capture_viewer":           @"viewer.capture",
+            @"batch_timeline_actions":   @"timeline.batchActions",
+            @"blade_at_times":           @"timeline.bladeAtTimes",
+            @"select_clip_in_lane":      @"timeline.selectClipInLane",
+            @"assign_role":              @"roles.assign",
+            @"share_project":            @"share.export",
+            @"set_timeline_range":       @"timeline.setRange",
+            @"add_markers_at_times":     @"timeline.addMarkers",
+            @"analyze_timeline":         @"timeline.analyze",
+        };
+    });
+    return map;
+}
+
+// Map Gemma tool arguments to bridge params (some need key remapping)
+static NSDictionary *SpliceKit_gemmaMapArgs(NSString *toolName, NSDictionary *args) {
+    if (!args) return @{};
+    NSMutableDictionary *mapped = [args mutableCopy];
+
+    // Remap keys where the tool schema uses different names than the bridge
+    if ([toolName isEqualToString:@"execute_menu_command"]) {
+        if (mapped[@"menu_path"]) {
+            mapped[@"menuPath"] = mapped[@"menu_path"];
+            [mapped removeObjectForKey:@"menu_path"];
+        }
+    } else if ([toolName isEqualToString:@"set_inspector_property"]) {
+        // Bridge expects: property -> property, value -> value (same names)
+    } else if ([toolName isEqualToString:@"get_inspector_properties"]) {
+        // Bridge expects: section -> section (same)
+    } else if ([toolName isEqualToString:@"toggle_panel"]) {
+        // Bridge expects: panel -> panel (same)
+    } else if ([toolName isEqualToString:@"seek_to_time"]) {
+        // Bridge expects: seconds -> seconds (same)
+    } else if ([toolName isEqualToString:@"delete_transcript_silences"]) {
+        if (mapped[@"min_duration"]) {
+            mapped[@"minDuration"] = mapped[@"min_duration"];
+            [mapped removeObjectForKey:@"min_duration"];
+        }
+    } else if ([toolName isEqualToString:@"set_timeline_range"]) {
+        if (mapped[@"start_seconds"]) {
+            mapped[@"startSeconds"] = mapped[@"start_seconds"];
+            [mapped removeObjectForKey:@"start_seconds"];
+        }
+        if (mapped[@"end_seconds"]) {
+            mapped[@"endSeconds"] = mapped[@"end_seconds"];
+            [mapped removeObjectForKey:@"end_seconds"];
+        }
+    } else if ([toolName isEqualToString:@"add_markers_at_times"]) {
+        // Bridge expects same keys
+    } else if ([toolName isEqualToString:@"generate_fcpxml"]) {
+        if (mapped[@"project_name"]) {
+            mapped[@"projectName"] = mapped[@"project_name"];
+            [mapped removeObjectForKey:@"project_name"];
+        }
+        if (mapped[@"frame_rate"]) {
+            mapped[@"frameRate"] = mapped[@"frame_rate"];
+            [mapped removeObjectForKey:@"frame_rate"];
+        }
+    } else if ([toolName isEqualToString:@"batch_timeline_actions"]) {
+        // Parse actions JSON string to array if needed
+        if ([mapped[@"actions"] isKindOfClass:[NSString class]]) {
+            NSData *d = [(NSString *)mapped[@"actions"] dataUsingEncoding:NSUTF8StringEncoding];
+            NSArray *arr = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+            if (arr) mapped[@"actions"] = arr;
+        }
+    } else if ([toolName isEqualToString:@"blade_at_times"]) {
+        // Parse times JSON string to array if needed
+        if ([mapped[@"times"] isKindOfClass:[NSString class]]) {
+            NSData *d = [(NSString *)mapped[@"times"] dataUsingEncoding:NSUTF8StringEncoding];
+            NSArray *arr = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+            if (arr) mapped[@"times"] = arr;
+        }
+    } else if ([toolName isEqualToString:@"select_clip_in_lane"]) {
+        // Bridge expects: lane -> lane (same)
+    } else if ([toolName isEqualToString:@"assign_role"]) {
+        // Bridge expects: type -> type, role -> role (same)
+    } else if ([toolName isEqualToString:@"share_project"]) {
+        // Bridge expects: destination -> destination (same)
+    } else if ([toolName isEqualToString:@"apply_transition"]) {
+        if (mapped[@"freeze_extend"]) {
+            mapped[@"freezeExtend"] = mapped[@"freeze_extend"];
+            [mapped removeObjectForKey:@"freeze_extend"];
+        }
+    }
+    return mapped;
+}
+
+- (NSDictionary *)gemmaExecuteTool:(NSString *)toolName arguments:(NSDictionary *)args {
+    NSDictionary *bridgeMap = SpliceKit_gemmaToolBridgeMap();
+    NSString *bridgeMethod = bridgeMap[toolName];
+    if (!bridgeMethod) {
+        return @{@"error": [NSString stringWithFormat:@"Unknown tool: %@", toolName]};
+    }
+
+    NSDictionary *mappedArgs = SpliceKit_gemmaMapArgs(toolName, args);
+    NSDictionary *request = @{@"method": bridgeMethod, @"params": mappedArgs};
+    NSDictionary *result = SpliceKit_handleRequest(request);
+    return result ?: @{@"error": @"No response from bridge"};
+}
+
+- (void)updateGemmaStatus:(NSString *)status {
+    self.gemmaCurrentTask = status;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.aiLoading && self.aiEngine == SpliceKitAIEngineGemma4) {
+            self.statusLabel.stringValue = status;
+            // Also refresh the AI loading row in the table view
+            if (self.tableView.numberOfRows > 0) {
+                [self.tableView reloadDataForRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                         columnIndexes:[NSIndexSet indexSetWithIndex:0]];
+            }
+        }
+    });
+}
+
+static NSString * const kGemmaSystemPrompt =
+    @"You are a Final Cut Pro editing assistant with direct programmatic control via tools.\n"
+    @"Execute edits by calling tools. Never describe steps — just do them.\n\n"
+    @"Rules:\n"
+    @"1. Call get_timeline_clips first if you need to know what's on the timeline\n"
+    @"2. Use seek_to_time(seconds) for playhead positioning — it's instant\n"
+    @"3. Most edits require selecting a clip first: timeline_action(\"selectClipAtPlayhead\")\n"
+    @"4. If a tool returns an error, try an alternative approach\n"
+    @"5. When done, respond with a brief summary of what you changed\n\n"
+    @"CRITICAL — batch operations:\n"
+    @"For repetitive tasks (cutting at intervals, adding many markers, etc.), ALWAYS use batch tools:\n"
+    @"- blade_at_times([3.0, 6.0, 9.0, ...]) — cut at many times in ONE call\n"
+    @"- add_markers_at_times([...]) — add many markers in ONE call\n"
+    @"- batch_timeline_actions([...]) — chain many actions in ONE call\n"
+    @"Compute all needed times/actions upfront, then execute in a single tool call.\n"
+    @"NEVER loop step-by-step (seek+blade, seek+blade...) — use the batch tool instead.";
+
+- (void)executeNaturalLanguageGemma:(NSString *)query
+                         completion:(void(^)(NSString *summary, NSString *error))completion {
+
+    // Check for repeat pattern first (faster than multi-turn LLM loop)
+    if ([self handleRepeatPatternIfNeeded:query completion:completion]) return;
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSDate *totalStart = [NSDate date];
+        SpliceKit_log(@"[Gemma] ═══ Starting query: \"%@\" ═══", query);
+
+        // 1. Check MLX server availability — auto-start if not running
+        [self updateGemmaStatus:@"Connecting to MLX server..."];
+        NSDate *phaseStart = [NSDate date];
+        if (![self isMLXServerAvailable]) {
+            SpliceKit_log(@"[Gemma] MLX server not available, attempting auto-start...");
+            NSString *startErr = [self autoStartMLXServer];
+            if (startErr) {
+                SpliceKit_log(@"[Gemma] Auto-start failed (%.1fs): %@", -[phaseStart timeIntervalSinceNow], startErr);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    completion(nil, startErr);
+                });
+                return;
+            }
+        }
+        SpliceKit_log(@"[Gemma] MLX server available (%.1fs)", -[phaseStart timeIntervalSinceNow]);
+
+        // 2. Get timeline context
+        [self updateGemmaStatus:@"Reading timeline..."];
+        phaseStart = [NSDate date];
+        NSDictionary *ctx = [self getTimelineContext];
+        SpliceKit_log(@"[Gemma] Timeline context: %.1fs | clips=%@ duration=%@s project=%@",
+                      -[phaseStart timeIntervalSinceNow],
+                      ctx[@"clipCount"] ?: @"?",
+                      ctx[@"durationSeconds"] ?: @"?",
+                      ctx[@"sequenceName"] ?: @"none");
+
+        // 3. Build system prompt with context
+        NSMutableString *systemMsg = [kGemmaSystemPrompt mutableCopy];
+        if (ctx) {
+            [systemMsg appendFormat:@"\n\nCurrent state:\n- Timeline: %.1fs, %@ fps, %@ clips\n- Playhead: %.1fs\n- Project: %@",
+                [ctx[@"durationSeconds"] doubleValue],
+                ctx[@"fps"] ?: @"24",
+                ctx[@"clipCount"] ?: @"?",
+                [ctx[@"playheadSeconds"] doubleValue],
+                ctx[@"sequenceName"] ?: @"(unknown)"];
+        }
+
+        // 4. Init conversation
+        self.gemmaMessages = [NSMutableArray arrayWithArray:@[
+            @{@"role": @"system", @"content": systemMsg},
+            @{@"role": @"user", @"content": query}
+        ]];
+        self.gemmaIterationCount = 0;
+        self.gemmaCancelled = NO;
+
+        // 5. Build tool schema
+        NSArray *tools = [self buildGemmaToolSchema];
+        SpliceKit_log(@"[Gemma] Tool schema: %lu tools", (unsigned long)tools.count);
+
+        // 6. Agent loop
+        NSString *finalSummary = nil;
+        NSString *finalError = nil;
+        NSInteger totalToolCalls = 0;
+        NSTimeInterval totalLLMTime = 0;
+        NSTimeInterval totalToolTime = 0;
+
+        while (self.gemmaIterationCount < self.gemmaMaxIterations && !self.gemmaCancelled) {
+            self.gemmaIterationCount++;
+            [self updateGemmaStatus:[NSString stringWithFormat:@"Thinking... (step %ld) — Esc to stop", (long)self.gemmaIterationCount]];
+
+            SpliceKit_log(@"[Gemma] ─── Step %ld: calling LLM (%lu messages) ───",
+                          (long)self.gemmaIterationCount, (unsigned long)self.gemmaMessages.count);
+            NSDate *llmStart = [NSDate date];
+            NSDictionary *response = [self gemmaCallMLX:self.gemmaMessages tools:tools];
+            NSTimeInterval llmElapsed = -[llmStart timeIntervalSinceNow];
+            totalLLMTime += llmElapsed;
+
+            if (response[@"error"]) {
+                SpliceKit_log(@"[Gemma] Step %ld: LLM error after %.1fs: %@",
+                              (long)self.gemmaIterationCount, llmElapsed, response[@"error"]);
+                finalError = response[@"error"];
+                break;
+            }
+
+            // Extract choices[0].message
+            NSArray *choices = response[@"choices"];
+            if (!choices || choices.count == 0) {
+                finalError = @"Empty response from model";
+                SpliceKit_log(@"[Gemma] Step %ld: empty choices array", (long)self.gemmaIterationCount);
+                break;
+            }
+            NSDictionary *message = choices[0][@"message"];
+            if (!message) {
+                finalError = @"No message in response";
+                break;
+            }
+
+            NSString *finishReason = choices[0][@"finish_reason"] ?: @"?";
+            NSArray *toolCalls = message[@"tool_calls"];
+
+            // If no tool calls, the model is done — extract text response
+            if (!toolCalls || toolCalls.count == 0) {
+                finalSummary = message[@"content"] ?: @"Done.";
+                SpliceKit_log(@"[Gemma] Step %ld: text response (finish=%@): %@",
+                              (long)self.gemmaIterationCount, finishReason,
+                              finalSummary.length > 200 ? [finalSummary substringToIndex:200] : finalSummary);
+                break;
+            }
+
+            SpliceKit_log(@"[Gemma] Step %ld: %lu tool call(s) (finish=%@, LLM=%.1fs)",
+                          (long)self.gemmaIterationCount, (unsigned long)toolCalls.count, finishReason, llmElapsed);
+
+            // Append assistant message (with tool_calls) to conversation
+            [self.gemmaMessages addObject:message];
+
+            // Execute each tool call
+            for (NSDictionary *toolCall in toolCalls) {
+                if (self.gemmaCancelled) break;
+
+                NSDictionary *function = toolCall[@"function"];
+                NSString *toolName = function[@"name"];
+                NSString *toolCallId = toolCall[@"id"] ?: [[NSUUID UUID] UUIDString];
+
+                // Parse arguments (may be string or dict)
+                NSDictionary *args = nil;
+                id argsRaw = function[@"arguments"];
+                if ([argsRaw isKindOfClass:[NSString class]]) {
+                    NSData *argsData = [(NSString *)argsRaw dataUsingEncoding:NSUTF8StringEncoding];
+                    if (argsData) {
+                        args = [NSJSONSerialization JSONObjectWithData:argsData options:0 error:nil];
+                    }
+                } else if ([argsRaw isKindOfClass:[NSDictionary class]]) {
+                    args = argsRaw;
+                }
+
+                [self updateGemmaStatus:[NSString stringWithFormat:@"Calling %@...", toolName]];
+                totalToolCalls++;
+
+                NSDate *toolStart = [NSDate date];
+                NSDictionary *toolResult = [self gemmaExecuteTool:toolName arguments:args];
+                NSTimeInterval toolElapsed = -[toolStart timeIntervalSinceNow];
+                totalToolTime += toolElapsed;
+
+                BOOL toolHadError = toolResult[@"error"] != nil;
+                SpliceKit_log(@"[Gemma]   tool[%ld] %@(%@) → %.3fs %@",
+                              (long)totalToolCalls, toolName, args ?: @{}, toolElapsed,
+                              toolHadError ? [NSString stringWithFormat:@"ERROR: %@", toolResult[@"error"]] : @"ok");
+
+                // Serialize result for the model
+                NSString *resultStr = nil;
+                NSData *resultData = [NSJSONSerialization dataWithJSONObject:toolResult options:0 error:nil];
+                if (resultData) {
+                    resultStr = [[NSString alloc] initWithData:resultData encoding:NSUTF8StringEncoding];
+                } else {
+                    resultStr = [toolResult description];
+                }
+
+                // Truncate very large results to stay within context
+                if (resultStr.length > 8000) {
+                    SpliceKit_log(@"[Gemma]   tool result truncated: %lu -> 7900 chars", (unsigned long)resultStr.length);
+                    resultStr = [[resultStr substringToIndex:7900] stringByAppendingString:@"...(truncated)"];
+                }
+
+                // Append tool result message
+                [self.gemmaMessages addObject:@{
+                    @"role": @"tool",
+                    @"tool_call_id": toolCallId,
+                    @"content": resultStr
+                }];
+            }
+        }
+
+        if (self.gemmaCancelled) {
+            finalError = @"Cancelled";
+        } else if (!finalSummary && !finalError) {
+            finalSummary = [NSString stringWithFormat:@"Completed %ld steps (max iterations reached)",
+                           (long)self.gemmaIterationCount];
+        }
+
+        NSTimeInterval totalElapsed = -[totalStart timeIntervalSinceNow];
+        SpliceKit_log(@"[Gemma] ═══ Done: %.1fs total | %ld steps | %ld tool calls | LLM=%.1fs Tool=%.1fs | %@ ═══",
+                      totalElapsed, (long)self.gemmaIterationCount, (long)totalToolCalls,
+                      totalLLMTime, totalToolTime,
+                      finalError ? [NSString stringWithFormat:@"ERROR: %@", finalError] : @"OK");
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(finalSummary, finalError);
+        });
+    });
+}
+
+#pragma mark - Apple Intelligence+ (Agentic with FoundationModels Tools)
+
+- (NSString *)buildAgenticSwiftScript:(NSString *)query timelineContext:(NSDictionary *)ctx {
+    NSString *escaped = [[query stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
+                          stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+
+    NSString *timelineInfo = @"No timeline info available.";
+    if (ctx) {
+        double duration = [ctx[@"durationSeconds"] doubleValue];
+        double playhead = [ctx[@"playheadSeconds"] doubleValue];
+        int fps = [ctx[@"fps"] intValue] ?: 24;
+        int clips = [ctx[@"clipCount"] intValue];
+        NSString *name = ctx[@"sequenceName"] ?: @"unknown";
+        timelineInfo = [NSString stringWithFormat:
+            @"Timeline: %.1fs, %d fps, %d clips, playhead at %.1fs, project: %@",
+            duration, fps, clips, playhead, name];
+    }
+    NSString *escapedCtx = [[timelineInfo stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
+                             stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+
+    // Build a compact Swift script — Apple Intelligence has a small context window
+    // so we use minimal tool descriptions and only the most essential tools.
+    return [NSString stringWithFormat:@
+        "import Foundation\n"
+        "import FoundationModels\n"
+        "\n"
+        "func bridge(_ method: String, _ params: [String: Any] = [:]) -> String {\n"
+        "    let req: [String: Any] = [\"jsonrpc\":\"2.0\",\"id\":1,\"method\":method,\"params\":params]\n"
+        "    guard let d = try? JSONSerialization.data(withJSONObject: req) else { return \"error\" }\n"
+        "    var m = d; m.append(0x0a)\n"
+        "    let fd = socket(AF_INET, SOCK_STREAM, 0)\n"
+        "    guard fd >= 0 else { return \"error\" }\n"
+        "    var a = sockaddr_in()\n"
+        "    a.sin_family = sa_family_t(AF_INET)\n"
+        "    a.sin_port = UInt16(9876).bigEndian\n"
+        "    a.sin_addr.s_addr = inet_addr(\"127.0.0.1\")\n"
+        "    let ok = withUnsafePointer(to: &a) { p in\n"
+        "        p.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }\n"
+        "    }\n"
+        "    guard ok == 0 else { close(fd); return \"error\" }\n"
+        "    m.withUnsafeBytes { _ = write(fd, $0.baseAddress!, m.count) }\n"
+        "    var b = [UInt8](repeating: 0, count: 65536)\n"
+        "    var r = Data()\n"
+        "    while true { let n = read(fd, &b, b.count); if n <= 0 { break }; r.append(contentsOf: b[0..<n]); if r.contains(0x0a) { break } }\n"
+        "    close(fd)\n"
+        "    guard let j = try? JSONSerialization.jsonObject(with: r) as? [String:Any], let res = j[\"result\"] else {\n"
+        "        if let j = try? JSONSerialization.jsonObject(with: r) as? [String:Any], let e = j[\"error\"] as? [String:Any] { return \"error: \\(e[\"message\"] ?? \"\")\" }\n"
+        "        return \"error\"\n"
+        "    }\n"
+        "    guard let rd = try? JSONSerialization.data(withJSONObject: res) else { return \"{}\" }\n"
+        "    var s = String(data: rd, encoding: .utf8) ?? \"{}\"\n"
+        "    if s.count > 4000 { s = String(s.prefix(3900)) + \"...\" }\n"
+        "    return s\n"
+        "}\n"
+        "\n"
+        "@Generable struct ActArgs { @Guide(description: \"blade(=cut/split),delete,undo,redo,selectClipAtPlayhead,selectAll,addMarker,addChapterMarker,nextEdit,previousEdit,addTransition,addColorBoard,retimeSlow50,retimeFast2x,freezeFrame,addBasicTitle,removeEffects,showPreferences(=settings/preferences)\") var action: String }\n"
+        "@Generable struct SeekArgs { @Guide(description: \"seconds\") var seconds: Double }\n"
+        "@Generable struct ClipArgs { @Guide(description: \"max clips\") var limit: Int? }\n"
+        "@Generable struct RepeatArgs {\n"
+        "    @Guide(description: \"Action to repeat: blade, addMarker, addChapterMarker\") var action: String\n"
+        "    @Guide(description: \"Interval in seconds between each action\") var interval: Double\n"
+        "    @Guide(description: \"Total duration in seconds (0 = auto from timeline)\") var duration: Double?\n"
+        "}\n"
+        "@Generable struct FxArgs { @Guide(description: \"effect name\") var name: String }\n"
+        "@Generable struct MenuArgs { @Guide(description: \"Menu path, e.g. ['File','New','Project...']\") var path: [String] }\n"
+        "\n"
+        "struct Act: Tool {\n"
+        "    let name = \"edit\"\n"
+        "    let description = \"Timeline action. IMPORTANT: cut/split = blade (NOT delete)\"\n"
+        "    func call(arguments: ActArgs) async throws -> String { bridge(\"timeline.action\", [\"action\": arguments.action]) }\n"
+        "}\n"
+        "struct Seek: Tool {\n"
+        "    let name = \"seek\"\n"
+        "    let description = \"Move playhead to time in seconds\"\n"
+        "    func call(arguments: SeekArgs) async throws -> String { bridge(\"playback.seekToTime\", [\"seconds\": arguments.seconds]) }\n"
+        "}\n"
+        "struct Clips: Tool {\n"
+        "    let name = \"clips\"\n"
+        "    let description = \"Get timeline clips with positions and durations\"\n"
+        "    func call(arguments: ClipArgs) async throws -> String { bridge(\"timeline.getDetailedState\", [\"limit\": arguments.limit ?? 30]) }\n"
+        "}\n"
+        "struct Repeat: Tool {\n"
+        "    let name = \"repeat_action\"\n"
+        "    let description = \"Repeat an action at regular intervals. Use for: cut/blade/marker every N seconds.\"\n"
+        "    func call(arguments: RepeatArgs) async throws -> String {\n"
+        "        let state = bridge(\"timeline.getDetailedState\", [\"limit\": 1])\n"
+        "        var dur = arguments.duration ?? 0\n"
+        "        if dur <= 0, let d = try? JSONSerialization.jsonObject(with: Data(state.utf8)) as? [String:Any],\n"
+        "           let ds = d[\"duration\"] as? [String:Any], let s = ds[\"seconds\"] as? Double { dur = s }\n"
+        "        if dur <= 0 { return \"error: could not determine timeline duration\" }\n"
+        "        var t = arguments.interval; var count = 0\n"
+        "        while t < dur {\n"
+        "            _ = bridge(\"playback.seekToTime\", [\"seconds\": t])\n"
+        "            _ = bridge(\"timeline.action\", [\"action\": arguments.action])\n"
+        "            count += 1; t += arguments.interval\n"
+        "        }\n"
+        "        return \"Applied \\(arguments.action) \\(count) times at \\(arguments.interval)s intervals\"\n"
+        "    }\n"
+        "}\n"
+        "struct Fx: Tool {\n"
+        "    let name = \"effect\"\n"
+        "    let description = \"Apply effect to selected clip\"\n"
+        "    func call(arguments: FxArgs) async throws -> String { bridge(\"effects.apply\", [\"name\": arguments.name]) }\n"
+        "}\n"
+        "struct Menu: Tool {\n"
+        "    let name = \"menu\"\n"
+        "    let description = \"Execute any menu command by path\"\n"
+        "    func call(arguments: MenuArgs) async throws -> String { bridge(\"menu.execute\", [\"menuPath\": arguments.path]) }\n"
+        "}\n"
+        "\n"
+        "Task {\n"
+        "    do {\n"
+        "        let s = LanguageModelSession(tools: [Act(), Seek(), Clips(), Repeat(), Fx(), Menu()],\n"
+        "            instructions: \"You control Final Cut Pro via tools. %@ IMPORTANT: cut/split means blade NOT delete. For cut/blade/marker every N seconds use repeat_action. Summarize what you did.\")\n"
+        "        let r = try await s.respond(to: \"%@\")\n"
+        "        print(r.content ?? \"Done.\")\n"
+        "    } catch { print(\"Error: \\(error.localizedDescription)\") }\n"
+        "    exit(0)\n"
+        "}\n"
+        "dispatchMain()\n",
+        escapedCtx, escaped];
+}
+
+// Shared repeat pattern handler — returns YES if the pattern was detected and handled
+- (BOOL)handleRepeatPatternIfNeeded:(NSString *)query
+                         completion:(void(^)(NSString *summary, NSString *error))completion {
+    NSString *lq = [query lowercaseString];
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:
+        @"(?:cut|blade|split|mark|marker)s?.*ever(?:y)?\\s+(\\d+\\.?\\d*)\\s*(?:sec|s\\b)"
+        options:NSRegularExpressionCaseInsensitive error:nil];
+    NSTextCheckingResult *match = [regex firstMatchInString:lq options:0 range:NSMakeRange(0, lq.length)];
+    if (!match) return NO;
+
+    NSString *intervalStr = [lq substringWithRange:[match rangeAtIndex:1]];
+    double interval = [intervalStr doubleValue];
+    BOOL isMarker = [lq containsString:@"mark"];
+    NSString *action = isMarker ? @"addMarker" : @"blade";
+    if ([lq containsString:@"chapter"]) action = @"addChapterMarker";
+    else if ([lq containsString:@"todo"]) action = @"addTodoMarker";
+
+    SpliceKit_log(@"[AI] Intercepted repeat pattern: %@ every %.1fs", action, interval);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        [self updateGemmaStatus:[NSString stringWithFormat:@"Executing %@ every %.0fs...", action, interval]];
+
+        extern NSDictionary *SpliceKit_handleTimelineGetDetailedState(NSDictionary *params);
+        __block double duration = 0;
+        SpliceKit_executeOnMainThread(^{
+            @try {
+                NSDictionary *state = SpliceKit_handleTimelineGetDetailedState(@{@"limit": @(200)});
+                duration = [state[@"duration"][@"seconds"] doubleValue];
+                if (duration <= 0) {
+                    for (NSDictionary *item in state[@"items"]) {
+                        double end = [item[@"endTime"][@"seconds"] doubleValue];
+                        if (end > duration) duration = end;
+                    }
+                }
+            } @catch (NSException *e) {}
+        });
+        if (duration <= 0) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion(nil, @"Could not determine timeline duration");
+            });
+            return;
+        }
+
+        NSInteger count = 0;
+        for (double t = interval; t < duration; t += interval) {
+            NSDictionary *seekReq = @{@"method": @"playback.seekToTime", @"params": @{@"seconds": @(t)}};
+            SpliceKit_handleRequest(seekReq);
+            NSDictionary *actionReq = @{@"method": @"timeline.action", @"params": @{@"action": action}};
+            SpliceKit_handleRequest(actionReq);
+            count++;
+        }
+
+        NSString *summary = [NSString stringWithFormat:@"Applied %@ %ld times at %.0fs intervals (%.1fs timeline)",
+                             action, (long)count, interval, duration];
+        SpliceKit_log(@"[AI] Repeat done: %@", summary);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(summary, nil);
+        });
+    });
+    return YES;
+}
+
+- (void)executeNaturalLanguageAppleAgentic:(NSString *)query
+                                completion:(void(^)(NSString *summary, NSString *error))completion {
+
+    // Check for repeat pattern first (model can't reliably loop)
+    if ([self handleRepeatPatternIfNeeded:query completion:completion]) return;
+
+    NSDate *totalStart = [NSDate date];
+    SpliceKit_log(@"[AppleAI+] ═══ Starting query: \"%@\" ═══", query);
+
+    // Get timeline context
+    NSDate *phaseStart = [NSDate date];
+    NSDictionary *timelineCtx = [self getTimelineContext];
+    SpliceKit_log(@"[AppleAI+] Timeline context: %.1fs | clips=%@ duration=%@s",
+                  -[phaseStart timeIntervalSinceNow],
+                  timelineCtx[@"clipCount"] ?: @"?",
+                  timelineCtx[@"durationSeconds"] ?: @"?");
+
+    // Build script
+    phaseStart = [NSDate date];
+    NSString *swiftScript = [self buildAgenticSwiftScript:query timelineContext:timelineCtx];
+    SpliceKit_log(@"[AppleAI+] Script built: %.3fs (%lu bytes)", -[phaseStart timeIntervalSinceNow], (unsigned long)swiftScript.length);
+
+    // Write to temp file
+    NSString *scriptPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"splicekit_ai_agentic.swift"];
+    NSError *writeError = nil;
+    [swiftScript writeToFile:scriptPath atomically:YES encoding:NSUTF8StringEncoding error:&writeError];
+    if (writeError) {
+        SpliceKit_log(@"[AppleAI+] Failed to write script: %@", writeError.localizedDescription);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(nil, [NSString stringWithFormat:@"Failed to write script: %@", writeError.localizedDescription]);
+        });
+        return;
+    }
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        [self updateGemmaStatus:@"Launching Apple Intelligence+..."];
+        NSDate *swiftStart = [NSDate date];
+        NSTask *task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/swift"];
+        task.arguments = @[scriptPath];
+
+        NSPipe *outputPipe = [NSPipe pipe];
+        NSPipe *errorPipe = [NSPipe pipe];
+        task.standardOutput = outputPipe;
+        task.standardError = errorPipe;
+
+        NSError *launchError = nil;
+        [task launchAndReturnError:&launchError];
+        if (launchError) {
+            SpliceKit_log(@"[AppleAI+] Failed to launch: %@", launchError.localizedDescription);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion(nil, [NSString stringWithFormat:@"Failed to launch: %@", launchError.localizedDescription]);
+            });
+            return;
+        }
+
+        SpliceKit_log(@"[AppleAI+] Swift process launched (pid=%d)", task.processIdentifier);
+        [self updateGemmaStatus:@"Apple Intelligence+ thinking..."];
+        [task waitUntilExit];
+        NSTimeInterval swiftElapsed = -[swiftStart timeIntervalSinceNow];
+
+        NSData *outputData = [outputPipe.fileHandleForReading readDataToEndOfFile];
+        NSData *errorData = [errorPipe.fileHandleForReading readDataToEndOfFile];
+        NSString *output = [[NSString alloc] initWithData:outputData encoding:NSUTF8StringEncoding];
+        NSString *errorOutput = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
+
+        NSTimeInterval totalElapsed = -[totalStart timeIntervalSinceNow];
+        SpliceKit_log(@"[AppleAI+] Swift exited: status=%d, elapsed=%.1fs, output=%lu bytes, stderr=%lu bytes",
+                      task.terminationStatus, swiftElapsed,
+                      (unsigned long)outputData.length, (unsigned long)errorData.length);
+
+        if (task.terminationStatus != 0) {
+            SpliceKit_log(@"[AppleAI+] Script failed: %@", errorOutput);
+            SpliceKit_log(@"[AppleAI+] ═══ Done: %.1fs total | FAILED ═══", totalElapsed);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSString *errMsg = errorOutput.length > 200 ? [errorOutput substringToIndex:200] : errorOutput;
+                completion(nil, [NSString stringWithFormat:@"Apple Intelligence+ failed: %@", errMsg]);
+            });
+            return;
+        }
+
+        NSString *result = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        // Treat "null" output as success with no text (model completed tools but didn't summarize)
+        if (result.length == 0 || [result isEqualToString:@"null"] || [result isEqualToString:@"(null)"]) {
+            result = @"Done.";
+        }
+        // Strip "Error: " prefix if present
+        if ([result hasPrefix:@"Error: "]) {
+            SpliceKit_log(@"[AppleAI+] ═══ Done: %.1fs total | ERROR: %@ ═══", totalElapsed, result);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion(nil, result);
+            });
+            return;
+        }
+
+        SpliceKit_log(@"[AppleAI+] ═══ Done: %.1fs total (swift=%.1fs) | OK: %@ ═══",
+                      totalElapsed, swiftElapsed,
+                      result.length > 200 ? [result substringToIndex:200] : result);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(result.length > 0 ? result : @"Done.", nil);
+        });
+    });
+}
+
+- (void)setAiEngine:(SpliceKitAIEngine)aiEngine {
+    _aiEngine = aiEngine;
+    // Keep the popup in sync whenever the property changes (API, init, or UI)
+    if (self.aiEnginePopup && self.aiEnginePopup.indexOfSelectedItem != (NSInteger)aiEngine) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.aiEnginePopup selectItemAtIndex:(NSInteger)aiEngine];
+        });
+    }
+}
+
+- (void)aiEngineChanged:(id)sender {
+    NSInteger idx = self.aiEnginePopup.indexOfSelectedItem;
+    self.aiEngine = (SpliceKitAIEngine)idx;
+    [[NSUserDefaults standardUserDefaults] setInteger:self.aiEngine forKey:@"SpliceKitAIEngine"];
+    [self updateStatusLabel];
 }
 
 @end

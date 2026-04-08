@@ -63,11 +63,12 @@ typedef struct {
 //
 static NSString * const kWP_ContentPositionKey = @"9999/10003/1/100/101";
 static NSString * const kWP_ContentOpacityKey  = @"9999/10003/1/200/202";
-// Caption Large clone: Main(999166631) → Title(999166633) → behaviors → SeqText(500001)
-static NSString * const kWP_CustomSpeedKey     = @"9999/999166631/999166633/4/500001/201/209";
+// Neon Grow TM4C key path (mCaptions template with Sequence Text behaviors)
+// Content(10003) → TextGroup01-03 → Text(10061) → SeqText(3291121706)
+static NSString * const kWP_CustomSpeedKey     = @"9999/10003/3336225139/3336225138/3336087544/10061/4/3291121706/201/209";
 
-static NSString * const kWP_TemplateUID  = @"~/Titles.localized/SpliceKit/SpliceKit Caption/SpliceKit Caption.moti";
-static NSString * const kWP_TemplateName = @"SpliceKit Caption";
+// All caption titles now use FCP's built-in Basic Title template.
+// No custom Motion template (.moti) is required.
 
 // Content opacity fade-out: 5 frames before clip end
 static const double kWP_FadeOutDuration = 5.0 / 30.0;
@@ -1755,24 +1756,14 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     SpliceKitCaptionStyle *s = self.style;
     int fdN = self.fdNum, fdD = self.fdDen;
 
-    // ---------------------------------------------------------------
-    // Step 0: Remember the user's current sequence so we can switch back.
-    // Store both the object reference AND display name since the pointer
-    // may become stale after FCPXML import modifies the object graph.
-    // ---------------------------------------------------------------
-    __block id userSequence = nil;
-    __block NSString *userSequenceName = nil;
+    // Verify a timeline is open
+    __block BOOL hasTimeline = NO;
     SpliceKit_executeOnMainThread(^{
-        userSequence = SpliceKitCaption_currentSequence();
-        if (userSequence) {
-            userSequenceName = ((id (*)(id, SEL))objc_msgSend)(userSequence,
-                NSSelectorFromString(@"displayName"));
-        }
+        hasTimeline = (SpliceKit_getActiveTimelineModule() != nil);
     });
-    if (!userSequence) {
+    if (!hasTimeline) {
         return @{@"error": @"No active timeline — open a project first"};
     }
-    SpliceKit_log(@"[Captions] User's project: '%@'", userSequenceName);
 
     double totalDuration = 0;
     for (SpliceKitCaptionSegment *seg in self.mutableSegments) {
@@ -1781,10 +1772,8 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     totalDuration += 1.0;
 
     // ---------------------------------------------------------------
-    // Step 1: Build mCaptions-style FCPXML — gap with connected titles in lane 1.
+    // Step 1: Build FCPXML with titles in spine (gap spacers between).
     // ---------------------------------------------------------------
-    NSString *tempName = [NSString stringWithFormat:@"%@ %u",
-        kCaptionImportProjectPrefix, (unsigned)(arc4random() % 10000)];
     NSString *totalDurStr = SpliceKitCaption_durRational(totalDuration, fdN, fdD);
 
     BOOL useWordProgress = s.wordByWordHighlight;
@@ -1792,65 +1781,86 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     NSMutableString *xml = [NSMutableString string];
     [xml appendString:@"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"];
     [xml appendString:@"<!DOCTYPE fcpxml>\n\n"];
-    [xml appendFormat:@"<fcpxml version=\"%@\">\n", useWordProgress ? @"1.14" : @"1.11"];
+    [xml appendString:@"<fcpxml version=\"1.14\">\n"];
     [xml appendString:@"    <resources>\n"];
     [xml appendFormat:@"        <format id=\"r1\" name=\"FFVideoFormat%dx%dp%d\" "
         @"frameDuration=\"%d/%ds\" width=\"%d\" height=\"%d\"/>\n",
         self.videoWidth, self.videoHeight, (int)round(self.frameRate),
         fdN, fdD, self.videoWidth, self.videoHeight];
-    // Word-progress mode uses the Neon Grow TM4C template (has Sequence Text behaviors).
-    // Standard mode uses Caption Large. ~/Titles.localized/ prefix resolves correctly.
-    if (useWordProgress) {
-        [xml appendFormat:@"        <effect id=\"r2\" name=\"%@\" uid=\"%@\"/>\n",
-            kWP_TemplateName, kWP_TemplateUID];
-    } else {
-        [xml appendString:@"        <effect id=\"r2\" name=\"Caption Large\" "
-            @"uid=\"~/Titles.localized/SpliceKit/Caption Large/Caption Large.moti\"/>\n"];
-    }
+    // Always use FCP's built-in Basic Title (available on all installations).
+    // Word-by-word highlighting is achieved via per-word <text-style> refs.
+    // FCP 12 requires FCPXML v1.14 (v1.11 is not in its readable types).
+    // .../Titles.localized/ resolves to FCP's built-in template location.
+    [xml appendString:@"        <effect id=\"r2\" name=\"Basic Title\" "
+        @"uid=\".../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti\"/>\n"];
     [xml appendString:@"    </resources>\n"];
     [xml appendString:@"    <library>\n"];
-    [xml appendFormat:@"        <event name=\"SpliceKit Captions\">\n"];
-    [xml appendFormat:@"            <project name=\"%@\">\n", tempName];
+    [xml appendString:@"        <event name=\"SpliceKit Captions\">\n"];
+    [xml appendString:@"            <project name=\"SpliceKit Captions\">\n"];
     [xml appendFormat:@"                <sequence format=\"r1\" duration=\"%@\" "
         @"tcStart=\"0s\" tcFormat=\"NDF\" audioLayout=\"stereo\" audioRate=\"48k\">\n", totalDurStr];
+    // Titles go directly in the spine with gap spacers between them.
+    // NOT as connected clips on a single gap — that causes selectAll to
+    // grab the gap too, creating a second lane on paste.
     [xml appendString:@"                    <spine>\n"];
-    [xml appendFormat:@"                        <gap name=\"placeholder\" duration=\"%@\" start=\"0s\">\n",
-        totalDurStr];
 
     int titleCount = 0;
     int tsCounter = 1;
+    NSString *ind = @"                        ";
 
     if (useWordProgress) {
-        // mCaptions-style: one title per segment with word-progress keyframes
+        // Word-by-word: sequential titles in spine with gap spacers
+        double currentTime = 0;
         for (SpliceKitCaptionSegment *seg in self.mutableSegments) {
-            [xml appendString:[self wordProgressTitleXMLForSegment:seg
-                                                        tsCounter:&tsCounter
-                                                           indent:@"                            "
-                                                             lane:@"1"]];
-            titleCount++;
+            for (NSUInteger wi = 0; wi < seg.words.count; wi++) {
+                SpliceKitTranscriptWord *word = seg.words[wi];
+                double titleStart = word.startTime;
+                double titleEnd = (wi + 1 < seg.words.count) ? seg.words[wi + 1].startTime : seg.endTime;
+                double titleDur = MAX(titleEnd - titleStart, (double)fdN / fdD);
+
+                // Gap spacer before this title
+                double gapBefore = titleStart - currentTime;
+                if (gapBefore > 0.001) {
+                    [xml appendFormat:@"%@<gap name=\"S\" duration=\"%@\" start=\"0s\"/>\n",
+                        ind, SpliceKitCaption_durRational(gapBefore, fdN, fdD)];
+                }
+
+                [xml appendString:[self wordHighlightTitleForSegment:seg
+                                                           wordIndex:wi
+                                                           tsCounter:&tsCounter
+                                                              indent:ind
+                                                            duration:titleDur]];
+                titleCount++;
+                currentTime = titleStart + titleDur;
+            }
         }
     } else {
-        // Standard: one simple title per segment
+        // Standard: one simple title per segment with gap spacers
+        double currentTime = 0;
         for (SpliceKitCaptionSegment *seg in self.mutableSegments) {
             double segDur = MAX(seg.duration, 0.1);
             NSString *text = s.allCaps ? [seg.text uppercaseString] : seg.text;
             NSString *tsID = [NSString stringWithFormat:@"ts%d", tsCounter++];
             NSString *tsDef = [self textStyleXMLWithID:tsID color:s.textColor isHighlight:NO];
-            NSString *offsetStr = SpliceKitCaption_durRational(seg.startTime, fdN, fdD);
             NSString *durStr = SpliceKitCaption_durRational(segDur, fdN, fdD);
 
-            [xml appendFormat:@"                            <title ref=\"r2\" lane=\"1\" "
-                @"offset=\"%@\" name=\"Cap%03lu\" duration=\"%@\" start=\"3600s\">\n",
-                offsetStr, (unsigned long)seg.segmentIndex + 1, durStr];
-            [xml appendFormat:@"                                <text><text-style ref=\"%@\">%@</text-style></text>\n",
-                tsID, SpliceKitCaption_escapeXML(text)];
-            [xml appendFormat:@"                                %@\n", tsDef];
-            [xml appendString:@"                            </title>\n"];
+            double gapBefore = seg.startTime - currentTime;
+            if (gapBefore > 0.001) {
+                [xml appendFormat:@"%@<gap name=\"S\" duration=\"%@\" start=\"0s\"/>\n",
+                    ind, SpliceKitCaption_durRational(gapBefore, fdN, fdD)];
+            }
+
+            [xml appendFormat:@"%@<title ref=\"r2\" name=\"Cap%03lu\" duration=\"%@\" start=\"3600s\">\n",
+                ind, (unsigned long)seg.segmentIndex + 1, durStr];
+            [xml appendFormat:@"%@    <text><text-style ref=\"%@\">%@</text-style></text>\n",
+                ind, tsID, SpliceKitCaption_escapeXML(text)];
+            [xml appendFormat:@"%@    %@\n", ind, tsDef];
+            [xml appendString:[NSString stringWithFormat:@"%@</title>\n", ind]];
             titleCount++;
+            currentTime = seg.startTime + segDur;
         }
     }
 
-    [xml appendString:@"                        </gap>\n"];
     [xml appendString:@"                    </spine>\n"];
     [xml appendString:@"                </sequence>\n"];
     [xml appendString:@"            </project>\n"];
@@ -1865,181 +1875,62 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     [xml writeToFile:xmlPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
     // ---------------------------------------------------------------
-    // Step 2: Import via FFXMLTranslationTask — creates temp project in library.
+    // Step 2: Write FCPXML to pasteboard, seek to 0, call pasteAnchored:.
+    // The pasteAnchored: swizzle detects FCPXML and calls
+    // SpliceKit_convertFCPXMLToNativeClipboard() which handles the full
+    // import-switch-copy-switchback-cleanup pipeline behind screen freeze.
     // ---------------------------------------------------------------
-    NSDictionary *importResult = SpliceKit_handlePasteboardImportXML(@{@"xml": xml});
-    if (importResult[@"error"]) {
-        return @{@"error": [NSString stringWithFormat:@"Import failed: %@", importResult[@"error"]],
-                 @"fcpxmlPath": xmlPath};
-    }
-    SpliceKit_log(@"[Captions] Import OK — waiting for temp project");
-
-    // Wait for temp project to appear in library
-    BOOL foundTemp = SpliceKitCaption_pollMainThread(^{
-        return (BOOL)(SpliceKitCaption_findSequenceByPrefix(tempName) != nil);
-    }, 5.0, 0.3);
-    if (!foundTemp) {
-        return @{@"error": @"Temp caption project not found after import",
-                 @"fcpxmlPath": xmlPath};
-    }
-
-    // ---------------------------------------------------------------
-    // Step 3: Load temp project → select all → copy to clipboard.
-    // ---------------------------------------------------------------
-    __block id tempSeq = nil;
-    __block BOOL copyOK = NO;
-
+    __block BOOL pasteHandled = NO;
     SpliceKit_executeOnMainThread(^{
-        tempSeq = SpliceKitCaption_findSequenceByPrefix(tempName);
-        if (!tempSeq) return;
+        // Write FCPXML to pasteboard
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        [pb clearContents];
+        NSString *xmlType = ((id (*)(id, SEL))objc_msgSend)(
+            objc_getClass("IXXMLPasteboardType"), NSSelectorFromString(@"generic"));
+        [pb setString:xml forType:xmlType];
+        SpliceKit_log(@"[Captions] Wrote %lu bytes FCPXML to pasteboard", (unsigned long)xml.length);
 
-        id appDelegate = [NSApp delegate];
-        id editorContainer = ((id (*)(id, SEL))objc_msgSend)(appDelegate,
-            NSSelectorFromString(@"activeEditorContainer"));
-        if (!editorContainer) return;
-
-        SEL loadSel = NSSelectorFromString(@"loadEditorForSequence:");
-        if ([editorContainer respondsToSelector:loadSel]) {
-            ((void (*)(id, SEL, id))objc_msgSend)(editorContainer, loadSel, tempSeq);
-        }
-    });
-
-    // Wait for temp timeline to become active (match by exact temp name)
-    BOOL tempReady = SpliceKitCaption_pollMainThread(^{
-        id tm = SpliceKit_getActiveTimelineModule();
-        if (!tm) return NO;
-        id seq = ((id (*)(id, SEL))objc_msgSend)(tm, NSSelectorFromString(@"sequence"));
-        if (!seq) return NO;
-        NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq, NSSelectorFromString(@"displayName"));
-        return (BOOL)(name && [name isEqualToString:tempName]);
-    }, 5.0, 0.3);
-
-    if (!tempReady) {
-        SpliceKit_log(@"[Captions] Warning: temp project '%@' may not be fully loaded", tempName);
-    }
-
-    // Give FCP time to finish loading the timeline UI
-    [NSThread sleepForTimeInterval:0.5];
-
-    // Select all items in temp project, then copy to clipboard
-    SpliceKit_executeOnMainThread(^{
-        [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"selectAll:")
-                                                   to:nil from:nil];
-    });
-    [NSThread sleepForTimeInterval:0.1];
-
-    SpliceKit_executeOnMainThread(^{
-        [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"copy:")
-                                                   to:nil from:nil];
-        copyOK = YES;
-    });
-    [NSThread sleepForTimeInterval:0.1];
-
-    SpliceKit_log(@"[Captions] Copied %d titles from temp project to clipboard", titleCount);
-
-    // ---------------------------------------------------------------
-    // Step 4: Switch back to user's project → seek to start → paste as connected.
-    // The saved userSequence pointer should still be valid — FCPXML import
-    // creates NEW sequences, it doesn't mutate existing ones. But we verify
-    // by display name as a safety check.
-    // ---------------------------------------------------------------
-    SpliceKit_executeOnMainThread(^{
-        id appDelegate = [NSApp delegate];
-        id editorContainer = ((id (*)(id, SEL))objc_msgSend)(appDelegate,
-            NSSelectorFromString(@"activeEditorContainer"));
-        if (editorContainer) {
-            SEL loadSel = NSSelectorFromString(@"loadEditorForSequence:");
-            if ([editorContainer respondsToSelector:loadSel]) {
-                ((void (*)(id, SEL, id))objc_msgSend)(editorContainer, loadSel, userSequence);
-                SpliceKit_log(@"[Captions] loadEditorForSequence: called for '%@'", userSequenceName);
-            }
-        }
-    });
-
-    // Wait for user's timeline to become active — match by name since pointer
-    // comparison can fail if the object graph was reorganized during import.
-    BOOL userReady = SpliceKitCaption_pollMainThread(^{
-        id tm = SpliceKit_getActiveTimelineModule();
-        if (!tm) return NO;
-        id seq = ((id (*)(id, SEL))objc_msgSend)(tm, NSSelectorFromString(@"sequence"));
-        if (!seq) return NO;
-        NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq, NSSelectorFromString(@"displayName"));
-        // Match by name AND verify it's NOT the temp project
-        return (BOOL)(name && [name isEqualToString:userSequenceName]
-                      && ![name hasPrefix:kCaptionImportProjectPrefix]);
-    }, 5.0, 0.3);
-
-    if (!userReady) {
-        SpliceKit_log(@"[Captions] ERROR: failed to switch back to user project '%@'", userSequenceName);
-        // Don't paste on wrong timeline — abort gracefully
-        SpliceKit_executeOnMainThread(^{
-            if (tempSeq) SpliceKitCaption_deleteSequence(tempSeq);
-        });
-        return @{@"error": [NSString stringWithFormat:
-            @"Failed to switch back to project '%@' — captions imported but not pasted. "
-            @"Use timeline_action('undo') or navigate back to your project manually.",
-            userSequenceName],
-                 @"insertedCount": @(0),
-                 @"fcpxmlPath": xmlPath};
-    }
-    SpliceKit_log(@"[Captions] Switched back to user project '%@'", userSequenceName);
-    [NSThread sleepForTimeInterval:0.5];
-
-    // Seek playhead to time 0 via direct ObjC call (not responder chain which can miss).
-    // Captions must paste at the start so their offsets align with the original timeline.
-    SpliceKit_executeOnMainThread(^{
+        // Seek playhead to time 0
         id tm = SpliceKit_getActiveTimelineModule();
         if (tm) {
-            SpliceKitCaption_CMTime zeroTime = {0, 600, 1, 0}; // 0s, valid
+            SpliceKitCaption_CMTime zeroTime = {0, 600, 1, 0};
             SEL setSel = NSSelectorFromString(@"setPlayheadTime:");
             if ([tm respondsToSelector:setSel]) {
                 ((void (*)(id, SEL, SpliceKitCaption_CMTime))objc_msgSend)(tm, setSel, zeroTime);
-                SpliceKit_log(@"[Captions] Playhead set to 0s via setPlayheadTime:");
-            } else {
-                // Fallback to responder chain
-                [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"goToBeginning:")
-                                                           to:nil from:nil];
-                SpliceKit_log(@"[Captions] Playhead set via goToBeginning: fallback");
             }
         }
-    });
-    [NSThread sleepForTimeInterval:0.2];
 
-    // Deselect all first — pasteAnchored: with a selection can cause unexpected behavior
-    SpliceKit_executeOnMainThread(^{
+        // Deselect all
         [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"deselectAll:")
                                                    to:nil from:nil];
     });
-    [NSThread sleepForTimeInterval:0.1];
+    [NSThread sleepForTimeInterval:0.2];
 
-    // Paste as connected — creates a connected storyline on the user's timeline
-    __block BOOL pasteHandled = NO;
+    // Call pasteAnchored: — the swizzle handles FCPXML→native conversion
+    // (import to temp project, copy, switch back, cleanup — all behind screen freeze)
     SpliceKit_executeOnMainThread(^{
         pasteHandled = [[NSApplication sharedApplication]
             sendAction:NSSelectorFromString(@"pasteAnchored:")
                     to:nil from:nil];
     });
-    [NSThread sleepForTimeInterval:0.3];
+    // Wait for the swizzle pipeline to complete (it spins the runloop internally)
+    [NSThread sleepForTimeInterval:1.0];
 
     SpliceKit_log(@"[Captions] Paste as connected: %@", pasteHandled ? @"handled" : @"not handled");
 
     // ---------------------------------------------------------------
-    // Step 5: Apply position offset and self-verify text on pasted titles.
-    // Position is applied via FFCutawayEffects transform (not FCPXML
-    // adjust-transform which compounds with the .moti internal offset).
+    // Step 3: Post-process — reload Motion templates and verify text.
     // ---------------------------------------------------------------
-    [NSThread sleepForTimeInterval:0.3]; // Let FCP process the paste
+    [NSThread sleepForTimeInterval:0.3];
     __block NSString *verifiedText = nil;
     __block double verifiedFontSize = 0;
     __block NSString *verifiedFontFamily = nil;
     __block int verifiedTitleCount = 0;
     __block int positionAppliedCount = 0;
     CGFloat yOffset = [self yOffsetForPosition];
-    // Word-progress mode sets position via FCPXML Content Position param.
-    // Only apply the ObjC runtime transform for standard (Caption Large) mode,
-    // otherwise the two position systems compound and produce insane values.
-    BOOL needsPosition = !useWordProgress
-        && (s.position != SpliceKitCaptionPositionCenter || s.customYOffset != 0);
+    // Position is applied via the Motion template's channel hierarchy (not
+    // FFCutawayEffects which compounds and produces wrong values).
+    BOOL needsPosition = (s.position != SpliceKitCaptionPositionCenter || s.customYOffset != 0);
 
     if (pasteHandled) {
         SpliceKit_executeOnMainThread(^{
@@ -2069,10 +1960,65 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
                     for (id conn in anchored) {
                         verifiedTitleCount++;
 
-                        // Apply position offset to each connected title
+                        // Reload Motion template animator on each title.
+                        // FCPXML import via .../Titles.localized/ creates
+                        // FFMicaEffect objects but does NOT load the .caar
+                        // animator. Without this, text channels are nil
+                        // (greyed out text, Inspector crash on click).
+                        @try {
+                            SEL effectSel = NSSelectorFromString(@"effect");
+                            if ([conn respondsToSelector:effectSel]) {
+                                id eff = ((id (*)(id, SEL))objc_msgSend)(conn, effectSel);
+                                SEL reloadSel = NSSelectorFromString(@"reloadMicaDocument");
+                                if (eff && [eff respondsToSelector:reloadSel]) {
+                                    ((void (*)(id, SEL))objc_msgSend)(eff, reloadSel);
+                                }
+                            }
+                        } @catch (NSException *e) {}
+
+                        // Set text position via Motion template channel hierarchy.
+                        // Recursive search for CHChannelPosition3D named "Position"
+                        // inside a "Transform" folder — handles varying hierarchy depths.
                         if (needsPosition) {
-                            if (SpliceKitCaption_applyTransformToTitle(conn, yOffset, 100.0))
-                                positionAppliedCount++;
+                            @try {
+                                SEL effectSel = NSSelectorFromString(@"effect");
+                                id eff = [conn respondsToSelector:effectSel]
+                                    ? ((id (*)(id, SEL))objc_msgSend)(conn, effectSel) : nil;
+                                id cf = eff ? ((id (*)(id, SEL))objc_msgSend)(eff,
+                                    NSSelectorFromString(@"channelFolder")) : nil;
+                                if (cf) {
+                                    Class pos3DClass = objc_getClass("CHChannelPosition3D");
+                                    NSMutableArray *stack = [NSMutableArray arrayWithObject:cf];
+                                    BOOL found = NO;
+                                    while (stack.count > 0 && !found) {
+                                        id node = stack.lastObject;
+                                        [stack removeLastObject];
+                                        // Check: is this a Position3D named "Position" whose parent is "Transform"?
+                                        if (pos3DClass && [node isKindOfClass:pos3DClass]) {
+                                            NSString *nm = ((id (*)(id, SEL))objc_msgSend)(node, NSSelectorFromString(@"name"));
+                                            if ([nm isEqualToString:@"Position"]) {
+                                                id parent = [node respondsToSelector:NSSelectorFromString(@"parent")]
+                                                    ? ((id (*)(id, SEL))objc_msgSend)(node, NSSelectorFromString(@"parent")) : nil;
+                                                NSString *parentName = parent
+                                                    ? ((id (*)(id, SEL))objc_msgSend)(parent, NSSelectorFromString(@"name")) : nil;
+                                                if ([parentName isEqualToString:@"Transform"]) {
+                                                    id yCh = SpliceKitCaption_subChannel(node, @"y");
+                                                    if (yCh && SpliceKitCaption_setChannelDouble(yCh, yOffset))
+                                                        positionAppliedCount++;
+                                                    found = YES;
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                        SEL childSel = NSSelectorFromString(@"children");
+                                        if ([node respondsToSelector:childSel]) {
+                                            NSArray *ch = ((id (*)(id, SEL))objc_msgSend)(node, childSel);
+                                            if ([ch isKindOfClass:[NSArray class]])
+                                                [stack addObjectsFromArray:ch];
+                                        }
+                                    }
+                                }
+                            } @catch (NSException *e) {}
                         }
 
                         // Only deeply inspect first title for verification
@@ -2139,15 +2085,7 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
                   verifiedTitleCount, verifiedText ?: @"(none)", verifiedFontSize,
                   verifiedFontFamily ?: @"(unknown)", positionAppliedCount);
 
-    // ---------------------------------------------------------------
-    // Step 6: Clean up — delete the temp project from the library.
-    // ---------------------------------------------------------------
-    SpliceKit_executeOnMainThread(^{
-        if (tempSeq) {
-            SpliceKitCaption_deleteSequence(tempSeq);
-            SpliceKit_log(@"[Captions] Deleted temp project");
-        }
-    });
+    // Temp project cleanup is handled by SpliceKit_convertFCPXMLToNativeClipboard.
 
     NSMutableDictionary *result = [@{
         @"status": @"ok",
@@ -2300,7 +2238,7 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
             @"FontName": fontName, @"FontFace": s.fontFace ?: @"Regular",
             @"FillColor": SpliceKitCaption_colorToFCPXML(s.textColor),
             @"StrokeColor": s.outlineColor ? SpliceKitCaption_colorToFCPXML(s.outlineColor) : @"",
-            @"WordByWord": @YES, @"TemplateName": kWP_TemplateName,
+            @"WordByWord": @YES, @"TemplateName": @"Basic Title",
             @"PositionY": @(-35), @"LineCount": @1, @"TextWidth": @0.6,
             @"Uppercase": @(s.allCaps), @"Lowercase": @NO,
             @"AnimationIn": @YES, @"AnimationOut": @YES, @"HidePunctuation": @NO,
@@ -2444,6 +2382,160 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     return xml;
 }
 
+// Generate per-word highlight titles for a segment using Basic Title.
+// One <title> per word timing — all words visible, active word highlighted.
+- (NSString *)wordHighlightTitlesForSegment:(SpliceKitCaptionSegment *)seg
+                                  tsCounter:(int *)tsCounter
+                                     indent:(NSString *)indent
+                                       lane:(NSString *)lane {
+    SpliceKitCaptionStyle *s = self.style;
+    int fdN = self.fdNum, fdD = self.fdDen;
+    NSArray<SpliceKitTranscriptWord *> *words = seg.words;
+    if (words.count == 0) return @"";
+
+    // Resolve font family (FCPXML needs family name, not PostScript name)
+    NSString *fontName = s.font ?: @"Helvetica";
+    NSFont *resolvedFont = [NSFont fontWithName:fontName size:s.fontSize];
+    NSString *familyName = resolvedFont ? resolvedFont.familyName : fontName;
+    if ([familyName containsString:@"-"])
+        familyName = [familyName componentsSeparatedByString:@"-"].firstObject;
+
+    // Basic Title's coordinate system renders text larger than the custom template.
+    // Scale to ~2/3 for equivalent visual size at 1080p.
+    CGFloat fontSize = round(s.fontSize * 0.67);
+
+    NSColor *hilite = s.highlightColor ?: [NSColor yellowColor];
+    NSString *highlightColorStr = SpliceKitCaption_colorToFCPXML(hilite);
+    NSString *baseColorStr = SpliceKitCaption_colorToFCPXML(s.textColor);
+
+    NSMutableString *xml = [NSMutableString string];
+    NSString *laneAttr = lane ? [NSString stringWithFormat:@" lane=\"%@\"", lane] : @"";
+
+    for (NSUInteger i = 0; i < words.count; i++) {
+        SpliceKitTranscriptWord *word = words[i];
+
+        // Title starts when this word starts, ends when next word starts (or segment ends)
+        double titleStart = word.startTime;
+        double titleEnd = (i + 1 < words.count) ? words[i + 1].startTime : seg.endTime;
+        double titleDur = MAX(titleEnd - titleStart, (double)fdN / fdD); // at least 1 frame
+
+        NSString *offsetStr = SpliceKitCaption_durRational(titleStart, fdN, fdD);
+        NSString *durStr = SpliceKitCaption_durRational(titleDur, fdN, fdD);
+
+        int tsBase = (*tsCounter);
+        NSString *tsH = [NSString stringWithFormat:@"ts%d", tsBase];
+        NSString *tsB = [NSString stringWithFormat:@"ts%d", tsBase + 1];
+        *tsCounter = tsBase + 2;
+
+        [xml appendFormat:@"%@<title ref=\"r2\"%@ offset=\"%@\" name=\"Cap%03lu-%lu\" "
+            @"duration=\"%@\" start=\"3600s\">\n",
+            indent, laneAttr, offsetStr,
+            (unsigned long)seg.segmentIndex + 1, (unsigned long)i + 1, durStr];
+
+        // Position via Motion template param — must come BEFORE <text> in FCPXML.
+        // Key 9999/10003/1/100/101 = Content Position on the Widget layer.
+        [xml appendFormat:@"%@    <param name=\"Position\" key=\"9999/10003/1/100/101\" value=\"0 -447\"/>\n", indent];
+
+        // Text with per-word highlighting: words up to and including current
+        // get highlight color; remaining words get base color.
+        [xml appendFormat:@"%@    <text>\n", indent];
+        for (NSUInteger j = 0; j < words.count; j++) {
+            NSString *w = s.allCaps ? [words[j].text uppercaseString] : words[j].text;
+            NSString *ref = (j <= i) ? tsH : tsB;
+            NSString *space = (j > 0) ? @" " : @"";
+            [xml appendFormat:@"%@        <text-style ref=\"%@\">%@%@</text-style>\n",
+                indent, ref, space, SpliceKitCaption_escapeXML(w)];
+        }
+        [xml appendFormat:@"%@    </text>\n", indent];
+
+        // Drop shadow: black, 70% opacity, blur 2.43, distance 5, angle 315°
+        // Shadow offset from polar: 5*cos(315°)=3.54, 5*sin(315°)=-3.54
+        NSString *shadowAttrs = @" shadowColor=\"0 0 0 0.7\" shadowOffset=\"3.54 -3.54\" shadowBlurRadius=\"2.43\"";
+
+        // Highlight text-style
+        [xml appendFormat:@"%@    <text-style-def id=\"%@\">\n", indent, tsH];
+        [xml appendFormat:@"%@        <text-style font=\"%@\" fontSize=\"%.0f\" "
+            @"fontColor=\"%@\" alignment=\"center\"%@/>\n",
+            indent, SpliceKitCaption_escapeXML(familyName), fontSize, highlightColorStr, shadowAttrs];
+        [xml appendFormat:@"%@    </text-style-def>\n", indent];
+
+        // Base text-style
+        [xml appendFormat:@"%@    <text-style-def id=\"%@\">\n", indent, tsB];
+        [xml appendFormat:@"%@        <text-style font=\"%@\" fontSize=\"%.0f\" "
+            @"fontColor=\"%@\" alignment=\"center\"%@/>\n",
+            indent, SpliceKitCaption_escapeXML(familyName), fontSize, baseColorStr, shadowAttrs];
+        [xml appendFormat:@"%@    </text-style-def>\n", indent];
+
+        [xml appendFormat:@"%@</title>\n", indent];
+    }
+
+    return xml;
+}
+
+// Generate a single title for one word position in a segment (spine-only format, no lane).
+- (NSString *)wordHighlightTitleForSegment:(SpliceKitCaptionSegment *)seg
+                                 wordIndex:(NSUInteger)i
+                                 tsCounter:(int *)tsCounter
+                                    indent:(NSString *)indent
+                                  duration:(double)titleDur {
+    SpliceKitCaptionStyle *s = self.style;
+    int fdN = self.fdNum, fdD = self.fdDen;
+    NSArray<SpliceKitTranscriptWord *> *words = seg.words;
+    if (i >= words.count) return @"";
+
+    NSString *fontName = s.font ?: @"Helvetica";
+    NSFont *resolvedFont = [NSFont fontWithName:fontName size:s.fontSize];
+    NSString *familyName = resolvedFont ? resolvedFont.familyName : fontName;
+    if ([familyName containsString:@"-"])
+        familyName = [familyName componentsSeparatedByString:@"-"].firstObject;
+
+    CGFloat fontSize = round(s.fontSize * 0.67);
+    NSColor *hilite = s.highlightColor ?: [NSColor yellowColor];
+    NSString *highlightColorStr = SpliceKitCaption_colorToFCPXML(hilite);
+    NSString *baseColorStr = SpliceKitCaption_colorToFCPXML(s.textColor);
+    NSString *durStr = SpliceKitCaption_durRational(titleDur, fdN, fdD);
+    NSString *shadowAttrs = @" shadowColor=\"0 0 0 0.7\" shadowOffset=\"3.54 -3.54\" shadowBlurRadius=\"2.43\"";
+
+    int tsBase = (*tsCounter);
+    NSString *tsH = [NSString stringWithFormat:@"ts%d", tsBase];
+    NSString *tsB = [NSString stringWithFormat:@"ts%d", tsBase + 1];
+    *tsCounter = tsBase + 2;
+
+    NSMutableString *xml = [NSMutableString string];
+
+    [xml appendFormat:@"%@<title ref=\"r2\" name=\"Cap%03lu-%lu\" duration=\"%@\" start=\"3600s\">\n",
+        indent, (unsigned long)seg.segmentIndex + 1, (unsigned long)i + 1, durStr];
+
+    // Position is applied post-paste via ObjC on the Motion template's
+    // channel hierarchy (IDs are instance-specific, can't hardcode in FCPXML).
+
+    // Text with per-word highlighting
+    [xml appendFormat:@"%@    <text>\n", indent];
+    for (NSUInteger j = 0; j < words.count; j++) {
+        NSString *w = s.allCaps ? [words[j].text uppercaseString] : words[j].text;
+        NSString *ref = (j <= i) ? tsH : tsB;
+        NSString *space = (j > 0) ? @" " : @"";
+        [xml appendFormat:@"%@        <text-style ref=\"%@\">%@%@</text-style>\n",
+            indent, ref, space, SpliceKitCaption_escapeXML(w)];
+    }
+    [xml appendFormat:@"%@    </text>\n", indent];
+
+    // Text style defs with drop shadow
+    [xml appendFormat:@"%@    <text-style-def id=\"%@\">\n", indent, tsH];
+    [xml appendFormat:@"%@        <text-style font=\"%@\" fontSize=\"%.0f\" "
+        @"fontColor=\"%@\" alignment=\"center\"%@/>\n",
+        indent, SpliceKitCaption_escapeXML(familyName), fontSize, highlightColorStr, shadowAttrs];
+    [xml appendFormat:@"%@    </text-style-def>\n", indent];
+    [xml appendFormat:@"%@    <text-style-def id=\"%@\">\n", indent, tsB];
+    [xml appendFormat:@"%@        <text-style font=\"%@\" fontSize=\"%.0f\" "
+        @"fontColor=\"%@\" alignment=\"center\"%@/>\n",
+        indent, SpliceKitCaption_escapeXML(familyName), fontSize, baseColorStr, shadowAttrs];
+    [xml appendFormat:@"%@    </text-style-def>\n", indent];
+
+    [xml appendFormat:@"%@</title>\n", indent];
+    return xml;
+}
+
 #pragma mark - FCPXML Builder Helpers
 
 // Build the FCPXML document skeleton (resources + opening tags).
@@ -2469,10 +2561,9 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
         @"frameDuration=\"%d/%ds\" width=\"%d\" height=\"%d\"/>\n",
         fmtId, self.videoWidth, self.videoHeight, (int)round(self.frameRate),
         fdN, fdD, self.videoWidth, self.videoHeight];
-    // Caption Large effect — ~/Titles.localized/ prefix resolves correctly.
-    // .../Titles.localized/ does NOT load the Motion template properly (text invisible).
-    [xml appendFormat:@"        <effect id=\"r2\" name=\"Caption Large\" "
-        @"uid=\"~/Titles.localized/SpliceKit/Caption Large/Caption Large.moti\"/>\n"];
+    // Use FCP's built-in Basic Title — available on all installations.
+    [xml appendString:@"        <effect id=\"r2\" name=\"Basic Title\" "
+        @"uid=\".../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti\"/>\n"];
     [xml appendString:@"    </resources>\n"];
     [xml appendString:@"    <spine>\n"];
 
@@ -2509,8 +2600,8 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
         @"frameDuration=\"%d/%ds\" width=\"%d\" height=\"%d\"/>\n",
         self.videoWidth, self.videoHeight, (int)round(self.frameRate),
         fdN, fdD, self.videoWidth, self.videoHeight];
-    [xml appendFormat:@"        <effect id=\"r2\" name=\"%@\" uid=\"%@\"/>\n",
-        kWP_TemplateName, kWP_TemplateUID];
+    [xml appendString:@"        <effect id=\"r2\" name=\"Basic Title\" "
+        @"uid=\".../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti\"/>\n"];
     [xml appendString:@"    </resources>\n"];
     [xml appendString:@"    <spine>\n"];
 
@@ -2539,11 +2630,54 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     SpliceKit_log(@"[Captions] generateCaptions called. Words: %lu, Segments: %lu",
                   (unsigned long)self.mutableWords.count, (unsigned long)self.mutableSegments.count);
 
+    // Auto-transcribe if no words yet
+    if (self.mutableWords.count == 0) {
+        SpliceKitTranscriptPanel *tp = [SpliceKitTranscriptPanel sharedPanel];
+
+        if (tp.words.count > 0) {
+            // Transcript panel already has words — just import them
+            SpliceKit_log(@"[Captions] Auto-importing words from existing transcript");
+            [self importWordsFromTranscriptPanel];
+        } else {
+            // Trigger transcription and wait for completion
+            SpliceKit_log(@"[Captions] Auto-transcribing timeline...");
+            if (self.panel) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self.statusLabel.stringValue = @"Transcribing timeline...";
+                });
+            }
+
+            dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+            id observer = [[NSNotificationCenter defaultCenter]
+                addObserverForName:@"SpliceKitTranscriptDidComplete"
+                object:nil queue:nil usingBlock:^(NSNotification *note) {
+                    dispatch_semaphore_signal(sem);
+                }];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                tp.engine = SpliceKitTranscriptEngineParakeet;
+                [tp transcribeTimeline];
+            });
+
+            long timedOut = dispatch_semaphore_wait(sem,
+                dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+            [[NSNotificationCenter defaultCenter] removeObserver:observer];
+
+            if (timedOut) {
+                self.status = SpliceKitCaptionStatusError;
+                self.errorMessage = @"Transcription timed out";
+                return @{@"error": @"Transcription timed out after 2 minutes"};
+            }
+
+            [self importWordsFromTranscriptPanel];
+        }
+    }
+
     if (self.mutableWords.count == 0) {
         self.status = SpliceKitCaptionStatusError;
-        self.errorMessage = @"No words — transcribe the timeline first";
+        self.errorMessage = @"No words — transcription produced no results";
         self.lastGenerateResult = @{@"status": @"error", @"error": self.errorMessage};
-        return @{@"error": @"No words — transcribe the timeline first"};
+        return @{@"error": @"No words — transcription produced no results"};
     }
 
     self.status = SpliceKitCaptionStatusGenerating;
