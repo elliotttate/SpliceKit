@@ -7,7 +7,7 @@ for i = 1, 120 do
     sk.sleep(1)
     local state = sk.rpc("transcript.getState", {})
     if state and state.status == "error" then
-        sk.toast("Transcription error: " .. (state.errorMessage or "unknown"))
+        sk.alert("Remove Silences", "Transcription error: " .. (state.errorMessage or "unknown"))
         return
     end
     if state and state.wordCount and state.wordCount > 0 then
@@ -17,8 +17,8 @@ for i = 1, 120 do
     end
 end
 if not ready then
-    sk.toast("Timed out waiting for transcription")
+    sk.alert("Remove Silences", "Timed out waiting for transcription")
     return
 end
 sk.rpc("transcript.deleteSilences", {min_duration = 1.0})
-sk.toast("Done — silences > 1s removed")
+sk.alert("Remove Silences", "Done — silences longer than 1s removed")

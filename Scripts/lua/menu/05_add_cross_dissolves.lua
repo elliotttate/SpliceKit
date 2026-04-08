@@ -8,7 +8,7 @@ for i = 1, 200 do
     sk.timeline("nextEdit")
     local pos = sk.position()
     local now = pos.seconds or 0
-    if now <= last_pos then break end  -- no more edit points
+    if now <= last_pos then break end
     last_pos = now
     local r = sk.rpc("transitions.apply", {name = "Cross Dissolve", freeze_extend = true})
     if r and not r.error then
@@ -17,4 +17,4 @@ for i = 1, 200 do
         skipped = skipped + 1
     end
 end
-sk.toast(string.format("Added %d Cross Dissolves (%d skipped)", added, skipped))
+sk.alert("Cross Dissolves", string.format("Added %d transitions (%d skipped)", added, skipped))

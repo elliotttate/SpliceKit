@@ -12,4 +12,4 @@ for _, clip in ipairs(items) do
         count = count + 1
     end
 end
-sk.toast(string.format("Balanced color on %d clips", count))
+sk.alert("Balance Color", string.format("Balanced %d clips", count))

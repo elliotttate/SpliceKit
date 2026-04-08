@@ -11,6 +11,6 @@ for _, c in ipairs(items) do
         total_dur = total_dur + u.clip_duration(c)
     end
 end
-local msg = string.format("%d clips  •  %s total  •  playhead at %s  •  %.0f fps",
-    real, u.timecode(total_dur), u.timecode(pos.seconds or 0), pos.frameRate or 0)
-sk.toast(msg)
+sk.alert("Timeline Report",
+    string.format("Clips: %d\nDuration: %s\nPlayhead: %s\nFrame Rate: %.0f fps",
+    real, u.timecode(total_dur), u.timecode(pos.seconds or 0), pos.frameRate or 0))
