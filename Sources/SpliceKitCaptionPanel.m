@@ -9,7 +9,8 @@
 //  word in a segment gets its own sequential title where that word is
 //  highlighted and the rest are dimmed.
 //
-//  Transcription is delegated to SpliceKitTranscriptPanel's Parakeet engine.
+//  Transcription is handled directly via the Parakeet engine (no dependency
+//  on the Transcript Editor panel).
 //
 
 #import "SpliceKitCaptionPanel.h"
@@ -49,6 +50,10 @@ typedef struct {
     SpliceKitCaption_CMTime start;
     SpliceKitCaption_CMTime duration;
 } SpliceKitCaption_CMTimeRange;
+
+static double SpliceKitCaption_CMTimeToSeconds(SpliceKitCaption_CMTime t) {
+    return (t.timescale > 0) ? (double)t.value / t.timescale : 0;
+}
 
 #pragma mark - Word-Progress Template Config (SpliceKit Caption)
 //
@@ -537,6 +542,7 @@ static SpliceKitCaptionAnimation SpliceKitCaption_animationFromName(NSString *na
 @property (nonatomic, strong) NSButton *exportSRTButton;
 @property (nonatomic, strong) NSButton *exportTXTButton;
 @property (nonatomic, strong) NSProgressIndicator *spinner;
+@property (nonatomic, strong) NSProgressIndicator *progressBar;
 
 // Frame rate info (detected from timeline)
 @property (nonatomic) int fdNum;   // frame duration numerator
@@ -1294,7 +1300,7 @@ static void SpliceKit_installDragSpy(void) {
     return [self.style copy];
 }
 
-#pragma mark - Transcription (Delegate to Transcript Panel)
+#pragma mark - Transcription (Built-in Parakeet)
 
 - (void)transcribeTimeline {
     self.status = SpliceKitCaptionStatusTranscribing;
@@ -1303,38 +1309,31 @@ static void SpliceKit_installDragSpy(void) {
         [self.spinner startAnimation:nil];
         self.transcribeButton.enabled = NO;
         self.statusLabel.stringValue = @"Transcribing timeline...";
+        if (self.progressBar) {
+            self.progressBar.hidden = NO;
+            self.progressBar.indeterminate = YES;
+            [self.progressBar startAnimation:nil];
+        }
     });
 
-    SpliceKitTranscriptPanel *tp = [SpliceKitTranscriptPanel sharedPanel];
-
-    // If transcript panel already has words, reuse them
-    if (tp.status == SpliceKitTranscriptStatusReady && tp.words.count > 0) {
-        [self importWordsFromTranscriptPanel];
-        return;
-    }
-
-    // Register for completion notification
-    [[NSNotificationCenter defaultCenter] addObserver:self
-        selector:@selector(transcriptDidComplete:)
-        name:@"SpliceKitTranscriptDidComplete"
-        object:nil];
-
-    // Force Parakeet for best word-level timing
-    tp.engine = SpliceKitTranscriptEngineParakeet;
-    [tp transcribeTimeline];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        [self performCaptionTranscription];
+    });
 }
 
-- (void)transcriptDidComplete:(NSNotification *)note {
-    [[NSNotificationCenter defaultCenter] removeObserver:self
-        name:@"SpliceKitTranscriptDidComplete" object:nil];
-    [self importWordsFromTranscriptPanel];
-}
-
-- (void)importWordsFromTranscriptPanel {
-    SpliceKitTranscriptPanel *tp = [SpliceKitTranscriptPanel sharedPanel];
+- (void)transcriptionFinishedWithWords:(NSArray<SpliceKitTranscriptWord *> *)words {
     @synchronized (self.mutableWords) {
         [self.mutableWords removeAllObjects];
-        [self.mutableWords addObjectsFromArray:tp.words ?: @[]];
+        [self.mutableWords addObjectsFromArray:words ?: @[]];
+        // Sort by start time and assign indices
+        [self.mutableWords sortUsingComparator:^NSComparisonResult(SpliceKitTranscriptWord *a, SpliceKitTranscriptWord *b) {
+            if (a.startTime < b.startTime) return NSOrderedAscending;
+            if (a.startTime > b.startTime) return NSOrderedDescending;
+            return NSOrderedSame;
+        }];
+        for (NSUInteger i = 0; i < self.mutableWords.count; i++) {
+            self.mutableWords[i].wordIndex = i;
+        }
     }
 
     self.status = SpliceKitCaptionStatusReady;
@@ -1343,13 +1342,487 @@ static void SpliceKit_installDragSpy(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.spinner.hidden = YES;
         [self.spinner stopAnimation:nil];
+        if (self.progressBar) {
+            self.progressBar.hidden = YES;
+        }
         self.transcribeButton.enabled = YES;
         self.statusLabel.stringValue = [NSString stringWithFormat:@"%lu words, %lu segments",
             (unsigned long)self.mutableWords.count, (unsigned long)self.mutableSegments.count];
     });
 
-    SpliceKit_log(@"[Captions] Imported %lu words from transcript panel",
+    SpliceKit_log(@"[Captions] Transcription complete: %lu words",
                   (unsigned long)self.mutableWords.count);
+}
+
+- (void)transcriptionFailedWithError:(NSString *)error {
+    self.status = SpliceKitCaptionStatusError;
+    self.errorMessage = error;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.spinner.hidden = YES;
+        [self.spinner stopAnimation:nil];
+        if (self.progressBar) {
+            self.progressBar.hidden = YES;
+        }
+        self.transcribeButton.enabled = YES;
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"Error: %@", error];
+    });
+    SpliceKit_log(@"[Captions] Transcription error: %@", error);
+}
+
+#pragma mark - Parakeet Transcription Engine
+
+- (NSString *)parakeetTranscriberPath {
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    // 1. Inside the FCP framework bundle (deployed by patcher)
+    NSString *buildDir = [[[NSBundle mainBundle] bundlePath]
+        stringByAppendingPathComponent:@"Contents/Frameworks/SpliceKit.framework/Versions/A/Resources"];
+    NSString *builtPath = [buildDir stringByAppendingPathComponent:@"parakeet-transcriber"];
+    if ([fm fileExistsAtPath:builtPath]) return builtPath;
+
+    // 2. Standard tool locations
+    NSString *home = NSHomeDirectory();
+    NSArray *searchPaths = @[
+        [home stringByAppendingPathComponent:@"Applications/SpliceKit/tools/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Library/Application Support/SpliceKit/tools/parakeet-transcriber"],
+        [home stringByAppendingPathComponent:@"Library/Caches/SpliceKit/tools/parakeet-transcriber/.build/release/parakeet-transcriber"],
+    ];
+    for (NSString *path in searchPaths) {
+        if ([fm fileExistsAtPath:path]) return path;
+    }
+    return nil;
+}
+
+- (NSURL *)getMediaURLForClip:(id)clip {
+    // Chain 1: clip.media.originalMediaURL
+    @try {
+        if ([clip respondsToSelector:NSSelectorFromString(@"media")]) {
+            id media = ((id (*)(id, SEL))objc_msgSend)(clip, NSSelectorFromString(@"media"));
+            if (media) {
+                SEL omSel = NSSelectorFromString(@"originalMediaURL");
+                if ([media respondsToSelector:omSel]) {
+                    id url = ((id (*)(id, SEL))objc_msgSend)(media, omSel);
+                    if (url && [url isKindOfClass:[NSURL class]]) return url;
+                }
+                SEL omrSel = NSSelectorFromString(@"originalMediaRep");
+                if ([media respondsToSelector:omrSel]) {
+                    id rep = ((id (*)(id, SEL))objc_msgSend)(media, omrSel);
+                    if (rep) {
+                        SEL fuSel = NSSelectorFromString(@"fileURLs");
+                        if ([rep respondsToSelector:fuSel]) {
+                            id urls = ((id (*)(id, SEL))objc_msgSend)(rep, fuSel);
+                            if ([urls isKindOfClass:[NSArray class]] && [(NSArray *)urls count] > 0) {
+                                id url = [(NSArray *)urls firstObject];
+                                if ([url isKindOfClass:[NSURL class]]) return url;
+                            }
+                        }
+                        SEL urlSel = NSSelectorFromString(@"URL");
+                        if ([rep respondsToSelector:urlSel]) {
+                            id url = ((id (*)(id, SEL))objc_msgSend)(rep, urlSel);
+                            if ([url isKindOfClass:[NSURL class]]) return url;
+                        }
+                    }
+                }
+                SEL crSel = NSSelectorFromString(@"currentRep");
+                if ([media respondsToSelector:crSel]) {
+                    id rep = ((id (*)(id, SEL))objc_msgSend)(media, crSel);
+                    if (rep) {
+                        SEL fuSel = NSSelectorFromString(@"fileURLs");
+                        if ([rep respondsToSelector:fuSel]) {
+                            id urls = ((id (*)(id, SEL))objc_msgSend)(rep, fuSel);
+                            if ([urls isKindOfClass:[NSArray class]] && [(NSArray *)urls count] > 0) {
+                                id url = [(NSArray *)urls firstObject];
+                                if ([url isKindOfClass:[NSURL class]]) return url;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } @catch (NSException *e) {}
+
+    // Chain 2: clip.assetMediaReference -> resolvedURL
+    @try {
+        SEL amrSel = NSSelectorFromString(@"assetMediaReference");
+        if ([clip respondsToSelector:amrSel]) {
+            id ref = ((id (*)(id, SEL))objc_msgSend)(clip, amrSel);
+            if (ref) {
+                SEL ruSel = NSSelectorFromString(@"resolvedURL");
+                if ([ref respondsToSelector:ruSel]) {
+                    id url = ((id (*)(id, SEL))objc_msgSend)(ref, ruSel);
+                    if ([url isKindOfClass:[NSURL class]]) return url;
+                }
+            }
+        }
+    } @catch (NSException *e) {}
+
+    // Chain 3: KVC paths
+    @try {
+        id url = [clip valueForKeyPath:@"media.fileURL"];
+        if ([url isKindOfClass:[NSURL class]]) return url;
+    } @catch (NSException *e) {}
+    @try {
+        id url = [clip valueForKeyPath:@"clipInPlace.asset.originalMediaURL"];
+        if ([url isKindOfClass:[NSURL class]]) return url;
+    } @catch (NSException *e) {}
+
+    return nil;
+}
+
+- (void)collectClipsFrom:(NSArray *)items atTimeline:(double *)timelinePos into:(NSMutableArray *)clipInfos {
+    for (id item in items) {
+        NSString *className = NSStringFromClass([item class]);
+
+        double clipDuration = 0;
+        if ([item respondsToSelector:@selector(duration)]) {
+            SpliceKitCaption_CMTime d = ((SpliceKitCaption_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
+            clipDuration = SpliceKitCaption_CMTimeToSeconds(d);
+        }
+
+        BOOL isMedia = [className containsString:@"MediaComponent"];
+        BOOL isCollection = [className containsString:@"Collection"] || [className containsString:@"AnchoredClip"];
+        BOOL isTransition = [className containsString:@"Transition"];
+
+        if (isMedia && clipDuration > 0) {
+            double trimStart = 0;
+            SEL unclippedSel = NSSelectorFromString(@"unclippedRange");
+            if ([item respondsToSelector:unclippedSel]) {
+                NSMethodSignature *sig = [item methodSignatureForSelector:unclippedSel];
+                if (sig && [sig methodReturnLength] == sizeof(SpliceKitCaption_CMTimeRange)) {
+                    SpliceKitCaption_CMTimeRange range;
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setTarget:item];
+                    [inv setSelector:unclippedSel];
+                    [inv invoke];
+                    [inv getReturnValue:&range];
+                    trimStart = SpliceKitCaption_CMTimeToSeconds(range.start);
+                }
+            }
+            NSMutableDictionary *info = [NSMutableDictionary dictionary];
+            info[@"timelineStart"] = @(*timelinePos);
+            info[@"duration"] = @(clipDuration);
+            info[@"trimStart"] = @(trimStart);
+            info[@"handle"] = SpliceKit_storeHandle(item);
+            NSURL *mediaURL = [self getMediaURLForClip:item];
+            if (mediaURL) info[@"mediaURL"] = mediaURL;
+            [clipInfos addObject:info];
+            *timelinePos += clipDuration;
+
+        } else if (isCollection && clipDuration > 0) {
+            // Look for media inside container
+            id innerMedia = [self findFirstMediaInContainer:item];
+            if (innerMedia) {
+                double collTrimStart = 0;
+                SEL crSel = NSSelectorFromString(@"clippedRange");
+                if ([item respondsToSelector:crSel]) {
+                    NSMethodSignature *sig = [item methodSignatureForSelector:crSel];
+                    if (sig && [sig methodReturnLength] == sizeof(SpliceKitCaption_CMTimeRange)) {
+                        SpliceKitCaption_CMTimeRange range;
+                        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                        [inv setTarget:item];
+                        [inv setSelector:crSel];
+                        [inv invoke];
+                        [inv getReturnValue:&range];
+                        collTrimStart = SpliceKitCaption_CMTimeToSeconds(range.start);
+                    }
+                }
+                NSMutableDictionary *info = [NSMutableDictionary dictionary];
+                info[@"timelineStart"] = @(*timelinePos);
+                info[@"duration"] = @(clipDuration);
+                info[@"trimStart"] = @(collTrimStart);
+                info[@"handle"] = SpliceKit_storeHandle(innerMedia);
+                NSURL *mediaURL = [self getMediaURLForClip:innerMedia];
+                if (mediaURL) info[@"mediaURL"] = mediaURL;
+                [clipInfos addObject:info];
+            }
+            *timelinePos += clipDuration;
+
+        } else if (!isTransition) {
+            *timelinePos += clipDuration;
+        }
+    }
+}
+
+- (id)findFirstMediaInContainer:(id)container {
+    id subItems = nil;
+    if ([container respondsToSelector:@selector(containedItems)]) {
+        subItems = ((id (*)(id, SEL))objc_msgSend)(container, @selector(containedItems));
+    }
+    if ((!subItems || ![subItems isKindOfClass:[NSArray class]] || [(NSArray *)subItems count] == 0) &&
+        [container respondsToSelector:@selector(primaryObject)]) {
+        id primary = ((id (*)(id, SEL))objc_msgSend)(container, @selector(primaryObject));
+        if (primary && [primary respondsToSelector:@selector(containedItems)]) {
+            subItems = ((id (*)(id, SEL))objc_msgSend)(primary, @selector(containedItems));
+        }
+    }
+    if (!subItems || ![subItems isKindOfClass:[NSArray class]]) return nil;
+
+    for (id sub in (NSArray *)subItems) {
+        NSString *cls = NSStringFromClass([sub class]);
+        if ([cls containsString:@"MediaComponent"]) return sub;
+        if ([cls containsString:@"Collection"] || [cls containsString:@"AnchoredClip"]) {
+            id found = [self findFirstMediaInContainer:sub];
+            if (found) return found;
+        }
+    }
+    return nil;
+}
+
+- (void)performCaptionTranscription {
+    SpliceKit_log(@"[Captions] Starting built-in Parakeet transcription");
+
+    // Find the parakeet-transcriber binary
+    NSString *binaryPath = [self parakeetTranscriberPath];
+    if (!binaryPath) {
+        [self transcriptionFailedWithError:@"Parakeet transcriber not found. Re-run the SpliceKit patcher or switch to Transcript Editor."];
+        return;
+    }
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:binaryPath]) {
+        [self transcriptionFailedWithError:@"Parakeet binary is not executable. Try: chmod +x ~/Applications/SpliceKit/tools/parakeet-transcriber"];
+        return;
+    }
+
+    SpliceKit_log(@"[Captions] Using parakeet-transcriber at: %@", binaryPath);
+
+    // Collect clips from the active timeline
+    __block NSArray *clips = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id timeline = SpliceKit_getActiveTimelineModule();
+            if (!timeline) {
+                [self transcriptionFailedWithError:@"No active timeline. Open a project first."];
+                return;
+            }
+
+            // Detect frame rate
+            if ([timeline respondsToSelector:@selector(sequenceFrameDuration)]) {
+                SpliceKitCaption_CMTime fd = ((SpliceKitCaption_CMTime (*)(id, SEL))STRET_MSG)(
+                    timeline, @selector(sequenceFrameDuration));
+                if (fd.timescale > 0 && fd.value > 0) {
+                    self.frameRate = (double)fd.timescale / fd.value;
+                    self.fdNum = (int)fd.value;
+                    self.fdDen = (int)fd.timescale;
+                }
+            }
+
+            id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+            if (!sequence) { [self transcriptionFailedWithError:@"No sequence in timeline."]; return; }
+
+            id primaryObj = nil;
+            if ([sequence respondsToSelector:@selector(primaryObject)]) {
+                primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject));
+            }
+            if (!primaryObj) { [self transcriptionFailedWithError:@"No primary object in sequence."]; return; }
+
+            id items = nil;
+            if ([primaryObj respondsToSelector:@selector(containedItems)]) {
+                items = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
+            }
+            if (!items || ![items isKindOfClass:[NSArray class]]) {
+                [self transcriptionFailedWithError:@"No items on timeline."]; return;
+            }
+
+            NSMutableArray *clipInfos = [NSMutableArray array];
+            double timelinePos = 0;
+            [self collectClipsFrom:(NSArray *)items atTimeline:&timelinePos into:clipInfos];
+            clips = [clipInfos copy];
+        } @catch (NSException *e) {
+            [self transcriptionFailedWithError:[NSString stringWithFormat:@"Error reading timeline: %@", e.reason]];
+        }
+    });
+
+    if (!clips || clips.count == 0) {
+        if (self.status != SpliceKitCaptionStatusError) {
+            [self transcriptionFailedWithError:@"No media clips found on timeline."];
+        }
+        return;
+    }
+
+    SpliceKit_log(@"[Captions] Found %lu items on timeline", (unsigned long)clips.count);
+
+    // Filter to clips with media URLs
+    NSMutableArray *transcribableClips = [NSMutableArray array];
+    for (NSDictionary *clipInfo in clips) {
+        if (!clipInfo[@"mediaURL"]) continue;
+        double dur = [clipInfo[@"duration"] doubleValue];
+        if (dur < 0.5) continue;
+        [transcribableClips addObject:clipInfo];
+    }
+
+    if (transcribableClips.count == 0) {
+        [self transcriptionFailedWithError:@"No transcribable clips found on timeline."];
+        return;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"Transcribing %lu clips with Parakeet...",
+            (unsigned long)transcribableClips.count];
+        if (self.progressBar) {
+            self.progressBar.hidden = NO;
+            self.progressBar.indeterminate = NO;
+            self.progressBar.doubleValue = 0;
+        }
+    });
+
+    // Build batch manifest — deduplicate source files
+    NSString *manifestPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"splicekit_caption_batch.json"];
+    NSMutableOrderedSet *uniqueFiles = [NSMutableOrderedSet orderedSet];
+    for (NSDictionary *clipInfo in transcribableClips) {
+        NSURL *mediaURL = clipInfo[@"mediaURL"];
+        [uniqueFiles addObject:mediaURL.path];
+    }
+    NSMutableArray *manifestEntries = [NSMutableArray array];
+    for (NSString *file in uniqueFiles) {
+        [manifestEntries addObject:@{@"file": file}];
+    }
+    NSData *manifestData = [NSJSONSerialization dataWithJSONObject:manifestEntries options:0 error:nil];
+    [manifestData writeToFile:manifestPath atomically:YES];
+
+    SpliceKit_log(@"[Captions] Parakeet batch: %lu clips, %lu unique source files",
+        (unsigned long)transcribableClips.count, (unsigned long)uniqueFiles.count);
+
+    // Run parakeet-transcriber
+    NSMutableArray *taskArgs = [NSMutableArray arrayWithObjects:@"--batch", manifestPath, @"--progress", @"--model", @"v3", nil];
+
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = binaryPath;
+    task.arguments = taskArgs;
+
+    NSPipe *stdoutPipe = [NSPipe pipe];
+    NSPipe *stderrPipe = [NSPipe pipe];
+    task.standardOutput = stdoutPipe;
+    task.standardError = stderrPipe;
+
+    __block NSMutableData *stdoutAccum = [NSMutableData data];
+    stdoutPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
+        NSData *data = handle.availableData;
+        if (data.length > 0) {
+            @synchronized (stdoutAccum) {
+                [stdoutAccum appendData:data];
+            }
+        }
+    };
+
+    // Stream stderr for progress updates
+    stderrPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
+        NSData *data = handle.availableData;
+        if (data.length == 0) return;
+        NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        if (!text) return;
+        for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+            if ([line hasPrefix:@"PROGRESS:"]) {
+                NSArray *parts = [line componentsSeparatedByString:@":"];
+                if (parts.count >= 3) {
+                    double frac = [parts[1] doubleValue];
+                    NSString *msg = [[parts subarrayWithRange:NSMakeRange(2, parts.count - 2)]
+                        componentsJoinedByString:@":"];
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (self.progressBar) {
+                            self.progressBar.indeterminate = NO;
+                            self.progressBar.doubleValue = frac;
+                        }
+                        self.statusLabel.stringValue = [NSString stringWithFormat:@"Parakeet: %@", msg];
+                    });
+                }
+            }
+        }
+    };
+
+    @try {
+        [task launch];
+        SpliceKit_log(@"[Captions] Parakeet process started (PID %d)", task.processIdentifier);
+        [task waitUntilExit];
+    } @catch (NSException *e) {
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil;
+        stderrPipe.fileHandleForReading.readabilityHandler = nil;
+        [self transcriptionFailedWithError:[NSString stringWithFormat:@"Could not launch Parakeet: %@", e.reason]];
+        return;
+    }
+
+    stdoutPipe.fileHandleForReading.readabilityHandler = nil;
+    stderrPipe.fileHandleForReading.readabilityHandler = nil;
+
+    NSData *remaining = [stdoutPipe.fileHandleForReading readDataToEndOfFile];
+    if (remaining.length > 0) {
+        @synchronized (stdoutAccum) {
+            [stdoutAccum appendData:remaining];
+        }
+    }
+
+    [[NSFileManager defaultManager] removeItemAtPath:manifestPath error:nil];
+
+    if (task.terminationStatus != 0) {
+        SpliceKit_log(@"[Captions] Parakeet failed (exit code %d)", task.terminationStatus);
+        [self transcriptionFailedWithError:[NSString stringWithFormat:@"Parakeet transcription failed (exit code %d). Check log for details.", task.terminationStatus]];
+        return;
+    }
+
+    // Parse JSON output
+    NSData *jsonData;
+    @synchronized (stdoutAccum) {
+        jsonData = [stdoutAccum copy];
+    }
+
+    if (jsonData.length == 0) {
+        [self transcriptionFailedWithError:@"Parakeet produced no output. The audio may be silent or too short."];
+        return;
+    }
+
+    NSError *jsonError = nil;
+    NSArray *batchResults = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&jsonError];
+    if (![batchResults isKindOfClass:[NSArray class]]) {
+        [self transcriptionFailedWithError:@"Parakeet returned unexpected output."];
+        return;
+    }
+
+    // Map results back to clips
+    NSMutableDictionary *resultsByFile = [NSMutableDictionary dictionary];
+    for (NSDictionary *result in batchResults) {
+        NSString *file = result[@"file"];
+        NSArray *words = result[@"words"];
+        if (file && [words isKindOfClass:[NSArray class]]) {
+            resultsByFile[file] = words;
+        }
+    }
+
+    // Build words array
+    NSMutableArray<SpliceKitTranscriptWord *> *allWords = [NSMutableArray array];
+    for (NSDictionary *clipInfo in transcribableClips) {
+        NSURL *mediaURL = clipInfo[@"mediaURL"];
+        double timelineStart = [clipInfo[@"timelineStart"] doubleValue];
+        double trimStart = [clipInfo[@"trimStart"] doubleValue];
+        double clipDuration = [clipInfo[@"duration"] doubleValue];
+        NSString *clipHandle = clipInfo[@"handle"];
+
+        NSArray *wordDicts = resultsByFile[mediaURL.path];
+        if (!wordDicts) continue;
+
+        for (NSDictionary *wd in wordDicts) {
+            NSString *text = wd[@"word"];
+            double startTime = [wd[@"startTime"] doubleValue];
+            double endTime = [wd[@"endTime"] doubleValue];
+            double confidence = [wd[@"confidence"] doubleValue];
+
+            if (startTime >= trimStart && startTime < trimStart + clipDuration) {
+                SpliceKitTranscriptWord *word = [[SpliceKitTranscriptWord alloc] init];
+                word.text = text;
+                word.startTime = timelineStart + (startTime - trimStart);
+                word.duration = MIN(endTime - startTime, (trimStart + clipDuration) - startTime);
+                word.endTime = word.startTime + word.duration;
+                word.confidence = confidence;
+                word.clipHandle = clipHandle;
+                word.clipTimelineStart = timelineStart;
+                word.sourceMediaOffset = trimStart;
+                word.sourceMediaTime = startTime;
+                word.sourceMediaPath = mediaURL.path;
+                [allWords addObject:word];
+            }
+        }
+    }
+
+    SpliceKit_log(@"[Captions] Parakeet transcription complete: %lu words", (unsigned long)allWords.count);
+    [self transcriptionFinishedWithWords:allWords];
 }
 
 - (void)setWordsManually:(NSArray<NSDictionary *> *)wordDicts {
@@ -2632,44 +3105,19 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
 
     // Auto-transcribe if no words yet
     if (self.mutableWords.count == 0) {
-        SpliceKitTranscriptPanel *tp = [SpliceKitTranscriptPanel sharedPanel];
-
-        if (tp.words.count > 0) {
-            // Transcript panel already has words — just import them
-            SpliceKit_log(@"[Captions] Auto-importing words from existing transcript");
-            [self importWordsFromTranscriptPanel];
-        } else {
-            // Trigger transcription and wait for completion
-            SpliceKit_log(@"[Captions] Auto-transcribing timeline...");
-            if (self.panel) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    self.statusLabel.stringValue = @"Transcribing timeline...";
-                });
-            }
-
-            dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-            id observer = [[NSNotificationCenter defaultCenter]
-                addObserverForName:@"SpliceKitTranscriptDidComplete"
-                object:nil queue:nil usingBlock:^(NSNotification *note) {
-                    dispatch_semaphore_signal(sem);
-                }];
-
+        SpliceKit_log(@"[Captions] Auto-transcribing timeline...");
+        if (self.panel) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                tp.engine = SpliceKitTranscriptEngineParakeet;
-                [tp transcribeTimeline];
+                self.statusLabel.stringValue = @"Transcribing timeline...";
             });
+        }
 
-            long timedOut = dispatch_semaphore_wait(sem,
-                dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
-            [[NSNotificationCenter defaultCenter] removeObserver:observer];
+        // Run Parakeet transcription synchronously (we're already off main thread)
+        [self performCaptionTranscription];
 
-            if (timedOut) {
-                self.status = SpliceKitCaptionStatusError;
-                self.errorMessage = @"Transcription timed out";
-                return @{@"error": @"Transcription timed out after 2 minutes"};
-            }
-
-            [self importWordsFromTranscriptPanel];
+        // Check if transcription produced results
+        if (self.status == SpliceKitCaptionStatusError) {
+            return @{@"error": self.errorMessage ?: @"Transcription failed"};
         }
     }
 

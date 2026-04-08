@@ -179,6 +179,7 @@ static void SpliceKit_checkCompatibility(void) {
 @interface SpliceKitMenuController : NSObject <NSMenuDelegate>
 + (instancetype)shared;
 - (void)toggleTranscriptPanel:(id)sender;
+- (void)toggleCaptionPanel:(id)sender;
 - (void)toggleCommandPalette:(id)sender;
 - (void)toggleLuaPanel:(id)sender;
 - (void)runLuaScript:(id)sender;
@@ -222,6 +223,21 @@ static void SpliceKit_checkCompatibility(void) {
     // Update toolbar button pressed state
     BOOL nowVisible = !visible;
     [self updateToolbarButtonState:nowVisible];
+}
+
+- (void)toggleCaptionPanel:(id)sender {
+    Class panelClass = objc_getClass("SpliceKitCaptionPanel");
+    if (!panelClass) {
+        SpliceKit_log(@"SpliceKitCaptionPanel class not found");
+        return;
+    }
+    id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
+    BOOL visible = ((BOOL (*)(id, SEL))objc_msgSend)(panel, @selector(isVisible));
+    if (visible) {
+        ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
+    } else {
+        ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
+    }
 }
 
 - (void)toggleCommandPalette:(id)sender {
@@ -556,6 +572,14 @@ static void SpliceKit_installMenu(void) {
     transcriptItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:transcriptItem];
 
+    NSMenuItem *captionItem = [[NSMenuItem alloc]
+        initWithTitle:@"Social Captions"
+               action:@selector(toggleCaptionPanel:)
+        keyEquivalent:@"c"];
+    captionItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
+    captionItem.target = [SpliceKitMenuController shared];
+    [bridgeMenu addItem:captionItem];
+
     NSMenuItem *paletteItem = [[NSMenuItem alloc]
         initWithTitle:@"Command Palette"
                action:@selector(toggleCommandPalette:)
@@ -692,7 +716,7 @@ static void SpliceKit_installMenu(void) {
         [mainMenu addItem:bridgeMenuItem];
     }
 
-    SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T Transcript, Cmd+Shift+P Palette, Ctrl+Option+L Lua REPL)");
+    SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T Transcript, Ctrl+Option+C Captions, Cmd+Shift+P Palette, Ctrl+Option+L Lua REPL)");
 }
 
 static NSString * const kSpliceKitTranscriptToolbarID = @"SpliceKitTranscriptItemID";

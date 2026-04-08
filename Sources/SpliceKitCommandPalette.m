@@ -632,6 +632,10 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"Open Transcript Editor", @"openTranscript", @"transcript", SpliceKitCommandCategoryTranscript, @"Transcript", @"Ctrl+Opt+T", @"Open transcript-based editing panel", @[@"speech", @"captions"]);
     add(@"Close Transcript Editor", @"closeTranscript", @"transcript", SpliceKitCommandCategoryTranscript, @"Transcript", nil, @"Close the transcript panel", @[]);
 
+    // --- Social Captions ---
+    add(@"Social Captions", @"openCaptions", @"captions", SpliceKitCommandCategoryTitles, @"Captions", @"Ctrl+Opt+C", @"Open social captions panel with auto-transcription", @[@"subtitle", @"tiktok", @"reels", @"highlight"]);
+    add(@"Close Social Captions", @"closeCaptions", @"captions", SpliceKitCommandCategoryTitles, @"Captions", nil, @"Close the social captions panel", @[]);
+
     // ===================================================================
     // NEW: Comprehensive MCP actions added to command palette
     // ===================================================================
@@ -1442,6 +1446,18 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
             if ([action isEqualToString:@"openTranscript"]) {
                 ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
             } else if ([action isEqualToString:@"closeTranscript"]) {
+                ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
+            }
+        });
+        result = @{@"action": action, @"status": @"ok"};
+    } else if ([type isEqualToString:@"captions"]) {
+        SpliceKit_executeOnMainThread(^{
+            Class panelClass = objc_getClass("SpliceKitCaptionPanel");
+            if (!panelClass) return;
+            id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
+            if ([action isEqualToString:@"openCaptions"]) {
+                ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
+            } else if ([action isEqualToString:@"closeCaptions"]) {
                 ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
             }
         });
@@ -3078,28 +3094,118 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
             @"Bloom", @"Mosaic",
         ]];
         validTimelineActions = [NSSet setWithArray:@[
+            // Editing basics
             @"blade", @"bladeAll", @"delete", @"cut", @"copy", @"paste", @"undo", @"redo",
             @"selectAll", @"deselectAll", @"selectClipAtPlayhead", @"selectToPlayhead",
-            @"trimToPlayhead", @"insertGap", @"joinClips", @"replaceWithGap",
+            @"pasteAsConnected", @"copyTimecode", @"insertGap", @"insertPlaceholder",
+            // Trim
+            @"trimToPlayhead", @"extendEditToPlayhead", @"trimStart", @"trimEnd",
+            @"joinClips", @"replaceWithGap",
+            @"nudgeLeft", @"nudgeRight", @"nudgeLeftBig", @"nudgeRightBig",
+            @"nudgeUp", @"nudgeDown",
+            @"rollEditLeft", @"rollEditRight", @"slipLeft", @"slipRight",
+            @"rippleTrimStartToPlayhead", @"rippleTrimEndToPlayhead",
+            // Range / In-Out
+            @"setRangeStart", @"setRangeEnd", @"clearRange", @"setClipRange",
+            // Navigation
+            @"nextEdit", @"previousEdit",
+            @"timelineHistoryBack", @"timelineHistoryForward",
+            // Markers
             @"addMarker", @"addTodoMarker", @"addChapterMarker", @"deleteMarker",
             @"deleteMarkersInSelection", @"nextMarker", @"previousMarker",
-            @"addTransition", @"nextEdit", @"previousEdit",
+            // Transitions
+            @"addTransition",
+            // Color
             @"addColorBoard", @"addColorWheels", @"addColorCurves", @"addColorAdjustment",
             @"addHueSaturation", @"addEnhanceLightAndColor", @"balanceColor", @"matchColor",
+            @"showColorInspector", @"nextColorEffect", @"previousColorEffect",
+            @"resetColorBoard", @"toggleAllColorOff",
+            @"addMagneticMask", @"smartConform",
+            // Audio
             @"adjustVolumeUp", @"adjustVolumeDown", @"detachAudio",
+            @"addChannelEQ", @"enhanceAudio", @"matchAudio",
+            @"addAudioFadeIn", @"addAudioFadeOut", @"applyAudioFades",
+            @"volumeMute", @"addDefaultAudioEffect",
+            @"expandAudio", @"expandAudioComponents",
+            // Titles
             @"addBasicTitle", @"addBasicLowerThird",
+            // Speed / Retime
             @"retimeNormal", @"retimeFast2x", @"retimeFast4x", @"retimeFast8x", @"retimeFast20x",
             @"retimeSlow50", @"retimeSlow25", @"retimeSlow10", @"retimeReverse", @"retimeHold",
             @"freezeFrame", @"retimeBladeSpeed", @"retimeSpeedRampToZero", @"retimeSpeedRampFromZero",
+            @"retimeCustomSpeed", @"retimeInstantReplayHalf", @"retimeInstantReplayQuarter",
+            @"retimeReset", @"retimeOpticalFlow", @"retimeFrameBlending", @"retimeFloorFrame",
+            // Keyframes
             @"addKeyframe", @"deleteKeyframes", @"nextKeyframe", @"previousKeyframe",
-            @"solo", @"disable", @"createCompoundClip", @"removeEffects",
+            // Clip operations
+            @"solo", @"disable", @"enableDisable", @"createCompoundClip",
             @"breakApartClipItems", @"addAdjustmentClip",
-            @"zoomToFit", @"zoomIn", @"zoomOut", @"toggleSnapping", @"toggleSkimming",
-            @"renderSelection", @"renderAll", @"analyzeAndFix", @"exportXML",
-            @"shareSelection", @"autoReframe", @"addVideoGenerator",
-            @"pasteEffects", @"pasteAttributes", @"removeAttributes", @"copyAttributes",
-            @"expandAudio", @"expandAudioComponents", @"favorite", @"reject", @"unrate",
-            @"createStoryline", @"pasteAsConnected",
+            @"liftFromPrimaryStoryline", @"overwriteToPrimaryStoryline",
+            @"connectClipToPrimaryStoryline", @"createStoryline",
+            @"collapseToConnectedStoryline", @"collapseToClip",
+            @"synchronizeClips", @"makeClipsUnique", @"renameClip",
+            @"addToSoloedClips", @"openInTimeline", @"backToParent",
+            // Auditions
+            @"createAudition", @"finalizeAudition", @"nextAuditionPick", @"previousAuditionPick",
+            // Multicam
+            @"createMulticamClip",
+            @"switchAngle01", @"switchAngle02", @"switchAngle03", @"switchAngle04",
+            @"cutAndSwitchAngle01", @"cutAndSwitchAngle02", @"cutAndSwitchAngle03", @"cutAndSwitchAngle04",
+            // Captions
+            @"addCaption", @"splitCaption", @"resolveOverlaps", @"duplicateCaption", @"importCaptions",
+            // Effects
+            @"removeEffects", @"pasteEffects", @"pasteAttributes", @"removeAttributes", @"copyAttributes",
+            @"resetAllParameters", @"toggleSelectedEffectsOff", @"addDefaultVideoEffect",
+            @"autoReframe", @"addVideoGenerator",
+            // Transform
+            @"showTransformControls", @"showCropControls", @"showDistortControls",
+            // Rating
+            @"favorite", @"reject", @"unrate",
+            @"rateAsFavorite", @"rateAsReject", @"removeRating", @"removeAllRatings",
+            @"hideClip",
+            // View / UI
+            @"zoomToFit", @"zoomIn", @"zoomOut", @"verticalZoomToFit", @"zoomToSamples",
+            @"toggleSnapping", @"toggleSkimming", @"toggleClipSkimming", @"toggleAudioSkimming",
+            @"toggleInspector", @"toggleTimeline", @"toggleTimelineIndex", @"toggleInspectorHeight",
+            @"toggleEventViewer",
+            @"showVideoAnimation", @"showAudioAnimation", @"soloAnimation",
+            @"showTrackingEditor", @"showCinematicEditor", @"showMagneticMaskEditor",
+            @"enableBeatDetection", @"togglePrecisionEditor",
+            @"showAudioLanes", @"expandSubroles", @"showDuplicateRanges", @"showKeywordEditor",
+            @"beatDetectionGrid", @"timelineScrolling", @"enterFullScreen",
+            @"toggleDuplicateDetection",
+            @"increaseClipHeight", @"decreaseClipHeight",
+            @"showClipNames", @"toggleClipAppearanceAudioWaveformsAction",
+            // Render / Export
+            @"renderSelection", @"renderAll", @"deleteRenderFiles",
+            @"analyzeAndFix", @"exportXML", @"shareSelection",
+            // Project / Library
+            @"duplicateProject", @"snapshotProject", @"projectProperties", @"libraryProperties",
+            @"closeLibrary", @"mergeEvents", @"deleteGeneratedFiles",
+            @"newProject", @"newEvent", @"importMedia", @"showProjectProperties",
+            @"consolidateMedia", @"transcodeMedia",
+            // Find
+            @"find", @"findAndReplaceTitle",
+            // Reveal
+            @"revealInBrowser", @"revealProjectInBrowser", @"revealInFinder", @"moveToTrash",
+            // Keywords
+            @"addKeywordGroup1", @"addKeywordGroup2", @"addKeywordGroup3", @"addKeywordGroup4",
+            @"addKeywordGroup5", @"addKeywordGroup6", @"addKeywordGroup7",
+            @"removeAllKeywords", @"removeAnalysisKeywords",
+            // Roles
+            @"showRoleEditor", @"editRoles",
+            @"assignDefaultVideoRole", @"assignDefaultAudioRole",
+            // Window / App
+            @"recordVoiceover", @"backgroundTasks", @"showPreferences",
+            // Edit modes
+            @"connectEditAudio", @"connectEditVideo",
+            @"insertEditAudio", @"insertEditVideo",
+            @"appendEditAudio", @"appendEditVideo",
+            @"overwriteEditAudio", @"overwriteEditVideo",
+            @"avEditModeAudio", @"avEditModeVideo", @"avEditModeBoth",
+            @"replaceFromStart", @"replaceFromEnd", @"replaceWhole",
+            // Navigation go-to
+            @"goToInspector", @"goToTimeline", @"goToViewer", @"goToColorBoard",
         ]];
     });
 
@@ -3109,40 +3215,89 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     static dispatch_once_t onceToken2;
     dispatch_once(&onceToken2, ^{
         hallToEffect = @{
+            // Blur family
             @"addGaussianBlur": @"Gaussian Blur", @"addBlur": @"Gaussian Blur",
             @"blur": @"Gaussian Blur", @"gaussianBlur": @"Gaussian Blur",
+            @"applyBlur": @"Gaussian Blur", @"addSoftFocus": @"Soft Focus",
+            @"softFocus": @"Soft Focus", @"addZoomBlur": @"Zoom Blur",
+            @"addRadialBlur": @"Radial Blur", @"addPrismBlur": @"Prism Blur",
+            @"addChannelBlur": @"Channel Blur",
+            // Keyers
             @"addKeyer": @"Keyer", @"addLumaKeyer": @"Luma Keyer",
+            @"addChromaKeyer": @"Chroma Keyer", @"chromaKey": @"Chroma Keyer",
+            @"greenScreen": @"Keyer", @"removeBackground": @"Keyer",
+            // Color looks
             @"addVignette": @"Vignette", @"addSharpen": @"Sharpen",
-            @"stabilize": @"Stabilization", @"addStabilization": @"Stabilization",
-            @"addNoiseReduction": @"Noise Reduction", @"noiseReduction": @"Noise Reduction",
-            @"addFilmGrain": @"Film Grain", @"filmGrain": @"Film Grain",
-            @"addLetterbox": @"Letterbox", @"addDropShadow": @"Drop Shadow",
-            @"addLensFlare": @"Lens Flare", @"addSepia": @"Sepia",
-            @"addFlipped": @"Flipped", @"flip": @"Flipped", @"flipHorizontal": @"Flipped",
-            @"addInvert": @"Invert", @"invertColors": @"Invert",
-            @"addPosterize": @"Posterize", @"addPixellate": @"Pixellate",
-            @"addUnderwater": @"Underwater", @"addBloom": @"Bloom",
-            @"addGlow": @"Glow", @"addGloom": @"Gloom",
-            @"addAgedFilm": @"Aged Film", @"agedFilm": @"Aged Film",
-            @"addTiltShift": @"Tilt-Shift", @"tiltShift": @"Tilt-Shift",
-            @"addRollingShutter": @"Rolling Shutter",
+            @"sharpenVideo": @"Sharpen", @"addUnsharpMask": @"Unsharp Mask",
+            @"addSepia": @"Sepia", @"sepiaFilter": @"Sepia", @"sepiaTone": @"Sepia",
             @"addBlackAndWhite": @"Black & White", @"blackAndWhite": @"Black & White",
+            @"bw": @"Black & White", @"desaturate": @"Black & White", @"grayscale": @"Black & White",
+            @"addTint": @"Tint", @"tint": @"Tint",
+            @"addNegative": @"Negative", @"negative": @"Negative",
+            @"addColorMonochrome": @"Color Monochrome",
+            @"addVintage": @"Vintage", @"vintage": @"Vintage", @"retro": @"Vintage",
+            // Stylize
+            @"addFilmGrain": @"Film Grain", @"filmGrain": @"Film Grain", @"grain": @"Film Grain",
+            @"addAgedFilm": @"Aged Film", @"agedFilm": @"Aged Film", @"oldFilm": @"Aged Film",
+            @"addBadTV": @"Bad TV", @"badTV": @"Bad TV", @"staticEffect": @"Bad TV",
+            @"addBloom": @"Bloom", @"bloom": @"Bloom",
+            @"addGlow": @"Glow", @"glow": @"Glow",
+            @"addGloom": @"Gloom", @"gloom": @"Gloom",
+            // Distortion
+            @"addUnderwater": @"Underwater", @"underwater": @"Underwater",
+            @"addEarthquake": @"Earthquake", @"earthquake": @"Earthquake", @"shake": @"Earthquake",
+            @"addFisheye": @"Fisheye", @"fisheye": @"Fisheye",
+            @"addMirror": @"Mirror", @"mirror": @"Mirror",
+            @"addKaleidoscope": @"Kaleidoscope", @"kaleidoscope": @"Kaleidoscope",
+            // Pixelate / Mosaic
+            @"addPixellate": @"Pixellate", @"pixelate": @"Pixellate", @"mosaic": @"Pixellate",
+            @"addPosterize": @"Posterize", @"posterize": @"Posterize",
+            // Light
+            @"addLightRays": @"Light Rays", @"lightRays": @"Light Rays", @"godRays": @"Light Rays",
+            @"addLensFlare": @"Lens Flare", @"lensFlare": @"Lens Flare",
+            @"addLightWrap": @"Light Wrap", @"lightWrap": @"Light Wrap",
+            // Correction / Fix
+            @"stabilize": @"Stabilization", @"addStabilization": @"Stabilization",
+            @"stabilizeVideo": @"Stabilization", @"reduceShake": @"Stabilization",
+            @"addNoiseReduction": @"Noise Reduction", @"noiseReduction": @"Noise Reduction",
+            @"reduceNoise": @"Noise Reduction", @"denoise": @"Noise Reduction",
+            @"addRollingShutter": @"Rolling Shutter", @"fixRollingShutter": @"Rolling Shutter",
             @"addBroadcastSafe": @"Broadcast Safe",
-            @"addCustomLUT": @"Custom LUT",
-            @"addNightVision": @"Night Vision",
+            // Masks
+            @"addDrawMask": @"Draw Mask", @"drawMask": @"Draw Mask",
+            @"addShapeMask": @"Shape Mask", @"shapeMask": @"Shape Mask",
+            @"addImageMask": @"Image Mask",
+            // Other
+            @"addLetterbox": @"Letterbox", @"letterbox": @"Letterbox", @"cinemaScope": @"Letterbox",
+            @"addDropShadow": @"Drop Shadow", @"dropShadow": @"Drop Shadow", @"shadow": @"Drop Shadow",
+            @"addFlipped": @"Flipped", @"flip": @"Flipped", @"flipHorizontal": @"Flipped",
+            @"flipVertical": @"Flipped", @"mirrorHorizontal": @"Flipped",
+            @"addInvert": @"Invert", @"invertColors": @"Invert", @"invert": @"Invert",
+            @"addTiltShift": @"Tilt-Shift", @"tiltShift": @"Tilt-Shift", @"miniature": @"Tilt-Shift",
+            @"addCustomLUT": @"Custom LUT", @"lut": @"Custom LUT", @"applyLUT": @"Custom LUT",
+            @"addBumpMap": @"Bump Map",
+            @"addColorCorrection": @"Color Correction",
+            @"addNightVision": @"Night Vision", @"nightVision": @"Night Vision",
+            @"addXRay": @"X-Ray", @"xray": @"X-Ray",
+            @"addPrism": @"Prism", @"prism": @"Prism",
             @"blendVideo": @"Flipped",
         };
         hallToTransition = @{
-            @"crossDissolve": @"Cross Dissolve",
-            @"flow": @"Flow",
+            @"crossDissolve": @"Cross Dissolve", @"addCrossDissolve": @"Cross Dissolve",
+            @"dissolve": @"Cross Dissolve",
+            @"flow": @"Flow", @"addFlow": @"Flow",
             @"fadeToColor": @"Fade To Color", @"fadeToBlack": @"Fade To Color",
-            @"wipe": @"Wipe",
-            @"push": @"Push",
-            @"slide": @"Slide",
-            @"spin": @"Spin",
-            @"pageCurl": @"Page Curl",
-            @"star": @"Star",
-            @"zoom": @"Zoom",
+            @"fade": @"Fade To Color", @"addFade": @"Fade To Color",
+            @"wipe": @"Wipe", @"addWipe": @"Wipe",
+            @"push": @"Push", @"addPush": @"Push",
+            @"slide": @"Slide", @"addSlide": @"Slide",
+            @"spin": @"Spin", @"addSpin": @"Spin",
+            @"pageCurl": @"Page Curl", @"addPageCurl": @"Page Curl",
+            @"star": @"Star", @"addStar": @"Star",
+            @"zoom": @"Zoom", @"addZoom": @"Zoom",
+            @"band": @"Band", @"addBand": @"Band",
+            @"doorway": @"Doorway", @"addDoorway": @"Doorway",
+            @"addMosaic": @"Mosaic",
         };
     });
 
@@ -3288,16 +3443,27 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         "ACTION TYPES:\n"
         "\n"
         "1. Timeline: {\"type\":\"timeline\",\"action\":\"NAME\"}\n"
-        "   Editing: blade, bladeAll, delete, cut, copy, paste, undo, redo, joinClips, replaceWithGap\n"
-        "   Selection: selectAll, deselectAll, selectClipAtPlayhead, trimToPlayhead\n"
+        "   Editing: blade, bladeAll, delete, cut, copy, paste, undo, redo, joinClips, replaceWithGap, pasteAsConnected, copyTimecode, insertGap, insertPlaceholder\n"
+        "   Selection: selectAll, deselectAll, selectClipAtPlayhead, selectToPlayhead\n"
+        "   Trim: trimToPlayhead, extendEditToPlayhead, trimStart, trimEnd, nudgeLeft, nudgeRight, nudgeUp, nudgeDown, rollEditLeft, rollEditRight, slipLeft, slipRight\n"
+        "   Range: setRangeStart, setRangeEnd, clearRange, setClipRange (mark in/out points)\n"
         "   Markers: addMarker, addTodoMarker, addChapterMarker, deleteMarker, deleteMarkersInSelection, nextMarker, previousMarker\n"
-        "   Navigation: nextEdit, previousEdit, addTransition\n"
-        "   Color: addColorBoard, addColorWheels, addColorCurves, addColorAdjustment, addHueSaturation, addEnhanceLightAndColor, balanceColor\n"
-        "   Audio: adjustVolumeUp, adjustVolumeDown, detachAudio\n"
+        "   Navigation: nextEdit, previousEdit, addTransition, timelineHistoryBack, timelineHistoryForward\n"
+        "   Color: addColorBoard, addColorWheels, addColorCurves, addColorAdjustment, addHueSaturation, addEnhanceLightAndColor, balanceColor, matchColor, addMagneticMask, resetColorBoard, toggleAllColorOff\n"
+        "   Audio: adjustVolumeUp, adjustVolumeDown, detachAudio, volumeMute, addChannelEQ, enhanceAudio, matchAudio, addAudioFadeIn, addAudioFadeOut, expandAudioComponents\n"
         "   Titles: addBasicTitle, addBasicLowerThird\n"
-        "   Speed: retimeNormal, retimeFast2x, retimeFast4x, retimeFast8x, retimeFast20x, retimeSlow50, retimeSlow25, retimeSlow10, retimeReverse, retimeHold, freezeFrame, retimeBladeSpeed\n"
-        "   Clips: solo, disable, createCompoundClip, removeEffects, breakApartClipItems, addAdjustmentClip\n"
-        "   View: zoomToFit, zoomIn, zoomOut, toggleSnapping, renderAll, analyzeAndFix, exportXML\n"
+        "   Speed: retimeNormal, retimeFast2x, retimeFast4x, retimeFast8x, retimeFast20x, retimeSlow50, retimeSlow25, retimeSlow10, retimeReverse, retimeHold, freezeFrame, retimeBladeSpeed, retimeSpeedRampToZero, retimeSpeedRampFromZero, retimeReset\n"
+        "   Clips: solo, disable, createCompoundClip, breakApartClipItems, addAdjustmentClip, liftFromPrimaryStoryline, overwriteToPrimaryStoryline, createStoryline, synchronizeClips, createAudition, renameClip, makeClipsUnique, openInTimeline, backToParent\n"
+        "   Effects: removeEffects, pasteEffects, pasteAttributes, removeAttributes, copyAttributes, resetAllParameters, autoReframe, smartConform, showTransformControls, showCropControls\n"
+        "   Captions: addCaption, splitCaption, resolveOverlaps, importCaptions\n"
+        "   Multicam: createMulticamClip, switchAngle01, switchAngle02, switchAngle03, switchAngle04, cutAndSwitchAngle01, cutAndSwitchAngle02\n"
+        "   Rating: favorite, reject, unrate, hideClip\n"
+        "   Keywords: removeAllKeywords, showKeywordEditor\n"
+        "   View: zoomToFit, zoomIn, zoomOut, verticalZoomToFit, toggleSnapping, toggleSkimming, toggleInspector, toggleTimeline, toggleTimelineIndex, showVideoAnimation, showAudioAnimation, showAudioLanes, togglePrecisionEditor, enterFullScreen, increaseClipHeight, decreaseClipHeight, toggleDuplicateDetection\n"
+        "   Render: renderAll, renderSelection, deleteRenderFiles\n"
+        "   Project: duplicateProject, snapshotProject, projectProperties, libraryProperties, closeLibrary, deleteGeneratedFiles, newProject, newEvent, importMedia, consolidateMedia, find, findAndReplaceTitle, revealInFinder\n"
+        "   Analysis: analyzeAndFix, exportXML\n"
+        "   Window: recordVoiceover, backgroundTasks, editRoles\n"
         "   App: showPreferences (open app preferences/settings)\n"
         "\n"
         "2. Playback: {\"type\":\"playback\",\"action\":\"NAME\"}\n"
@@ -3352,7 +3518,45 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         "- \\\"remove all markers\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectAll\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"deleteMarkersInSelection\\\"}]\n"
         "- \\\"select and remove effects\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"removeEffects\\\"}]\n"
         "- \\\"open preferences\\\" or \\\"settings\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"showPreferences\\\"}]\n"
-        "- \\\"new project\\\" -> [{\\\"type\\\":\\\"menu\\\",\\\"path\\\":[\\\"File\\\",\\\"New\\\",\\\"Project...\\\"]}]\n"
+        "- \\\"new project\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"newProject\\\"}]\n"
+        "- \\\"new event\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"newEvent\\\"}]\n"
+        "- \\\"import media\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"importMedia\\\"}]\n"
+        "- \\\"mark in point\\\" or \\\"set range start\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"setRangeStart\\\"}]\n"
+        "- \\\"mark out point\\\" or \\\"set range end\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"setRangeEnd\\\"}]\n"
+        "- \\\"clear in and out\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"clearRange\\\"}]\n"
+        "- \\\"mute the clip\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"volumeMute\\\"}]\n"
+        "- \\\"add EQ\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addChannelEQ\\\"}]\n"
+        "- \\\"enhance audio\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"enhanceAudio\\\"}]\n"
+        "- \\\"detach the audio\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"detachAudio\\\"}]\n"
+        "- \\\"add audio fade in\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addAudioFadeIn\\\"}]\n"
+        "- \\\"nudge clip left\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"nudgeLeft\\\"}]\n"
+        "- \\\"trim start to playhead\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"trimStart\\\"}]\n"
+        "- \\\"show inspector\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"toggleInspector\\\"}]\n"
+        "- \\\"show the timeline index\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"toggleTimelineIndex\\\"}]\n"
+        "- \\\"switch to camera 2\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"switchAngle02\\\"}]\n"
+        "- \\\"cut and switch to angle 1\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"cutAndSwitchAngle01\\\"}]\n"
+        "- \\\"mark as favorite\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"favorite\\\"}]\n"
+        "- \\\"reject this clip\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"reject\\\"}]\n"
+        "- \\\"add a caption\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addCaption\\\"}]\n"
+        "- \\\"duplicate the project\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"duplicateProject\\\"}]\n"
+        "- \\\"snapshot project\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"snapshotProject\\\"}]\n"
+        "- \\\"delete render files\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"deleteRenderFiles\\\"}]\n"
+        "- \\\"free up disk space\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"deleteGeneratedFiles\\\"}]\n"
+        "- \\\"find and replace text\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"findAndReplaceTitle\\\"}]\n"
+        "- \\\"show file in Finder\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"revealInFinder\\\"}]\n"
+        "- \\\"lift clip from storyline\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"liftFromPrimaryStoryline\\\"}]\n"
+        "- \\\"nest clips into compound\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"createCompoundClip\\\"}]\n"
+        "- \\\"ungroup compound clip\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"breakApartClipItems\\\"}]\n"
+        "- \\\"record a voiceover\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"recordVoiceover\\\"}]\n"
+        "- \\\"speed ramp to freeze\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"retimeSpeedRampToZero\\\"}]\n"
+        "- \\\"reset speed\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"retimeReset\\\"}]\n"
+        "- \\\"add magnetic mask\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addMagneticMask\\\"}]\n"
+        "- \\\"crop the clip\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"showCropControls\\\"}]\n"
+        "- \\\"show transform controls\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"showTransformControls\\\"}]\n"
+        "- \\\"go full screen\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"enterFullScreen\\\"}]\n"
+        "- \\\"make clip taller\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"increaseClipHeight\\\"}]\n"
+        "- \\\"show background tasks\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"backgroundTasks\\\"}]\n"
+        "- \\\"remove all keywords\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"removeAllKeywords\\\"}]\n"
         "\"\"\"\n"
         "\n"
         "let fullQuery = \"\\(timelineContext)\\n\\nUser request: \\(query)\"\n"
@@ -3568,12 +3772,266 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
     else if ([q containsString:@"preference"] || [q containsString:@"settings"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"showPreferences"}];
     }
+    // ── Trim ──
+    else if ([q containsString:@"nudge"] || [q containsString:@"shift clip"]) {
+        if ([q containsString:@"up"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"nudgeUp"}];
+        } else if ([q containsString:@"down"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"nudgeDown"}];
+        } else if ([q containsString:@"left"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"nudgeLeft"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"nudgeRight"}];
+        }
+    } else if ([q containsString:@"trim start"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"trimStart"}];
+    } else if ([q containsString:@"trim end"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"trimEnd"}];
+    } else if ([q containsString:@"extend edit"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"extendEditToPlayhead"}];
+    } else if ([q containsString:@"roll edit"]) {
+        if ([q containsString:@"left"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"rollEditLeft"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"rollEditRight"}];
+        }
+    } else if ([q containsString:@"slip"]) {
+        if ([q containsString:@"left"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"slipLeft"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"slipRight"}];
+        }
+    }
+    // ── Range / In-Out ──
+    else if ([q containsString:@"mark in"] || [q containsString:@"in point"] || [q containsString:@"range start"] || [q containsString:@"set in"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"setRangeStart"}];
+    } else if ([q containsString:@"mark out"] || [q containsString:@"out point"] || [q containsString:@"range end"] || [q containsString:@"set out"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"setRangeEnd"}];
+    } else if ([q containsString:@"clear range"] || [q containsString:@"clear in"] || [q containsString:@"remove range"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"clearRange"}];
+    }
+    // ── Audio extras ──
+    else if ([q containsString:@"mute"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"volumeMute"}];
+    } else if ([q containsString:@"fade in"] && [q containsString:@"audio"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"addAudioFadeIn"}];
+    } else if ([q containsString:@"fade out"] && [q containsString:@"audio"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"addAudioFadeOut"}];
+    } else if ([q containsString:@"channel eq"] || [q containsString:@"equaliz"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"addChannelEQ"}];
+    } else if ([q containsString:@"enhance audio"] || [q containsString:@"audio enhance"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"enhanceAudio"}];
+    } else if ([q containsString:@"match audio"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"matchAudio"}];
+    } else if ([q containsString:@"expand audio"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"expandAudioComponents"}];
+    }
+    // ── Multicam ──
+    else if ([q containsString:@"multicam"] || [q containsString:@"multi-cam"] || [q containsString:@"multi cam"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"createMulticamClip"}];
+    } else if ([q containsString:@"switch"] && [q containsString:@"angle"]) {
+        if ([q containsString:@"4"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"switchAngle04"}];
+        } else if ([q containsString:@"3"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"switchAngle03"}];
+        } else if ([q containsString:@"2"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"switchAngle02"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"switchAngle01"}];
+        }
+    } else if ([q containsString:@"camera"] && ([q containsString:@"switch"] || [q containsString:@"cam"])) {
+        if ([q containsString:@"4"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"switchAngle04"}];
+        } else if ([q containsString:@"3"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"switchAngle03"}];
+        } else if ([q containsString:@"2"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"switchAngle02"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"switchAngle01"}];
+        }
+    }
+    // ── Rating ──
+    else if ([q containsString:@"favorite"] || [q containsString:@"favourite"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"favorite"}];
+    } else if ([q containsString:@"reject"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"reject"}];
+    } else if ([q containsString:@"unrate"] || [q containsString:@"remove rating"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"unrate"}];
+    }
+    // ── Captions ──
+    else if ([q containsString:@"caption"] || [q containsString:@"subtitle"]) {
+        if ([q containsString:@"split"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"splitCaption"}];
+        } else if ([q containsString:@"overlap"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"resolveOverlaps"}];
+        } else if ([q containsString:@"import"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"importCaptions"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"addCaption"}];
+        }
+    }
+    // ── Project / Library ──
+    else if ([q containsString:@"duplicate project"] || [q containsString:@"copy project"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"duplicateProject"}];
+    } else if ([q containsString:@"snapshot"] || [q containsString:@"backup project"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"snapshotProject"}];
+    } else if ([q containsString:@"project properties"] || [q containsString:@"project settings"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"projectProperties"}];
+    } else if ([q containsString:@"library properties"] || [q containsString:@"library info"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"libraryProperties"}];
+    } else if ([q containsString:@"close library"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"closeLibrary"}];
+    } else if ([q containsString:@"merge event"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"mergeEvents"}];
+    } else if ([q containsString:@"delete generated"] || [q containsString:@"free space"] || [q containsString:@"free up"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"deleteGeneratedFiles"}];
+    } else if ([q containsString:@"delete render"] || [q containsString:@"clear cache"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"deleteRenderFiles"}];
+    } else if ([q containsString:@"import media"] || [q containsString:@"import file"] || [q containsString:@"add files"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"importMedia"}];
+    } else if ([q containsString:@"new project"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"newProject"}];
+    } else if ([q containsString:@"new event"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"newEvent"}];
+    } else if ([q containsString:@"consolidate"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"consolidateMedia"}];
+    } else if ([q containsString:@"transcode"] || [q containsString:@"proxy"] || [q containsString:@"optimiz"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"transcodeMedia"}];
+    }
+    // ── Reveal / Find ──
+    else if ([q containsString:@"reveal"] && [q containsString:@"finder"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"revealInFinder"}];
+    } else if ([q containsString:@"show in finder"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"revealInFinder"}];
+    } else if ([q containsString:@"find and replace"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"findAndReplaceTitle"}];
+    } else if ([q containsString:@"search"] || [q containsString:@"find text"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"find"}];
+    }
+    // ── Clip operations ──
+    else if ([q containsString:@"lift"] && [q containsString:@"storyline"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"liftFromPrimaryStoryline"}];
+    } else if ([q containsString:@"overwrite"] && [q containsString:@"primary"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"overwriteToPrimaryStoryline"}];
+    } else if ([q containsString:@"break apart"] || [q containsString:@"ungroup"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"breakApartClipItems"}];
+    } else if ([q containsString:@"sync"] && [q containsString:@"clip"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"synchronizeClips"}];
+    } else if ([q containsString:@"make unique"] || [q containsString:@"independent cop"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"makeClipsUnique"}];
+    } else if ([q containsString:@"rename clip"] || [q containsString:@"rename the clip"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"renameClip"}];
+    } else if ([q containsString:@"open in timeline"] || [q containsString:@"dive in"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"openInTimeline"}];
+    } else if ([q containsString:@"back to parent"] || [q containsString:@"exit compound"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"backToParent"}];
+    }
+    // ── View toggles ──
+    else if ([q containsString:@"inspector"]) {
+        if ([q containsString:@"toggle"] || [q containsString:@"show"] || [q containsString:@"hide"] || [q containsString:@"open"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"toggleInspector"}];
+        }
+    } else if ([q containsString:@"timeline index"] || [q containsString:@"sidebar"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"toggleTimelineIndex"}];
+    } else if ([q containsString:@"full screen"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"enterFullScreen"}];
+    } else if ([q containsString:@"precision editor"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"togglePrecisionEditor"}];
+    } else if ([q containsString:@"audio lane"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"showAudioLanes"}];
+    } else if ([q containsString:@"video animation"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"showVideoAnimation"}];
+    } else if ([q containsString:@"audio animation"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"showAudioAnimation"}];
+    } else if ([q containsString:@"clip height"] || [q containsString:@"clip taller"] || [q containsString:@"clip bigger"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"increaseClipHeight"}];
+    } else if ([q containsString:@"clip shorter"] || [q containsString:@"clip smaller"] || [q containsString:@"compact"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"decreaseClipHeight"}];
+    } else if ([q containsString:@"waveform"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"toggleClipAppearanceAudioWaveformsAction"}];
+    }
+    // ── Speed extras ──
+    else if ([q containsString:@"speed ramp"] || [q containsString:@"ramp"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        if ([q containsString:@"from zero"] || [q containsString:@"from freeze"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"retimeSpeedRampFromZero"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"retimeSpeedRampToZero"}];
+        }
+    } else if ([q containsString:@"optical flow"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"retimeOpticalFlow"}];
+    } else if ([q containsString:@"frame blending"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"retimeFrameBlending"}];
+    } else if ([q containsString:@"instant replay"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"retimeInstantReplayHalf"}];
+    }
+    // ── Transform / Spatial ──
+    else if ([q containsString:@"transform"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"showTransformControls"}];
+    } else if ([q containsString:@"crop"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"showCropControls"}];
+    } else if ([q containsString:@"distort"] || [q containsString:@"corner pin"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"showDistortControls"}];
+    }
+    // ── Magnetic mask ──
+    else if ([q containsString:@"magnetic mask"] || [q containsString:@"object mask"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"addMagneticMask"}];
+    } else if ([q containsString:@"smart conform"] || [q containsString:@"auto reframe"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"selectClipAtPlayhead"}];
+        [actions addObject:@{@"type": @"timeline", @"action": @"autoReframe"}];
+    }
+    // ── Keywords ──
+    else if ([q containsString:@"keyword"]) {
+        if ([q containsString:@"remove all"] || [q containsString:@"clear"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"removeAllKeywords"}];
+        } else if ([q containsString:@"editor"] || [q containsString:@"show"] || [q containsString:@"open"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"showKeywordEditor"}];
+        }
+    }
+    // ── Voiceover ──
+    else if ([q containsString:@"voiceover"] || [q containsString:@"voice over"] || [q containsString:@"narrat"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"recordVoiceover"}];
+    }
+    // ── Background tasks ──
+    else if ([q containsString:@"background task"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"backgroundTasks"}];
+    }
+    // ── Roles ──
+    else if ([q containsString:@"role"]) {
+        if ([q containsString:@"edit"] || [q containsString:@"manage"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"editRoles"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"showRoleEditor"}];
+        }
+    }
+    // ── Auditions ──
+    else if ([q containsString:@"audition"]) {
+        if ([q containsString:@"finalize"] || [q containsString:@"commit"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"finalizeAudition"}];
+        } else if ([q containsString:@"next"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"nextAuditionPick"}];
+        } else if ([q containsString:@"prev"]) {
+            [actions addObject:@{@"type": @"timeline", @"action": @"previousAuditionPick"}];
+        } else {
+            [actions addObject:@{@"type": @"timeline", @"action": @"createAudition"}];
+        }
+    }
     // ── Effects (by keyword) ──
     else if ([q containsString:@"luma keyer"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Luma Keyer"}];
     } else if ([q containsString:@"chroma keyer"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Chroma Keyer"}];
-    } else if ([q containsString:@"keyer"]) {
+    } else if ([q containsString:@"keyer"] || [q containsString:@"green screen"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Keyer"}];
     } else if ([q containsString:@"blur"] || [q containsString:@"gaussian"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Gaussian Blur"}];
@@ -3585,26 +4043,28 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         [actions addObject:@{@"type": @"effect", @"name": @"Stabilization"}];
     } else if ([q containsString:@"rolling shutter"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Rolling Shutter"}];
-    } else if ([q containsString:@"noise reduction"]) {
+    } else if ([q containsString:@"noise reduction"] || [q containsString:@"denoise"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Noise Reduction"}];
-    } else if ([q containsString:@"black and white"] || [q containsString:@"b&w"] || [q containsString:@"monochrome"]) {
+    } else if ([q containsString:@"black and white"] || [q containsString:@"b&w"] || [q containsString:@"monochrome"] || [q containsString:@"grayscale"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Black & White"}];
     } else if ([q containsString:@"sepia"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Sepia"}];
     } else if ([q containsString:@"aged film"] || [q containsString:@"old film"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Aged Film"}];
-    } else if ([q containsString:@"film grain"]) {
+    } else if ([q containsString:@"film grain"] || [q containsString:@"grain"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Film Grain"}];
     } else if ([q containsString:@"bloom"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Bloom"}];
     } else if ([q containsString:@"glow"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Glow"}];
-    } else if ([q containsString:@"letterbox"]) {
+    } else if ([q containsString:@"letterbox"] || [q containsString:@"cinema bar"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Letterbox"}];
     } else if ([q containsString:@"drop shadow"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Drop Shadow"}];
     } else if ([q containsString:@"lens flare"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Lens Flare"}];
+    } else if ([q containsString:@"light ray"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Light Rays"}];
     } else if ([q containsString:@"tilt"] && [q containsString:@"shift"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Tilt-Shift"}];
     } else if ([q containsString:@"flip"]) {
@@ -3617,6 +4077,24 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         [actions addObject:@{@"type": @"effect", @"name": @"Pixellate"}];
     } else if ([q containsString:@"underwater"]) {
         [actions addObject:@{@"type": @"effect", @"name": @"Underwater"}];
+    } else if ([q containsString:@"night vision"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Night Vision"}];
+    } else if ([q containsString:@"x-ray"] || [q containsString:@"xray"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"X-Ray"}];
+    } else if ([q containsString:@"bad tv"] || [q containsString:@"static"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Bad TV"}];
+    } else if ([q containsString:@"earthquake"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Earthquake"}];
+    } else if ([q containsString:@"fisheye"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Fisheye"}];
+    } else if ([q containsString:@"kaleidoscope"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Kaleidoscope"}];
+    } else if ([q containsString:@"vintage"] || [q containsString:@"retro look"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Vintage"}];
+    } else if ([q containsString:@"broadcast safe"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Broadcast Safe"}];
+    } else if ([q containsString:@"custom lut"] || [q containsString:@"apply lut"]) {
+        [actions addObject:@{@"type": @"effect", @"name": @"Custom LUT"}];
     }
 
     return actions;
@@ -4767,7 +5245,7 @@ static NSString * const kGemmaSystemPrompt =
         "    return s\n"
         "}\n"
         "\n"
-        "@Generable struct ActArgs { @Guide(description: \"blade(=cut/split),delete,undo,redo,selectClipAtPlayhead,selectAll,addMarker,addChapterMarker,nextEdit,previousEdit,addTransition,addColorBoard,retimeSlow50,retimeFast2x,freezeFrame,addBasicTitle,removeEffects,showPreferences(=settings/preferences)\") var action: String }\n"
+        "@Generable struct ActArgs { @Guide(description: \"blade(=cut/split),delete,undo,redo,selectClipAtPlayhead,selectAll,addMarker,addChapterMarker,nextEdit,previousEdit,addTransition,addColorBoard,retimeSlow50,retimeFast2x,freezeFrame,addBasicTitle,removeEffects,showPreferences(=settings/preferences),projectProperties(=project settings/properties/preferences for project),toggleInspector,solo,disable,favorite,reject,find,zoomToFit\") var action: String }\n"
         "@Generable struct SeekArgs { @Guide(description: \"seconds\") var seconds: Double }\n"
         "@Generable struct ClipArgs { @Guide(description: \"max clips\") var limit: Int? }\n"
         "@Generable struct RepeatArgs {\n"
@@ -4780,7 +5258,7 @@ static NSString * const kGemmaSystemPrompt =
         "\n"
         "struct Act: Tool {\n"
         "    let name = \"edit\"\n"
-        "    let description = \"Timeline action. IMPORTANT: cut/split = blade (NOT delete)\"\n"
+        "    let description = \"Timeline action — use this FIRST for any editing, navigation, settings, or preferences. IMPORTANT: cut/split = blade (NOT delete). preferences/settings = showPreferences. project settings = projectProperties.\"\n"
         "    func call(arguments: ActArgs) async throws -> String { bridge(\"timeline.action\", [\"action\": arguments.action]) }\n"
         "}\n"
         "struct Seek: Tool {\n"
@@ -4818,14 +5296,14 @@ static NSString * const kGemmaSystemPrompt =
         "}\n"
         "struct Menu: Tool {\n"
         "    let name = \"menu\"\n"
-        "    let description = \"Execute any menu command by path\"\n"
+        "    let description = \"Execute a menu command by path. Only use if the edit tool does not have the action.\"\n"
         "    func call(arguments: MenuArgs) async throws -> String { bridge(\"menu.execute\", [\"menuPath\": arguments.path]) }\n"
         "}\n"
         "\n"
         "Task {\n"
         "    do {\n"
         "        let s = LanguageModelSession(tools: [Act(), Seek(), Clips(), Repeat(), Fx(), Menu()],\n"
-        "            instructions: \"You control Final Cut Pro via tools. %@ IMPORTANT: cut/split means blade NOT delete. For cut/blade/marker every N seconds use repeat_action. Summarize what you did.\")\n"
+        "            instructions: \"You control Final Cut Pro via tools. %@ IMPORTANT: cut/split means blade NOT delete. For cut/blade/marker every N seconds use repeat_action. For preferences/settings use edit with showPreferences. For project settings use edit with projectProperties. Always prefer the edit tool over menu. Summarize what you did.\")\n"
         "        let r = try await s.respond(to: \"%@\")\n"
         "        print(r.content ?? \"Done.\")\n"
         "    } catch { print(\"Error: \\(error.localizedDescription)\") }\n"
