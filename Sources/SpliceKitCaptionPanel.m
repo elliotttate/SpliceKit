@@ -2307,6 +2307,10 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
                 ind, (unsigned long)seg.segmentIndex + 1, durStr];
             NSString *posParam = [self contentPositionParamXML];
             if (posParam.length > 0) [xml appendFormat:@"%@    %@", ind, posParam];
+            CGFloat adjustY = [self yOffsetForPosition];
+            if (fabs(adjustY) > 1.0) {
+                [xml appendFormat:@"%@    <adjust-transform position=\"0 %.0f\"/>\n", ind, adjustY];
+            }
             [xml appendFormat:@"%@    <text><text-style ref=\"%@\">%@</text-style></text>\n",
                 ind, tsID, SpliceKitCaption_escapeXML(text)];
             [xml appendFormat:@"%@    %@\n", ind, tsDef];
@@ -2349,7 +2353,9 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
                     overlay = [[NSWindow alloc] initWithContentRect:mainWindow.frame
                         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
                     overlay.opaque = YES;
-                    overlay.level = mainWindow.level + 1;
+                    overlay.hasShadow = NO;
+                    // Use a very high window level to stay above FCP during the switch
+                    overlay.level = NSScreenSaverWindowLevel;
                     overlay.backgroundColor = [NSColor blackColor];
                     NSImageView *iv = [[NSImageView alloc] initWithFrame:
                         NSMakeRect(0, 0, mainWindow.frame.size.width, mainWindow.frame.size.height)];
@@ -2357,7 +2363,11 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
                     iv.imageScaling = NSImageScaleAxesIndependently;
                     [overlay.contentView addSubview:iv];
                     [overlay orderFront:nil];
-                    SpliceKit_log(@"[Captions] Snapshot overlay shown");
+
+                    // CRITICAL: spin the runloop so the overlay actually renders
+                    // before we start the conversion (which will update the UI underneath)
+                    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+                    SpliceKit_log(@"[Captions] Snapshot overlay rendered at level %ld", (long)overlay.level);
                 }
             } @catch (NSException *e) {
                 SpliceKit_log(@"[Captions] Snapshot overlay failed: %@", e.reason);
@@ -2386,7 +2396,7 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
                                                    to:nil from:nil];
 
         // Convert FCPXML to native clipboard format (import → temp project → copy → switch back).
-        // The overlay window hides this from the user.
+        // The overlay window at ScreenSaver level hides this from the user.
         SpliceKit_convertFCPXMLToNativeClipboard();
 
         // Now paste the native data as connected storyline
@@ -2981,6 +2991,11 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     // Content Position param — baked into FCPXML so every title gets it
     NSString *posParam = [self contentPositionParamXML];
     if (posParam.length > 0) [xml appendFormat:@"%@    %@", indent, posParam];
+    // adjust-transform — FCP-level position (reliable fallback)
+    CGFloat adjustY = [self yOffsetForPosition];
+    if (fabs(adjustY) > 1.0) {
+        [xml appendFormat:@"%@    <adjust-transform position=\"0 %.0f\"/>\n", indent, adjustY];
+    }
 
     // Text with per-word highlighting
     [xml appendFormat:@"%@    <text>\n", indent];
