@@ -9086,7 +9086,7 @@ BOOL SpliceKit_convertFCPXMLToNativeClipboard(void) {
     // --- Find temp project by unique name ---
     {
         __block id tempSeq = nil;
-        for (int attempt = 0; attempt < 15 && !tempSeq; attempt++) {
+        for (int attempt = 0; attempt < 30 && !tempSeq; attempt++) {
             [[NSRunLoop currentRunLoop] runUntilDate:
                 [NSDate dateWithTimeIntervalSinceNow:0.2]];
             id libs = ((id (*)(id, SEL))objc_msgSend)(
@@ -9122,7 +9122,7 @@ BOOL SpliceKit_convertFCPXMLToNativeClipboard(void) {
             NSSelectorFromString(@"loadEditorForSequence:"), tempSeq);
 
         BOOL tempLoaded = NO;
-        for (int i = 0; i < 25 && !tempLoaded; i++) {
+        for (int i = 0; i < 50 && !tempLoaded; i++) {
             [[NSRunLoop currentRunLoop] runUntilDate:
                 [NSDate dateWithTimeIntervalSinceNow:0.2]];
             id tm = SpliceKit_getActiveTimelineModule();
@@ -9142,7 +9142,7 @@ BOOL SpliceKit_convertFCPXMLToNativeClipboard(void) {
         }
 
         [[NSRunLoop currentRunLoop] runUntilDate:
-            [NSDate dateWithTimeIntervalSinceNow:0.3]];
+            [NSDate dateWithTimeIntervalSinceNow:0.5]];
 
         // --- Copy to native clipboard format ---
         [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"selectAll:")
@@ -9168,7 +9168,7 @@ BOOL SpliceKit_convertFCPXMLToNativeClipboard(void) {
             NSSelectorFromString(@"loadEditorForSequence:"), userSequence);
 
         BOOL userLoaded = NO;
-        for (int i = 0; i < 25 && !userLoaded; i++) {
+        for (int i = 0; i < 50 && !userLoaded; i++) {
             [[NSRunLoop currentRunLoop] runUntilDate:
                 [NSDate dateWithTimeIntervalSinceNow:0.2]];
             id tm = SpliceKit_getActiveTimelineModule();
@@ -9220,18 +9220,42 @@ cleanup:
 
 // --- Generic paste swizzle handler (shared by pasteAnchored: and paste:) ---
 static void SpliceKit_handleFCPXMLPaste(id self, SEL _cmd, id sender, IMP original) {
+    SpliceKit_log(@"[FCPXMLPaste] Swizzle ENTERED for %@", NSStringFromSelector(_cmd));
+    // Temp debug file
+    {
+        NSString *msg = [NSString stringWithFormat:@"%@: Swizzle ENTERED for %@\n",
+            [NSDate date], NSStringFromSelector(_cmd)];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/splicekit_paste_debug.log"];
+        if (!fh) { [@"" writeToFile:@"/tmp/splicekit_paste_debug.log" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/splicekit_paste_debug.log"]; }
+        [fh seekToEndOfFile]; [fh writeData:[msg dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile];
+    }
     // Check if FCPXML needs conversion
     Class ffpbClass = objc_getClass("FFPasteboard");
     if (ffpbClass) {
         id ffpb = ((id (*)(id, SEL, id))objc_msgSend)(
             ((id (*)(id, SEL))objc_msgSend)((id)ffpbClass, @selector(alloc)),
             NSSelectorFromString(@"initWithName:"), NSPasteboardNameGeneral);
-        if (!((BOOL (*)(id, SEL, BOOL))objc_msgSend)(ffpb, NSSelectorFromString(@"hasEdits:"), NO)) {
-            // No native data — try FCPXML conversion
-            SpliceKit_convertFCPXMLToNativeClipboard();
+        BOOL hasEdits = ((BOOL (*)(id, SEL, BOOL))objc_msgSend)(ffpb, NSSelectorFromString(@"hasEdits:"), NO);
+        SpliceKit_log(@"[FCPXMLPaste] hasEdits=%d", hasEdits);
+        {
+            NSString *msg = [NSString stringWithFormat:@"hasEdits=%d\n", hasEdits];
+            NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/splicekit_paste_debug.log"];
+            if (fh) { [fh seekToEndOfFile]; [fh writeData:[msg dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile]; }
         }
+        if (!hasEdits) {
+            // No native data — try FCPXML conversion
+            BOOL converted = SpliceKit_convertFCPXMLToNativeClipboard();
+            SpliceKit_log(@"[FCPXMLPaste] Conversion result: %d", converted);
+            {
+                NSString *msg = [NSString stringWithFormat:@"converted=%d\n", converted];
+                NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/splicekit_paste_debug.log"];
+                if (fh) { [fh seekToEndOfFile]; [fh writeData:[msg dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile]; }
+            }
+        }
+    } else {
+        SpliceKit_log(@"[FCPXMLPaste] FFPasteboard class NOT FOUND");
     }
-    // Call original paste (works whether we converted FCPXML or data was already native)
     ((void (*)(id, SEL, id))original)(self, _cmd, sender);
 }
 
