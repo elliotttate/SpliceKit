@@ -1,9 +1,9 @@
 CC = clang
 ARCHS = -arch arm64 -arch x86_64
 MIN_VERSION = -mmacosx-version-min=14.0
-FRAMEWORKS = -framework Foundation -framework AppKit -framework AVFoundation
+FRAMEWORKS = -framework Foundation -framework AppKit -framework AVFoundation -framework CoreServices
 OBJC_FLAGS = -fobjc-arc -fmodules
-LINKER_FLAGS = -undefined dynamic_lookup -dynamiclib
+LINKER_FLAGS = -undefined dynamic_lookup -dynamiclib -lsqlite3 -lz
 INSTALL_NAME = -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit
 
 SOURCES = Sources/SpliceKit.m \
@@ -14,10 +14,18 @@ SOURCES = Sources/SpliceKit.m \
           Sources/SpliceKitTranscriptPanel.m \
           Sources/SpliceKitCaptionPanel.m \
           Sources/SpliceKitCommandPalette.m \
-          Sources/SpliceKitDebugUI.m
+          Sources/SpliceKitDebugUI.m \
+          Sources/SpliceKitLua.m \
+          Sources/SpliceKitLuaPanel.m
 
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)/SpliceKit
+
+# Lua 5.4.7 (vendored, compiled as static lib)
+LUA_DIR = vendor/lua-5.4.7/src
+LUA_SRCS = $(filter-out $(LUA_DIR)/lua.c $(LUA_DIR)/luac.c, $(wildcard $(LUA_DIR)/*.c))
+LUA_OBJS = $(patsubst $(LUA_DIR)/%.c, $(BUILD_DIR)/lua/%.o, $(LUA_SRCS))
+LUA_LIB = $(BUILD_DIR)/liblua.a
 
 # Modded app paths — auto-detect standard or Creator Studio edition
 MODDED_APP_STANDARD = $(HOME)/Applications/SpliceKit/Final Cut Pro.app
@@ -40,11 +48,20 @@ $(SILENCE_DETECTOR): tools/silence-detector.swift
 	swiftc -O -suppress-warnings -o $(SILENCE_DETECTOR) tools/silence-detector.swift
 	@echo "Built: $(SILENCE_DETECTOR)"
 
-$(OUTPUT): $(SOURCES) Sources/SpliceKit.h
+# Lua static library — compiled as C (no -fobjc-arc)
+$(BUILD_DIR)/lua/%.o: $(LUA_DIR)/%.c
+	@mkdir -p $(BUILD_DIR)/lua
+	$(CC) $(ARCHS) $(MIN_VERSION) -DLUA_USE_MACOSX -O2 -Wall -c $< -o $@
+
+$(LUA_LIB): $(LUA_OBJS)
+	libtool -static -o $@ $^
+	@echo "Built: $(LUA_LIB)"
+
+$(OUTPUT): $(SOURCES) Sources/SpliceKit.h $(LUA_LIB)
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(ARCHS) $(MIN_VERSION) $(FRAMEWORKS) $(OBJC_FLAGS) $(LINKER_FLAGS) \
-		$(INSTALL_NAME) -I Sources \
-		$(SOURCES) -o $(OUTPUT)
+		$(INSTALL_NAME) -I Sources -I $(LUA_DIR) \
+		$(SOURCES) $(LUA_LIB) -o $(OUTPUT)
 	@echo "Built: $(OUTPUT)"
 	@file $(OUTPUT)
 
@@ -70,6 +87,14 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 	@cp $(SILENCE_DETECTOR) "$(TOOLS_DIR)/silence-detector" 2>/dev/null || true
 	@test -f tools/parakeet-transcriber/.build/release/parakeet-transcriber && \
 		cp tools/parakeet-transcriber/.build/release/parakeet-transcriber "$(TOOLS_DIR)/parakeet-transcriber" || true
+	@# Copy Lua example scripts
+	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/examples"
+	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/auto"
+	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/lib"
+	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/menu"
+	@cp -n scripts/lua/examples/*.lua "$(HOME)/Library/Application Support/SpliceKit/lua/examples/" 2>/dev/null || true
+	@cp -n scripts/lua/menu/*.lua "$(HOME)/Library/Application Support/SpliceKit/lua/menu/" 2>/dev/null || true
+	@cp -n scripts/lua/lib/*.lua "$(HOME)/Library/Application Support/SpliceKit/lua/lib/" 2>/dev/null || true
 	@# Sign the framework
 	codesign --force --sign - "$(FW_DIR)"
 	@# Re-sign the app

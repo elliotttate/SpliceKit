@@ -149,6 +149,19 @@ void SpliceKit_installDefaultSpatialConformType(void);
 void SpliceKit_setDefaultSpatialConformType(NSString *value);
 NSString *SpliceKit_getDefaultSpatialConformType(void);
 
+// Persistent unlimited undo — swizzles actionEnd:save:error: on FFAnchoredSequence
+// to capture a zlib-compressed FCPXML snapshot of every edit into a per-project
+// SQLite database under ~/Library/Application Support/SpliceKit/history/.
+void SpliceKit_installHistorySwizzle(void);
+void SpliceKit_setHistoryEnabled(BOOL enabled);
+BOOL SpliceKit_isHistoryEnabled(void);
+
+#pragma mark - Lua Scripting
+
+// Initialize the embedded Lua 5.4 VM and start the file watcher.
+// Called once from SpliceKit_appDidLaunch().
+void SpliceKitLua_initialize(void);
+
 #pragma mark - Cached Class References
 //
 // We look these up once at launch instead of calling objc_getClass() on every

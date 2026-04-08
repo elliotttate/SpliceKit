@@ -18,6 +18,7 @@
 #import "SpliceKitCaptionPanel.h"
 #import "SpliceKitCommandPalette.h"
 #import "SpliceKitDebugUI.h"
+#import "SpliceKitLua.h"
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
@@ -3553,6 +3554,113 @@ static NSDictionary *SpliceKit_handleBatchAddMarkers(NSDictionary *params) {
     return result ?: @{@"error": @"Failed to add markers"};
 }
 
+// Batch blade at specific times using seek + blade (no manual playhead stepping needed)
+static NSDictionary *SpliceKit_handleBladeAtTimes(NSDictionary *params) {
+    NSArray *times = params[@"times"];
+    if (!times || ![times isKindOfClass:[NSArray class]] || times.count == 0) {
+        return @{@"error": @"times array required (list of seconds, e.g. [3.0, 6.0, 9.0])"};
+    }
+
+    // Sort times ascending so we blade left-to-right (avoids offset issues)
+    NSArray *sortedTimes = [times sortedArrayUsingSelector:@selector(compare:)];
+
+    __block NSDictionary *result = nil;
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id timeline = SpliceKit_getActiveTimelineModule();
+            if (!timeline) { result = @{@"error": @"No active timeline module"}; return; }
+
+            NSUInteger applied = 0;
+            NSMutableArray *results = [NSMutableArray array];
+
+            for (NSNumber *timeNum in sortedTimes) {
+                double t = [timeNum doubleValue];
+                SpliceKit_handlePlaybackSeek(@{@"seconds": @(t)});
+                [NSThread sleepForTimeInterval:0.03];
+                NSDictionary *bladeResult = SpliceKit_handleTimelineAction(@{@"action": @"blade"});
+
+                BOOL ok = bladeResult && !bladeResult[@"error"];
+                if (ok) {
+                    applied++;
+                    [results addObject:@{@"time": @(t), @"success": @YES}];
+                } else {
+                    [results addObject:@{@"time": @(t), @"success": @NO,
+                        @"error": bladeResult[@"error"] ?: @"blade failed"}];
+                }
+            }
+
+            result = @{
+                @"status": @"ok",
+                @"count": @(sortedTimes.count),
+                @"applied": @(applied),
+                @"cuts": results,
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to blade at times"};
+}
+
+// Batch timeline/playback actions executed server-side (no per-action round-trip)
+static NSDictionary *SpliceKit_handleBatchActions(NSDictionary *params) {
+    NSArray *actions = params[@"actions"];
+    if (!actions || ![actions isKindOfClass:[NSArray class]] || actions.count == 0) {
+        return @{@"error": @"actions array required"};
+    }
+
+    __block NSDictionary *result = nil;
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            NSMutableArray *results = [NSMutableArray array];
+            NSUInteger executed = 0;
+
+            for (NSDictionary *act in actions) {
+                NSString *type = act[@"type"] ?: @"timeline";
+                NSString *actionName = act[@"action"] ?: @"";
+                NSInteger repeat = [act[@"repeat"] integerValue];
+                if (repeat < 1) repeat = 1;
+
+                if ([type isEqualToString:@"wait"]) {
+                    double secs = [act[@"seconds"] doubleValue];
+                    if (secs <= 0) secs = 0.5;
+                    [NSThread sleepForTimeInterval:secs];
+                    [results addObject:[NSString stringWithFormat:@"wait %.2fs", secs]];
+                } else if ([type isEqualToString:@"playback"]) {
+                    for (NSInteger i = 0; i < repeat; i++) {
+                        SpliceKit_handlePlayback(@{@"action": actionName});
+                    }
+                    [results addObject:[NSString stringWithFormat:@"playback.%@%@",
+                        actionName, repeat > 1 ? [NSString stringWithFormat:@" x%ld", (long)repeat] : @""]];
+                } else if ([type isEqualToString:@"timeline"]) {
+                    for (NSInteger i = 0; i < repeat; i++) {
+                        SpliceKit_handleTimelineAction(@{@"action": actionName});
+                    }
+                    [results addObject:[NSString stringWithFormat:@"timeline.%@%@",
+                        actionName, repeat > 1 ? [NSString stringWithFormat:@" x%ld", (long)repeat] : @""]];
+                } else if ([type isEqualToString:@"seek"]) {
+                    double secs = [act[@"seconds"] doubleValue];
+                    SpliceKit_handlePlaybackSeek(@{@"seconds": @(secs)});
+                    [results addObject:[NSString stringWithFormat:@"seek %.2fs", secs]];
+                } else {
+                    [results addObject:[NSString stringWithFormat:@"unknown type: %@", type]];
+                    continue;
+                }
+                executed++;
+            }
+
+            result = @{
+                @"status": @"ok",
+                @"executed": @(executed),
+                @"results": results,
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result ?: @{@"error": @"Failed to execute batch actions"};
+}
+
 static NSDictionary *SpliceKit_handleSetRange(NSDictionary *params) {
     NSNumber *startSec = params[@"startSeconds"];
     NSNumber *endSec = params[@"endSeconds"];
@@ -5237,11 +5345,26 @@ NSDictionary *SpliceKit_handleEffectsListAvailable(NSDictionary *params) {
                     else if ([typeStr isEqualToString:@"effect.audio.effect"]) friendlyType = @"audio";
                     else if ([typeStr isEqualToString:@"effect.video.transition"]) friendlyType = @"transition";
 
-                    // Apply name filter
+                    // Apply name filter (with normalization for underscores, &, etc.)
                     if (filter.length > 0) {
                         NSString *lowerFilter = [filter lowercaseString];
                         BOOL matches = [[displayName lowercaseString] containsString:lowerFilter] ||
                                        [[catName lowercaseString] containsString:lowerFilter];
+                        if (!matches) {
+                            // Normalize: strip non-alphanumeric for fuzzy match
+                            NSString *(^norm)(NSString *) = ^NSString *(NSString *s) {
+                                NSMutableString *out = [NSMutableString stringWithCapacity:s.length];
+                                NSString *lower = [s lowercaseString];
+                                for (NSUInteger i = 0; i < lower.length; i++) {
+                                    unichar c = [lower characterAtIndex:i];
+                                    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                                        [out appendFormat:@"%C", c];
+                                }
+                                return out;
+                            };
+                            matches = [norm(displayName) containsString:norm(filter)] ||
+                                      [norm(catName) containsString:norm(filter)];
+                        }
                         if (!matches) continue;
                     }
 
@@ -5289,9 +5412,31 @@ NSDictionary *SpliceKit_handleEffectsApply(NSDictionary *params) {
                 SEL nameSel = @selector(displayNameForEffectID:);
                 NSString *lowerName = [name lowercaseString];
 
-                // Exact match first
+                // Normalize: strip non-alphanumeric, replace "&" with "and" for fuzzy comparison
+                // so "Black and White" matches "Black & White" and vice versa
+                NSString *(^normalize)(NSString *) = ^NSString *(NSString *s) {
+                    NSString *lower = [[s lowercaseString] stringByReplacingOccurrencesOfString:@"&" withString:@"and"];
+                    NSMutableString *out = [NSMutableString stringWithCapacity:lower.length];
+                    for (NSUInteger i = 0; i < lower.length; i++) {
+                        unichar c = [lower characterAtIndex:i];
+                        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                            [out appendFormat:@"%C", c];
+                    }
+                    return out;
+                };
+                NSString *normalizedName = normalize(name);
+
+                // Helper: check if effectID is a built-in FCP effect (not third-party)
+                BOOL (^isBuiltIn)(NSString *) = ^BOOL(NSString *eid) {
+                    return [eid hasPrefix:@"..."] || [eid hasPrefix:@"/"];
+                };
+
+                // Search in three phases: exact, normalized, partial.
+                // Always prefer built-in over third-party across ALL phases.
+                NSString *thirdPartyFallback = nil;
+
+                // Phase 1: Exact match (case-insensitive)
                 for (NSString *eid in allIDs) {
-                    // Skip transitions — use transitions.apply for those
                     id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
                     if ([type isKindOfClass:[NSString class]] &&
                         [(NSString *)type isEqualToString:@"effect.video.transition"]) continue;
@@ -5299,11 +5444,36 @@ NSDictionary *SpliceKit_handleEffectsApply(NSDictionary *params) {
                     id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
                     if ([dn isKindOfClass:[NSString class]] &&
                         [[(NSString *)dn lowercaseString] isEqualToString:lowerName]) {
-                        resolvedID = eid;
-                        break;
+                        if (isBuiltIn(eid)) {
+                            resolvedID = eid;
+                            break;
+                        } else if (!thirdPartyFallback) {
+                            thirdPartyFallback = eid;
+                        }
                     }
                 }
-                // Partial match fallback
+
+                // Phase 2: Normalized match (handles &/and, underscores, punctuation)
+                if (!resolvedID) {
+                    for (NSString *eid in allIDs) {
+                        id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
+                        if ([type isKindOfClass:[NSString class]] &&
+                            [(NSString *)type isEqualToString:@"effect.video.transition"]) continue;
+
+                        id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                        if ([dn isKindOfClass:[NSString class]] &&
+                            [normalize((NSString *)dn) isEqualToString:normalizedName]) {
+                            if (isBuiltIn(eid)) {
+                                resolvedID = eid;
+                                break;
+                            } else if (!thirdPartyFallback) {
+                                thirdPartyFallback = eid;
+                            }
+                        }
+                    }
+                }
+
+                // Phase 3: Partial/substring match
                 if (!resolvedID) {
                     for (NSString *eid in allIDs) {
                         id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
@@ -5313,11 +5483,18 @@ NSDictionary *SpliceKit_handleEffectsApply(NSDictionary *params) {
                         id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
                         if ([dn isKindOfClass:[NSString class]] &&
                             [[(NSString *)dn lowercaseString] containsString:lowerName]) {
-                            resolvedID = eid;
-                            break;
+                            if (isBuiltIn(eid)) {
+                                resolvedID = eid;
+                                break;
+                            } else if (!thirdPartyFallback) {
+                                thirdPartyFallback = eid;
+                            }
                         }
                     }
                 }
+
+                // Only use third-party if no built-in match was found in any phase
+                if (!resolvedID) resolvedID = thirdPartyFallback;
                 if (!resolvedID) {
                     result = @{@"error": [NSString stringWithFormat:@"No effect found matching '%@'", name]};
                     return;
@@ -5433,6 +5610,21 @@ NSDictionary *SpliceKit_handleTitleInsert(NSDictionary *params) {
                 id allIDs = ((id (*)(id, SEL))objc_msgSend)((id)ffEffect, @selector(userVisibleEffectIDs));
                 SEL nameSel = @selector(displayNameForEffectID:);
                 NSString *lowerName = [name lowercaseString];
+
+                // Normalize: strip non-alphanumeric chars for fuzzy comparison
+                NSString *(^normalize)(NSString *) = ^NSString *(NSString *s) {
+                    NSMutableString *out = [NSMutableString stringWithCapacity:s.length];
+                    NSString *lower = [s lowercaseString];
+                    for (NSUInteger i = 0; i < lower.length; i++) {
+                        unichar c = [lower characterAtIndex:i];
+                        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                            [out appendFormat:@"%C", c];
+                    }
+                    return out;
+                };
+                NSString *normalizedName = normalize(name);
+
+                // Exact match first
                 for (NSString *eid in allIDs) {
                     id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
                     if ([dn isKindOfClass:[NSString class]] &&
@@ -5441,6 +5633,18 @@ NSDictionary *SpliceKit_handleTitleInsert(NSDictionary *params) {
                         break;
                     }
                 }
+                // Normalized match
+                if (!resolvedID) {
+                    for (NSString *eid in allIDs) {
+                        id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                        if ([dn isKindOfClass:[NSString class]] &&
+                            [normalize((NSString *)dn) isEqualToString:normalizedName]) {
+                            resolvedID = eid;
+                            break;
+                        }
+                    }
+                }
+                // Partial match fallback
                 if (!resolvedID) {
                     for (NSString *eid in allIDs) {
                         id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
@@ -6373,6 +6577,8 @@ static NSDictionary *SpliceKit_handleOptionsGet(NSDictionary *params) {
         @"lLadder": SpliceKit_getLLadder(),
         @"jLadder": SpliceKit_getJLadder(),
         @"defaultSpatialConformType": SpliceKit_getDefaultSpatialConformType(),
+        @"aiEngine": @([SpliceKitCommandPalette sharedPalette].aiEngine),
+        @"gemmaModel": [SpliceKitCommandPalette sharedPalette].gemmaModel ?: @"unsloth/gemma-4-E4B-it-UD-MLX-4bit",
     };
 }
 
@@ -6432,6 +6638,19 @@ static NSDictionary *SpliceKit_handleOptionsSet(NSDictionary *params) {
         SpliceKit_setDefaultSpatialConformType(value);
         return @{@"status": @"ok",
                  @"defaultSpatialConformType": SpliceKit_getDefaultSpatialConformType()};
+    } else if ([option isEqualToString:@"aiEngine"]) {
+        NSNumber *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' parameter required (0=Apple Intelligence, 1=Gemma 4)"};
+        SpliceKitAIEngine engine = (SpliceKitAIEngine)[value integerValue];
+        [SpliceKitCommandPalette sharedPalette].aiEngine = engine;
+        [[NSUserDefaults standardUserDefaults] setInteger:engine forKey:@"SpliceKitAIEngine"];
+        return @{@"status": @"ok", @"aiEngine": @(engine)};
+    } else if ([option isEqualToString:@"gemmaModel"]) {
+        NSString *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' parameter required (HuggingFace model ID)"};
+        [SpliceKitCommandPalette sharedPalette].gemmaModel = value;
+        [[NSUserDefaults standardUserDefaults] setObject:value forKey:@"SpliceKitGemmaModel"];
+        return @{@"status": @"ok", @"gemmaModel": value};
     }
 
     return @{@"error": [NSString stringWithFormat:@"Unknown option: %@", option]};
@@ -9907,6 +10126,19 @@ NSDictionary *SpliceKit_handleTransitionsApply(NSDictionary *params) {
                 NSString *transitionType = @"effect.video.transition";
                 NSString *lowerName = [name lowercaseString];
 
+                // Normalize: strip non-alphanumeric chars for fuzzy comparison
+                NSString *(^normalize)(NSString *) = ^NSString *(NSString *s) {
+                    NSMutableString *out = [NSMutableString stringWithCapacity:s.length];
+                    NSString *lower = [s lowercaseString];
+                    for (NSUInteger i = 0; i < lower.length; i++) {
+                        unichar c = [lower characterAtIndex:i];
+                        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                            [out appendFormat:@"%C", c];
+                    }
+                    return out;
+                };
+                NSString *normalizedName = normalize(name);
+
                 // Exact match first
                 for (NSString *eid in allIDs) {
                     id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
@@ -9917,6 +10149,20 @@ NSDictionary *SpliceKit_handleTransitionsApply(NSDictionary *params) {
                         [[(NSString *)dn lowercaseString] isEqualToString:lowerName]) {
                         resolvedID = eid;
                         break;
+                    }
+                }
+                // Normalized match
+                if (!resolvedID) {
+                    for (NSString *eid in allIDs) {
+                        id type = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, typeSel, eid);
+                        if (![type isKindOfClass:[NSString class]] ||
+                            ![(NSString *)type isEqualToString:transitionType]) continue;
+                        id dn = ((id (*)(id, SEL, id))objc_msgSend)((id)ffEffect, nameSel, eid);
+                        if ([dn isKindOfClass:[NSString class]] &&
+                            [normalize((NSString *)dn) isEqualToString:normalizedName]) {
+                            resolvedID = eid;
+                            break;
+                        }
                     }
                 }
                 // Partial match fallback
@@ -10170,10 +10416,24 @@ static NSDictionary *SpliceKit_handleCommandExecute(NSDictionary *params) {
     return [[SpliceKitCommandPalette sharedPalette] executeCommand:action type:type];
 }
 
+// Forward declarations for AI engine handlers
+static NSDictionary *SpliceKit_handleCommandAIGemma(NSDictionary *params);
+static NSDictionary *SpliceKit_handleCommandAIAppleAgentic(NSDictionary *params);
+
 static NSDictionary *SpliceKit_handleCommandAI(NSDictionary *params) {
     NSString *query = params[@"query"];
     if (!query) return @{@"error": @"query parameter required"};
 
+    // Route to the configured AI engine
+    SpliceKitAIEngine engine = [SpliceKitCommandPalette sharedPalette].aiEngine;
+    if (engine == SpliceKitAIEngineAppleAgentic) {
+        return SpliceKit_handleCommandAIAppleAgentic(params);
+    }
+    if (engine == SpliceKitAIEngineGemma4) {
+        return SpliceKit_handleCommandAIGemma(params);
+    }
+
+    // Default: non-agentic Apple Intelligence
     __block NSDictionary *result = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 
@@ -10189,6 +10449,54 @@ static NSDictionary *SpliceKit_handleCommandAI(NSDictionary *params) {
 
     dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC));
     return result ?: @{@"error": @"AI request timed out"};
+}
+
+static NSDictionary *SpliceKit_handleCommandAIGemma(NSDictionary *params) {
+    NSString *query = params[@"query"];
+    if (!query) return @{@"error": @"query parameter required"};
+
+    NSString *model = params[@"model"];
+    if (model) {
+        [SpliceKitCommandPalette sharedPalette].gemmaModel = model;
+    }
+
+    __block NSDictionary *result = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+
+    [[SpliceKitCommandPalette sharedPalette] executeNaturalLanguageGemma:query
+        completion:^(NSString *summary, NSString *error) {
+            if (error) {
+                result = @{@"error": error};
+            } else {
+                result = @{@"summary": summary ?: @"Done."};
+            }
+            dispatch_semaphore_signal(sem);
+        }];
+
+    // 5 minute timeout — multi-turn loops take longer than single-shot AI
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_SEC));
+    return result ?: @{@"error": @"Gemma AI request timed out"};
+}
+
+static NSDictionary *SpliceKit_handleCommandAIAppleAgentic(NSDictionary *params) {
+    NSString *query = params[@"query"];
+    if (!query) return @{@"error": @"query parameter required"};
+
+    __block NSDictionary *result = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+
+    [[SpliceKitCommandPalette sharedPalette] executeNaturalLanguageAppleAgentic:query
+        completion:^(NSString *summary, NSString *error) {
+            if (error) {
+                result = @{@"error": error};
+            } else {
+                result = @{@"summary": summary ?: @"Done."};
+            }
+            dispatch_semaphore_signal(sem);
+        }];
+
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_SEC));
+    return result ?: @{@"error": @"Apple Intelligence+ request timed out"};
 }
 
 #pragma mark - Browser Clip Handlers
@@ -11357,6 +11665,2194 @@ static NSDictionary *SpliceKit_handleEventCreate(NSDictionary *params) {
 
 static NSDictionary *SpliceKit_handleLibraryCreate(NSDictionary *params) {
     return SpliceKit_sendAppAction(@"newLibrary:");
+}
+
+#pragma mark - Open Project by Name
+
+static NSDictionary *SpliceKit_handleProjectOpen(NSDictionary *params) {
+    NSString *nameFilter = params[@"name"];
+    NSString *eventFilter = params[@"event"];
+    if (!nameFilter) return @{@"error": @"name parameter required"};
+
+    __block NSDictionary *result = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            // Step 1: Get active libraries
+            Class libDocClass = objc_getClass("FFLibraryDocument");
+            if (!libDocClass) {
+                result = @{@"error": @"FFLibraryDocument class not found"};
+                return;
+            }
+
+            SEL copyLibsSel = NSSelectorFromString(@"copyActiveLibraries");
+            if (![libDocClass respondsToSelector:copyLibsSel]) {
+                result = @{@"error": @"copyActiveLibraries not available"};
+                return;
+            }
+
+            id libs = ((id (*)(id, SEL))objc_msgSend)((id)libDocClass, copyLibsSel);
+            if (!libs || ![libs isKindOfClass:[NSArray class]] || [(NSArray *)libs count] == 0) {
+                result = @{@"error": @"No active libraries found"};
+                return;
+            }
+
+            // Step 2: Search across all libraries for matching sequence
+            id foundSequence = nil;
+            NSString *foundName = nil;
+            NSString *foundEvent = nil;
+            NSString *foundLibrary = nil;
+            NSMutableArray *allSequences = [NSMutableArray array];
+
+            for (id lib in (NSArray *)libs) {
+                NSString *libName = @"";
+                if ([lib respondsToSelector:@selector(displayName)]) {
+                    libName = ((id (*)(id, SEL))objc_msgSend)(lib, @selector(displayName)) ?: @"";
+                }
+
+                // Get deep loaded sequences
+                SEL deepSeqSel = NSSelectorFromString(@"_deepLoadedSequences");
+                if (![lib respondsToSelector:deepSeqSel]) continue;
+
+                id seqSet = ((id (*)(id, SEL))objc_msgSend)(lib, deepSeqSel);
+                if (!seqSet) continue;
+
+                id seqArray = nil;
+                if ([seqSet respondsToSelector:@selector(allObjects)]) {
+                    seqArray = ((id (*)(id, SEL))objc_msgSend)(seqSet, @selector(allObjects));
+                } else if ([seqSet isKindOfClass:[NSArray class]]) {
+                    seqArray = seqSet;
+                }
+                if (!seqArray || ![seqArray isKindOfClass:[NSArray class]]) continue;
+
+                for (id seq in (NSArray *)seqArray) {
+                    NSString *seqName = @"";
+                    if ([seq respondsToSelector:@selector(displayName)]) {
+                        seqName = ((id (*)(id, SEL))objc_msgSend)(seq, @selector(displayName)) ?: @"";
+                    }
+
+                    // Get event name for this sequence
+                    NSString *seqEvent = @"";
+                    SEL eventSel = NSSelectorFromString(@"event");
+                    if ([seq respondsToSelector:eventSel]) {
+                        id event = ((id (*)(id, SEL))objc_msgSend)(seq, eventSel);
+                        if (event && [event respondsToSelector:@selector(displayName)]) {
+                            seqEvent = ((id (*)(id, SEL))objc_msgSend)(event, @selector(displayName)) ?: @"";
+                        }
+                    }
+
+                    // Check if sequence has content
+                    BOOL hasContent = NO;
+                    SEL hasItemsSel = NSSelectorFromString(@"hasContainedItems");
+                    if ([seq respondsToSelector:hasItemsSel]) {
+                        hasContent = ((BOOL (*)(id, SEL))objc_msgSend)(seq, hasItemsSel);
+                    }
+
+                    [allSequences addObject:@{
+                        @"name": seqName,
+                        @"event": seqEvent,
+                        @"library": libName,
+                        @"hasContent": @(hasContent),
+                    }];
+
+                    // Match by name (case-insensitive contains)
+                    BOOL nameMatch = [seqName localizedCaseInsensitiveContainsString:nameFilter];
+                    BOOL eventMatch = !eventFilter || eventFilter.length == 0 ||
+                        [seqEvent localizedCaseInsensitiveContainsString:eventFilter];
+
+                    if (nameMatch && eventMatch && !foundSequence) {
+                        foundSequence = seq;
+                        foundName = seqName;
+                        foundEvent = seqEvent;
+                        foundLibrary = libName;
+                    }
+                }
+            }
+
+            if (!foundSequence) {
+                result = @{@"error": [NSString stringWithFormat:
+                    @"No project matching name='%@'%@ found. Available: %@",
+                    nameFilter,
+                    eventFilter ? [NSString stringWithFormat:@" event='%@'", eventFilter] : @"",
+                    allSequences]};
+                return;
+            }
+
+            // Step 3: Load the sequence into the editor
+            id app = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("NSApplication"), @selector(sharedApplication));
+            id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
+            if (!delegate) {
+                result = @{@"error": @"No app delegate"};
+                return;
+            }
+
+            SEL aecSel = @selector(activeEditorContainer);
+            if (![delegate respondsToSelector:aecSel]) {
+                result = @{@"error": @"No activeEditorContainer"};
+                return;
+            }
+            id editorContainer = ((id (*)(id, SEL))objc_msgSend)(delegate, aecSel);
+            if (!editorContainer) {
+                result = @{@"error": @"Editor container is nil"};
+                return;
+            }
+
+            SEL loadSel = NSSelectorFromString(@"loadEditorForSequence:");
+            if (![editorContainer respondsToSelector:loadSel]) {
+                result = @{@"error": @"loadEditorForSequence: not available on editor container"};
+                return;
+            }
+
+            ((void (*)(id, SEL, id))objc_msgSend)(editorContainer, loadSel, foundSequence);
+
+            result = @{
+                @"status": @"ok",
+                @"project": foundName ?: @"",
+                @"event": foundEvent ?: @"",
+                @"library": foundLibrary ?: @"",
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
+#pragma mark - Select Clip at Playhead with Lane
+
+static NSDictionary *SpliceKit_handleSelectClipAtPlayheadLane(NSDictionary *params) {
+    NSNumber *laneParam = params[@"lane"];
+    if (!laneParam) return @{@"error": @"lane parameter required"};
+    long long targetLane = [laneParam longLongValue];
+
+    __block NSDictionary *result = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id timeline = SpliceKit_getActiveTimelineModule();
+            if (!timeline) {
+                result = @{@"error": @"No active timeline module"};
+                return;
+            }
+
+            id sequence = nil;
+            if ([timeline respondsToSelector:@selector(sequence)]) {
+                sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+            }
+            if (!sequence) {
+                result = @{@"error": @"No sequence in timeline"};
+                return;
+            }
+
+            // Get playhead time
+            SpliceKit_CMTime playhead = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
+                timeline, @selector(playheadTime));
+
+            // Get all items including connected clips (anchoredItems)
+            id primaryObj = nil;
+            if ([sequence respondsToSelector:@selector(primaryObject)]) {
+                primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject));
+            }
+            if (!primaryObj) {
+                result = @{@"error": @"No primary object on sequence"};
+                return;
+            }
+
+            // Collect spine items + their anchored items
+            NSMutableArray *candidates = [NSMutableArray array];
+
+            id spineItems = nil;
+            if ([primaryObj respondsToSelector:@selector(containedItems)]) {
+                spineItems = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
+            }
+
+            SEL erSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+            BOOL canGetRange = [primaryObj respondsToSelector:erSel];
+
+            if (spineItems && [spineItems isKindOfClass:[NSArray class]]) {
+                for (id item in (NSArray *)spineItems) {
+                    // Check this spine item's anchored (connected) items
+                    SEL anchoredSel = NSSelectorFromString(@"anchoredItems");
+                    if ([item respondsToSelector:anchoredSel]) {
+                        id anchored = ((id (*)(id, SEL))objc_msgSend)(item, anchoredSel);
+                        if (anchored && [anchored isKindOfClass:[NSArray class]]) {
+                            for (id connected in (NSArray *)anchored) {
+                                long long lane = 0;
+                                if ([connected respondsToSelector:@selector(anchoredLane)]) {
+                                    lane = ((long long (*)(id, SEL))objc_msgSend)(
+                                        connected, @selector(anchoredLane));
+                                }
+                                if (lane == targetLane) {
+                                    [candidates addObject:connected];
+                                }
+                            }
+                        }
+                    }
+
+                    // Also check spine items themselves (lane 0)
+                    if (targetLane == 0) {
+                        [candidates addObject:item];
+                    }
+                }
+            }
+
+            // Find candidate under playhead
+            id bestMatch = nil;
+            for (id item in candidates) {
+                // Try to get time range of item
+                if (canGetRange) {
+                    @try {
+                        SpliceKit_CMTimeRange range = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                            primaryObj, erSel, item);
+                        double startSec = (double)range.start.value / range.start.timescale;
+                        double durSec = (double)range.duration.value / range.duration.timescale;
+                        double endSec = startSec + durSec;
+                        double playheadSec = (double)playhead.value / playhead.timescale;
+
+                        if (playheadSec >= startSec - 0.001 && playheadSec <= endSec + 0.001) {
+                            bestMatch = item;
+                            break;
+                        }
+                    } @catch (NSException *e) {
+                        continue;
+                    }
+                }
+
+                // Fallback: check anchoredOffset for connected clips
+                SEL offsetSel = NSSelectorFromString(@"anchoredOffset");
+                if (!bestMatch && [item respondsToSelector:offsetSel]) {
+                    SpliceKit_CMTime offset = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, offsetSel);
+                    SpliceKit_CMTime dur = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
+                    double startSec = (double)offset.value / offset.timescale;
+                    double durSec = (double)dur.value / dur.timescale;
+                    double endSec = startSec + durSec;
+                    double playheadSec = (double)playhead.value / playhead.timescale;
+
+                    if (playheadSec >= startSec - 0.001 && playheadSec <= endSec + 0.001) {
+                        bestMatch = item;
+                        break;
+                    }
+                }
+            }
+
+            if (!bestMatch) {
+                result = @{@"error": [NSString stringWithFormat:
+                    @"No clip found at playhead in lane %lld. Found %lu candidates in that lane.",
+                    targetLane, (unsigned long)candidates.count]};
+                return;
+            }
+
+            // Select using setSelectedItems: on the timeline module
+            NSArray *selArray = @[bestMatch];
+            SEL setSelSel = NSSelectorFromString(@"setSelectedItems:");
+            if ([timeline respondsToSelector:setSelSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(timeline, setSelSel, selArray);
+            } else {
+                // Fallback: try selectItems:
+                SEL selectSel = NSSelectorFromString(@"selectItems:");
+                if ([timeline respondsToSelector:selectSel]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(timeline, selectSel, selArray);
+                }
+            }
+
+            NSString *clipName = @"";
+            if ([bestMatch respondsToSelector:@selector(displayName)]) {
+                clipName = ((id (*)(id, SEL))objc_msgSend)(bestMatch, @selector(displayName)) ?: @"";
+            }
+
+            NSString *handle = SpliceKit_storeHandle(bestMatch);
+
+            result = @{
+                @"status": @"ok",
+                @"lane": @(targetLane),
+                @"clip": clipName,
+                @"class": NSStringFromClass([bestMatch class]),
+                @"handle": handle,
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
+#pragma mark - Capture Viewer Screenshot
+
+static NSDictionary *SpliceKit_handleCaptureViewer(NSDictionary *params) {
+    NSString *outputPath = params[@"path"] ?: @"/tmp/splicekit_viewer.png";
+
+    __block NSDictionary *result = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            // Find the main FCP window
+            NSWindow *mainWindow = [NSApp mainWindow];
+            if (!mainWindow) {
+                for (NSWindow *w in [NSApp windows]) {
+                    if ([w isVisible] && (!mainWindow || w.frame.size.width > mainWindow.frame.size.width)) {
+                        mainWindow = w;
+                    }
+                }
+            }
+            if (!mainWindow) {
+                result = @{@"error": @"No visible FCP window found"};
+                return;
+            }
+
+            CGWindowID windowID = (CGWindowID)[mainWindow windowNumber];
+
+            // Capture the full window using CGWindowListCreateImage (captures GPU/Metal content)
+            // CGRectNull = capture the entire window bounds
+            CGImageRef fullImage = CGWindowListCreateImage(
+                CGRectNull,
+                kCGWindowListOptionIncludingWindow,
+                windowID,
+                kCGWindowImageBoundsIgnoreFraming | kCGWindowImageNominalResolution
+            );
+
+            if (!fullImage) {
+                result = @{@"error": @"CGWindowListCreateImage returned nil — screen recording permission may be needed"};
+                return;
+            }
+
+            // Find the LARGEST FFPlayerView in the main window for cropping
+            Class playerViewClass = objc_getClass("FFPlayerView");
+            NSView *largestPlayerView = nil;
+            CGFloat largestArea = 0;
+
+            if (playerViewClass) {
+                NSMutableArray *queue = [NSMutableArray arrayWithObject:[mainWindow contentView]];
+                while (queue.count > 0) {
+                    NSView *view = queue.firstObject;
+                    [queue removeObjectAtIndex:0];
+                    if (!view) continue;
+                    if ([view isKindOfClass:playerViewClass]) {
+                        CGFloat area = view.bounds.size.width * view.bounds.size.height;
+                        if (area > largestArea) {
+                            largestArea = area;
+                            largestPlayerView = view;
+                        }
+                    }
+                    NSArray *subs = [view subviews];
+                    if (subs) [queue addObjectsFromArray:subs];
+                }
+            }
+
+            NSData *pngData = nil;
+            int outWidth = (int)CGImageGetWidth(fullImage);
+            int outHeight = (int)CGImageGetHeight(fullImage);
+            BOOL cropped = NO;
+
+            if (largestPlayerView) {
+                // Convert view frame to window coordinates (flipped for image)
+                NSRect viewFrameInWindow = [largestPlayerView convertRect:[largestPlayerView bounds] toView:nil];
+                CGFloat imgScaleX = (CGFloat)CGImageGetWidth(fullImage) / mainWindow.frame.size.width;
+                CGFloat imgScaleY = (CGFloat)CGImageGetHeight(fullImage) / mainWindow.frame.size.height;
+                CGFloat windowHeight = mainWindow.frame.size.height;
+
+                CGRect cropRect = CGRectMake(
+                    viewFrameInWindow.origin.x * imgScaleX,
+                    (windowHeight - viewFrameInWindow.origin.y - viewFrameInWindow.size.height) * imgScaleY,
+                    viewFrameInWindow.size.width * imgScaleX,
+                    viewFrameInWindow.size.height * imgScaleY
+                );
+
+                CGImageRef croppedImage = CGImageCreateWithImageInRect(fullImage, cropRect);
+                if (croppedImage) {
+                    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:croppedImage];
+                    pngData = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+                    outWidth = (int)CGImageGetWidth(croppedImage);
+                    outHeight = (int)CGImageGetHeight(croppedImage);
+                    CGImageRelease(croppedImage);
+                    cropped = YES;
+                }
+            }
+
+            // Fallback: full window
+            if (!pngData) {
+                NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:fullImage];
+                pngData = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            }
+
+            CGImageRelease(fullImage);
+
+            if (!pngData) {
+                result = @{@"error": @"Failed to generate PNG data"};
+                return;
+            }
+
+            BOOL written = [pngData writeToFile:outputPath atomically:YES];
+            if (!written) {
+                result = @{@"error": [NSString stringWithFormat:@"Failed to write to %@", outputPath]};
+                return;
+            }
+
+            result = @{
+                @"status": @"ok",
+                @"path": outputPath,
+                @"width": @(outWidth),
+                @"height": @(outHeight),
+                @"bytes": @(pngData.length),
+                @"cropped": @(cropped),
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
+#pragma mark - Export FCPXML Programmatically
+
+static NSDictionary *SpliceKit_handleFCPXMLExport(NSDictionary *params) {
+    NSString *outputPath = params[@"path"] ?: @"/tmp/splicekit_export.fcpxml";
+
+    __block NSDictionary *result = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            // Use the same safe export path as FCP's own exportXML: action:
+            //   1. Get the active sequence
+            //   2. FFLibrary.eventClipForSequence: → get the event clip
+            //   3. FFXMLTranslationTask.translationTaskForClips: → create export task
+            //   4. task.exportToFile:withOptions: → write directly to file
+            //
+            // This uses FFXMLTranslationEventClipsExporter which only serializes the
+            // sequence/clips, avoiding the whole-document crash in FFXMLExporter.
+
+            id timeline = SpliceKit_getActiveTimelineModule();
+            if (!timeline) {
+                result = @{@"error": @"No active timeline module"};
+                return;
+            }
+
+            id sequence = nil;
+            if ([timeline respondsToSelector:@selector(sequence)]) {
+                sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+            }
+            if (!sequence) {
+                result = @{@"error": @"No sequence in timeline"};
+                return;
+            }
+
+            // Step 1: Get the event clip for this sequence
+            Class ffLibrary = objc_getClass("FFLibrary");
+            if (!ffLibrary) {
+                result = @{@"error": @"FFLibrary class not found"};
+                return;
+            }
+
+            SEL eventClipSel = NSSelectorFromString(@"eventClipForSequence:");
+            if (![ffLibrary respondsToSelector:eventClipSel]) {
+                result = @{@"error": @"FFLibrary does not respond to eventClipForSequence:"};
+                return;
+            }
+
+            id eventClip = ((id (*)(id, SEL, id))objc_msgSend)((id)ffLibrary, eventClipSel, sequence);
+            if (!eventClip) {
+                // eventClipForSequence: returns nil if the sequence IS the event clip
+                // (happens for top-level sequences). Fall back to the sequence itself.
+                eventClip = sequence;
+            }
+
+            // Step 2: Create translation task for export
+            Class taskClass = objc_getClass("FFXMLTranslationTask");
+            if (!taskClass) {
+                result = @{@"error": @"FFXMLTranslationTask class not found"};
+                return;
+            }
+
+            SEL taskForClipsSel = NSSelectorFromString(@"translationTaskForClips:");
+            if (![taskClass respondsToSelector:taskForClipsSel]) {
+                result = @{@"error": @"translationTaskForClips: not available"};
+                return;
+            }
+
+            NSArray *clips = @[eventClip];
+            id task = ((id (*)(id, SEL, id))objc_msgSend)((id)taskClass, taskForClipsSel, clips);
+            if (!task) {
+                result = @{@"error": @"Failed to create FFXMLTranslationTask"};
+                return;
+            }
+
+            // Step 3: Create export options
+            Class optionsClass = objc_getClass("FFXMLExportOptions");
+            id options = nil;
+            if (optionsClass) {
+                SEL initDefSel = NSSelectorFromString(@"initWithUserDefaults");
+                id optObj = [[optionsClass alloc] init];
+                if ([optObj respondsToSelector:initDefSel]) {
+                    options = ((id (*)(id, SEL))objc_msgSend)(optObj, initDefSel);
+                } else {
+                    options = optObj;
+                }
+            }
+
+            // Step 4: Export to file
+            NSURL *outURL = [NSURL fileURLWithPath:outputPath];
+            SEL exportSel = NSSelectorFromString(@"exportToFile:withOptions:");
+            if (![task respondsToSelector:exportSel]) {
+                result = @{@"error": @"exportToFile:withOptions: not available on task"};
+                return;
+            }
+
+            BOOL success = ((BOOL (*)(id, SEL, id, id))objc_msgSend)(
+                task, exportSel, outURL, options);
+
+            // Check for error on the task
+            NSError *taskError = nil;
+            SEL errorSel = NSSelectorFromString(@"error");
+            if ([task respondsToSelector:errorSel]) {
+                taskError = ((id (*)(id, SEL))objc_msgSend)(task, errorSel);
+            }
+
+            if (!success || taskError) {
+                NSString *errMsg = taskError ? [taskError localizedDescription] : @"Export returned false";
+                result = @{@"error": [NSString stringWithFormat:@"Export failed: %@", errMsg]};
+                return;
+            }
+
+            // Verify the file was written
+            NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:outputPath error:nil];
+            unsigned long long fileSize = [attrs[NSFileSize] unsignedLongLongValue];
+
+            result = @{
+                @"status": @"ok",
+                @"path": outputPath,
+                @"bytes": @(fileSize),
+            };
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
+#pragma mark - History System (Persistent Unlimited Undo)
+//
+// Layers a persistent, unlimited undo system on top of FCP's built-in undo. Every edit
+// is captured as a zlib-compressed snapshot of FCP's Core Data store file
+// (CurrentVersion.fcpevent — the per-project Core Data store inside the .fcpbundle) stored in a
+// per-project SQLite database under ~/Library/Application Support/SpliceKit/history/.
+// Snapshots survive FCP restarts and are pruned by configurable count and age limits.
+//
+// Architecture:
+//   1. Swizzle -[FFAnchoredSequence actionEnd:save:error:] to detect every edit
+//   2. Copy the Core Data store files, compress with zlib, store in SQLite
+//   3. Expose history.* RPC namespace for browsing, restoring, and managing snapshots
+//
+// Dependencies: SQLite3 (built-in), zlib (built-in)
+//
+
+#import <sqlite3.h>
+#import <zlib.h>
+#import <CommonCrypto/CommonDigest.h>
+
+// History system globals
+static sqlite3 *sHistoryDB = nil;
+static dispatch_queue_t sHistoryQueue = nil;
+static NSString *sHistoryDBPath = nil;
+static NSString *sHistoryProjectKey = nil;
+static BOOL sHistoryEnabled = YES;
+static BOOL sHistoryCapturing = NO;  // guard against re-entrancy during restore
+static NSDate *sHistoryLastSnapshot = nil;
+static IMP sOrigActionEnd = NULL;
+static NSString *sHistoryBaseDir = nil;
+
+// Configuration defaults
+static NSInteger sHistoryMaxSnapshots = 1000;
+static NSInteger sHistoryMaxAgeDays = 30;
+static NSTimeInterval sHistoryDebounceInterval = 0.5;
+
+// Monotonic edit counter — increments on every save=YES actionEnd call,
+// INCLUDING debounced ones. Stored in each snapshot so restore can compute
+// the exact number of native undos to perform between any two snapshots.
+static int64_t sHistoryEditSeq = 0;
+
+// --- Public Getters/Setters ---
+
+void SpliceKit_setHistoryEnabled(BOOL enabled) {
+    sHistoryEnabled = enabled;
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:@"SpliceKitHistoryEnabled"];
+}
+
+BOOL SpliceKit_isHistoryEnabled(void) {
+    return sHistoryEnabled;
+}
+
+// --- SQLite Helpers ---
+
+static NSString *SpliceKit_historyBaseDir(void) {
+    if (!sHistoryBaseDir) {
+        NSString *appSupport = [NSSearchPathForDirectoriesInDomains(
+            NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+        sHistoryBaseDir = [appSupport stringByAppendingPathComponent:@"SpliceKit/history"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:sHistoryBaseDir
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    return sHistoryBaseDir;
+}
+
+static NSString *SpliceKit_historyProjectKey(NSString *libraryId, NSString *sequenceName) {
+    NSString *input = [NSString stringWithFormat:@"%@:%@", libraryId ?: @"", sequenceName ?: @""];
+    unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256([input UTF8String], (CC_LONG)[input lengthOfBytesUsingEncoding:NSUTF8StringEncoding], hash);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:16];
+    for (int i = 0; i < 8; i++) {
+        [hex appendFormat:@"%02x", hash[i]];
+    }
+    return [hex copy];
+}
+
+static BOOL SpliceKit_historyOpenDB(NSString *projectKey) {
+    if (sHistoryDB && [sHistoryProjectKey isEqualToString:projectKey]) {
+        return YES;  // Already open for this project
+    }
+
+    // Close any existing DB
+    if (sHistoryDB) {
+        sqlite3_close(sHistoryDB);
+        sHistoryDB = nil;
+        sHistoryDBPath = nil;
+        sHistoryProjectKey = nil;
+    }
+
+    NSString *dbPath = [[SpliceKit_historyBaseDir() stringByAppendingPathComponent:projectKey]
+                         stringByAppendingPathExtension:@"db"];
+
+    int rc = sqlite3_open([dbPath UTF8String], &sHistoryDB);
+    if (rc != SQLITE_OK) {
+        SpliceKit_log(@"History: failed to open DB at %@: %s", dbPath, sqlite3_errmsg(sHistoryDB));
+        sHistoryDB = nil;
+        return NO;
+    }
+
+    // Enable WAL mode for crash-safe atomic writes
+    sqlite3_exec(sHistoryDB, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
+    sqlite3_exec(sHistoryDB, "PRAGMA synchronous=NORMAL;", NULL, NULL, NULL);
+
+    // Create tables if needed — schema v2: store_* columns, payload_kind
+    const char *schema =
+        "CREATE TABLE IF NOT EXISTS snapshots ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  timestamp REAL NOT NULL,"
+        "  action_name TEXT NOT NULL DEFAULT '',"
+        "  sequence_name TEXT NOT NULL DEFAULT '',"
+        "  item_count INTEGER DEFAULT 0,"
+        "  duration_seconds REAL DEFAULT 0,"
+        "  playhead_seconds REAL DEFAULT 0,"
+        "  store_compressed BLOB NOT NULL,"
+        "  store_size INTEGER NOT NULL DEFAULT 0,"
+        "  payload_kind TEXT NOT NULL DEFAULT 'coredata_store',"
+        "  undo_seq INTEGER NOT NULL DEFAULT 0"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_timestamp ON snapshots(timestamp);"
+        "CREATE TABLE IF NOT EXISTS metadata ("
+        "  key TEXT PRIMARY KEY,"
+        "  value TEXT"
+        ");";
+
+    // Migrate v1 schema (fcpxml_* columns) to v2 (store_* columns) if needed
+    // Check if old columns exist and rename them
+    sqlite3_stmt *checkStmt = NULL;
+    if (sqlite3_prepare_v2(sHistoryDB, "SELECT fcpxml_compressed FROM snapshots LIMIT 0;", -1, &checkStmt, NULL) == SQLITE_OK) {
+        sqlite3_finalize(checkStmt);
+        // Old schema detected — migrate
+        SpliceKit_log(@"History: migrating DB schema v1 → v2 (fcpxml_* → store_*)");
+        sqlite3_exec(sHistoryDB, "ALTER TABLE snapshots RENAME COLUMN fcpxml_compressed TO store_compressed;", NULL, NULL, NULL);
+        sqlite3_exec(sHistoryDB, "ALTER TABLE snapshots RENAME COLUMN fcpxml_size TO store_size;", NULL, NULL, NULL);
+        // Add payload_kind column — old rows were actually coredata_store too (we never shipped XML)
+        sqlite3_exec(sHistoryDB, "ALTER TABLE snapshots ADD COLUMN payload_kind TEXT NOT NULL DEFAULT 'coredata_store';", NULL, NULL, NULL);
+    } else {
+        if (checkStmt) sqlite3_finalize(checkStmt);
+    }
+
+    // Add undo_seq column if missing (v2 → v3 migration)
+    sqlite3_stmt *seqCheck = NULL;
+    if (sqlite3_prepare_v2(sHistoryDB, "SELECT undo_seq FROM snapshots LIMIT 0;", -1, &seqCheck, NULL) != SQLITE_OK) {
+        if (seqCheck) sqlite3_finalize(seqCheck);
+        sqlite3_exec(sHistoryDB, "ALTER TABLE snapshots ADD COLUMN undo_seq INTEGER NOT NULL DEFAULT 0;", NULL, NULL, NULL);
+        SpliceKit_log(@"History: added undo_seq column (v3 migration)");
+    } else {
+        sqlite3_finalize(seqCheck);
+    }
+
+    char *errMsg = NULL;
+    rc = sqlite3_exec(sHistoryDB, schema, NULL, NULL, &errMsg);
+    if (rc != SQLITE_OK) {
+        SpliceKit_log(@"History: schema error: %s", errMsg);
+        sqlite3_free(errMsg);
+        sqlite3_close(sHistoryDB);
+        sHistoryDB = nil;
+        return NO;
+    }
+
+    sHistoryDBPath = dbPath;
+    sHistoryProjectKey = projectKey;
+
+    SpliceKit_log(@"History: opened DB for project key %@ at %@", projectKey, dbPath);
+    return YES;
+}
+
+static void SpliceKit_historyCloseDB(void) {
+    if (sHistoryDB) {
+        sqlite3_close(sHistoryDB);
+        sHistoryDB = nil;
+        sHistoryDBPath = nil;
+        sHistoryProjectKey = nil;
+    }
+}
+
+// --- zlib Compression ---
+
+static NSData *SpliceKit_zlibCompress(NSData *input) {
+    if (!input || input.length == 0) return nil;
+    uLongf destLen = compressBound((uLong)input.length);
+    NSMutableData *output = [NSMutableData dataWithLength:destLen];
+    int rc = compress2(output.mutableBytes, &destLen, input.bytes, (uLong)input.length, 6);
+    if (rc != Z_OK) return nil;
+    output.length = destLen;
+    return output;
+}
+
+static NSData *SpliceKit_zlibDecompress(NSData *input, NSUInteger originalSize) {
+    if (!input || input.length == 0) return nil;
+    NSMutableData *output = [NSMutableData dataWithLength:originalSize];
+    uLongf destLen = (uLongf)originalSize;
+    int rc = uncompress(output.mutableBytes, &destLen, input.bytes, (uLong)input.length);
+    if (rc != Z_OK) return nil;
+    output.length = destLen;
+    return output;
+}
+
+// --- Snapshot Insert ---
+
+static int64_t SpliceKit_historyInsertSnapshot(NSString *actionName,
+                                                NSString *sequenceName,
+                                                NSInteger itemCount,
+                                                double durationSeconds,
+                                                double playheadSeconds,
+                                                NSData *storeCompressed,
+                                                NSUInteger storeOriginalSize,
+                                                int64_t undoSeq) {
+    if (!sHistoryDB || !storeCompressed) return -1;
+
+    const char *sql =
+        "INSERT INTO snapshots (timestamp, action_name, sequence_name, item_count, "
+        "duration_seconds, playhead_seconds, store_compressed, store_size, payload_kind, undo_seq) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'coredata_store', ?);";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(sHistoryDB, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        SpliceKit_log(@"History: insert prepare error: %s", sqlite3_errmsg(sHistoryDB));
+        return -1;
+    }
+
+    double now = [[NSDate date] timeIntervalSince1970];
+    sqlite3_bind_double(stmt, 1, now);
+    sqlite3_bind_text(stmt, 2, [actionName UTF8String], -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, [sequenceName UTF8String], -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, (int)itemCount);
+    sqlite3_bind_double(stmt, 5, durationSeconds);
+    sqlite3_bind_double(stmt, 6, playheadSeconds);
+    sqlite3_bind_blob(stmt, 7, storeCompressed.bytes, (int)storeCompressed.length, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 8, (int)storeOriginalSize);
+    sqlite3_bind_int64(stmt, 9, undoSeq);
+
+    rc = sqlite3_step(stmt);
+    int64_t rowId = -1;
+    if (rc == SQLITE_DONE) {
+        rowId = sqlite3_last_insert_rowid(sHistoryDB);
+    } else {
+        SpliceKit_log(@"History: insert error: %s", sqlite3_errmsg(sHistoryDB));
+    }
+    sqlite3_finalize(stmt);
+    return rowId;
+}
+
+// --- Snapshot Query ---
+
+static NSArray *SpliceKit_historyQuerySnapshots(NSInteger limit, NSInteger offset) {
+    if (!sHistoryDB) return @[];
+
+    const char *sql =
+        "SELECT id, timestamp, action_name, sequence_name, item_count, "
+        "duration_seconds, playhead_seconds, store_size, undo_seq "
+        "FROM snapshots ORDER BY id DESC LIMIT ? OFFSET ?;";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(sHistoryDB, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) return @[];
+
+    sqlite3_bind_int(stmt, 1, (int)limit);
+    sqlite3_bind_int(stmt, 2, (int)offset);
+
+    NSMutableArray *results = [NSMutableArray array];
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        double ts = sqlite3_column_double(stmt, 1);
+        NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+        fmt.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+        NSString *timeStr = [fmt stringFromDate:[NSDate dateWithTimeIntervalSince1970:ts]];
+
+        [results addObject:@{
+            @"id": @(sqlite3_column_int64(stmt, 0)),
+            @"timestamp": @(ts),
+            @"time": timeStr,
+            @"action": [NSString stringWithUTF8String:(const char *)sqlite3_column_text(stmt, 2) ?: ""],
+            @"sequence": [NSString stringWithUTF8String:(const char *)sqlite3_column_text(stmt, 3) ?: ""],
+            @"itemCount": @(sqlite3_column_int(stmt, 4)),
+            @"durationSeconds": @(sqlite3_column_double(stmt, 5)),
+            @"playheadSeconds": @(sqlite3_column_double(stmt, 6)),
+            @"storeSize": @(sqlite3_column_int(stmt, 7)),
+            @"undoSeq": @(sqlite3_column_int64(stmt, 8)),
+        }];
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
+// --- Get Single Snapshot (with FCPXML blob) ---
+
+static NSDictionary *SpliceKit_historyGetSnapshot(int64_t snapshotId) {
+    if (!sHistoryDB) return nil;
+
+    const char *sql =
+        "SELECT id, timestamp, action_name, sequence_name, item_count, "
+        "duration_seconds, playhead_seconds, store_compressed, store_size, undo_seq "
+        "FROM snapshots WHERE id = ?;";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(sHistoryDB, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) return nil;
+
+    sqlite3_bind_int64(stmt, 1, snapshotId);
+
+    NSDictionary *result = nil;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        int blobLen = sqlite3_column_bytes(stmt, 7);
+        NSData *compressed = [NSData dataWithBytes:sqlite3_column_blob(stmt, 7) length:blobLen];
+        int originalSize = sqlite3_column_int(stmt, 8);
+
+        result = @{
+            @"id": @(sqlite3_column_int64(stmt, 0)),
+            @"timestamp": @(sqlite3_column_double(stmt, 1)),
+            @"action": [NSString stringWithUTF8String:(const char *)sqlite3_column_text(stmt, 2) ?: ""],
+            @"sequence": [NSString stringWithUTF8String:(const char *)sqlite3_column_text(stmt, 3) ?: ""],
+            @"itemCount": @(sqlite3_column_int(stmt, 4)),
+            @"durationSeconds": @(sqlite3_column_double(stmt, 5)),
+            @"playheadSeconds": @(sqlite3_column_double(stmt, 6)),
+            @"storeCompressed": compressed,
+            @"storeSize": @(originalSize),
+            @"undoSeq": @(sqlite3_column_int64(stmt, 9)),
+        };
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+// --- Stats ---
+
+static NSDictionary *SpliceKit_historyGetStats(void) {
+    if (!sHistoryDB) {
+        return @{@"enabled": @(sHistoryEnabled), @"open": @NO, @"snapshotCount": @0};
+    }
+
+    int count = 0;
+    int totalCompressed = 0;
+    int totalOriginal = 0;
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(sHistoryDB,
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH(store_compressed)),0), COALESCE(SUM(store_size),0) FROM snapshots;",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            count = sqlite3_column_int(stmt, 0);
+            totalCompressed = sqlite3_column_int(stmt, 1);
+            totalOriginal = sqlite3_column_int(stmt, 2);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return @{
+        @"enabled": @(sHistoryEnabled),
+        @"open": @YES,
+        @"dbPath": sHistoryDBPath ?: @"",
+        @"projectKey": sHistoryProjectKey ?: @"",
+        @"snapshotCount": @(count),
+        @"totalCompressedBytes": @(totalCompressed),
+        @"totalOriginalBytes": @(totalOriginal),
+        @"maxSnapshots": @(sHistoryMaxSnapshots),
+        @"maxAgeDays": @(sHistoryMaxAgeDays),
+    };
+}
+
+// --- Pruning ---
+
+static void SpliceKit_historyAutoPrune(void) {
+    if (!sHistoryDB) return;
+
+    // Prune by count
+    if (sHistoryMaxSnapshots > 0) {
+        const char *sql =
+            "DELETE FROM snapshots WHERE id NOT IN "
+            "(SELECT id FROM snapshots ORDER BY id DESC LIMIT ?);";
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(sHistoryDB, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, (int)sHistoryMaxSnapshots);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    // Prune by age
+    if (sHistoryMaxAgeDays > 0) {
+        double cutoff = [[NSDate date] timeIntervalSince1970] - (sHistoryMaxAgeDays * 86400.0);
+        const char *sql = "DELETE FROM snapshots WHERE timestamp < ?;";
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(sHistoryDB, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_double(stmt, 1, cutoff);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+}
+
+// --- Get Current Library Persistent ID ---
+
+static NSString *SpliceKit_getCurrentLibraryPersistentID(void) {
+    __block NSString *persistentID = nil;
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id app = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("NSApplication"), @selector(sharedApplication));
+            id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
+            SEL libSel = NSSelectorFromString(@"_targetLibrary");
+            if (![delegate respondsToSelector:libSel]) return;
+            id library = ((id (*)(id, SEL))objc_msgSend)(delegate, libSel);
+            if (!library) return;
+            SEL pidSel = NSSelectorFromString(@"persistentID");
+            if ([library respondsToSelector:pidSel]) {
+                id pid = ((id (*)(id, SEL))objc_msgSend)(library, pidSel);
+                if ([pid respondsToSelector:@selector(stringValue)]) {
+                    persistentID = ((id (*)(id, SEL))objc_msgSend)(pid, @selector(stringValue));
+                } else if ([pid isKindOfClass:[NSString class]]) {
+                    persistentID = pid;
+                } else {
+                    persistentID = [pid description];
+                }
+            }
+        } @catch (NSException *e) {
+            SpliceKit_log(@"History: error getting library ID: %@", e.reason);
+        }
+    });
+    return persistentID;
+}
+
+// --- Ensure DB is Open for Current Project ---
+
+static BOOL SpliceKit_historyEnsureDBForCurrentProject(void) {
+    // Wait for any pending background DB operations to complete
+    dispatch_sync(sHistoryQueue, ^{});
+
+    // If a DB is already open (from auto-capture), just use it
+    if (sHistoryDB && sHistoryProjectKey) return YES;
+
+    __block NSString *seqName = nil;
+    __block NSString *libPath = nil;
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id app = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("NSApplication"), @selector(sharedApplication));
+            id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
+            SEL tLibSel = NSSelectorFromString(@"_targetLibrary");
+            if (![delegate respondsToSelector:tLibSel]) return;
+            id library = ((id (*)(id, SEL))objc_msgSend)(delegate, tLibSel);
+            if (!library) return;
+
+            NSURL *url = ((id (*)(id, SEL))objc_msgSend)(library, @selector(URL));
+            if (url) libPath = [[url path] copy];
+
+            // Try timeline module for sequence name
+            id timeline = SpliceKit_getActiveTimelineModule();
+            if (timeline) {
+                id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+                if (sequence && [sequence respondsToSelector:@selector(displayName)]) {
+                    seqName = [((id (*)(id, SEL))objc_msgSend)(sequence, @selector(displayName)) copy];
+                }
+            }
+
+            // Fallback: search _deepLoadedSequences for one with content
+            if (!seqName) {
+                SEL deepSeqSel = NSSelectorFromString(@"_deepLoadedSequences");
+                if ([library respondsToSelector:deepSeqSel]) {
+                    id sequences = ((id (*)(id, SEL))objc_msgSend)(library, deepSeqSel);
+                    id allSeqs = ((id (*)(id, SEL))objc_msgSend)(sequences, @selector(allObjects));
+                    for (id seq in allSeqs) {
+                        BOOL hasContent = ((BOOL (*)(id, SEL))objc_msgSend)(
+                            seq, NSSelectorFromString(@"hasContainedItems"));
+                        if (hasContent) {
+                            seqName = [((id (*)(id, SEL))objc_msgSend)(seq, @selector(displayName)) copy];
+                            break;
+                        }
+                    }
+                }
+            }
+        } @catch (NSException *e) {}
+    });
+
+    if (!seqName || !libPath) return NO;
+
+    NSString *key = SpliceKit_historyProjectKey(libPath, seqName);
+    return SpliceKit_historyOpenDB(key);
+}
+
+// --- Core Snapshot Capture ---
+
+// --- Core Data Store Bundle Packing ---
+//
+// FCP's Core Data store may use SQLite WAL mode, meaning the complete state
+// lives across up to 3 files: .flexolibrary, .flexolibrary-wal, .flexolibrary-shm.
+// We pack all present files into a single blob with a simple format:
+//   [uint32 fileCount]
+//   For each file:
+//     [uint32 nameLen] [name bytes] [uint64 dataLen] [data bytes]
+// This is unpacked during restore.
+
+static NSData *SpliceKit_packStoreFiles(NSString *storePath) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *walPath = [storePath stringByAppendingString:@"-wal"];
+    NSString *shmPath = [storePath stringByAppendingString:@"-shm"];
+
+    // Collect files that exist
+    NSMutableArray<NSDictionary *> *files = [NSMutableArray array];
+    for (NSString *path in @[storePath, walPath, shmPath]) {
+        if ([fm fileExistsAtPath:path]) {
+            NSData *data = [NSData dataWithContentsOfFile:path];
+            if (data) {
+                [files addObject:@{
+                    @"name": [path lastPathComponent],
+                    @"data": data,
+                }];
+            }
+        }
+    }
+
+    if (files.count == 0) return nil;
+
+    // Pack into a single blob
+    NSMutableData *packed = [NSMutableData data];
+    uint32_t fileCount = (uint32_t)files.count;
+    [packed appendBytes:&fileCount length:sizeof(fileCount)];
+
+    for (NSDictionary *file in files) {
+        NSString *name = file[@"name"];
+        NSData *data = file[@"data"];
+        const char *nameUTF8 = [name UTF8String];
+        uint32_t nameLen = (uint32_t)strlen(nameUTF8);
+        uint64_t dataLen = (uint64_t)data.length;
+        [packed appendBytes:&nameLen length:sizeof(nameLen)];
+        [packed appendBytes:nameUTF8 length:nameLen];
+        [packed appendBytes:&dataLen length:sizeof(dataLen)];
+        [packed appendBytes:data.bytes length:data.length];
+    }
+
+    return packed;
+}
+
+static NSDictionary<NSString *, NSData *> *SpliceKit_unpackStoreFiles(NSData *packed) {
+    if (!packed || packed.length < sizeof(uint32_t)) return nil;
+
+    const uint8_t *bytes = packed.bytes;
+    NSUInteger offset = 0;
+    NSUInteger total = packed.length;
+
+    uint32_t fileCount;
+    memcpy(&fileCount, bytes + offset, sizeof(fileCount));
+    offset += sizeof(fileCount);
+
+    if (fileCount == 0 || fileCount > 10) return nil;  // sanity check
+
+    NSMutableDictionary<NSString *, NSData *> *result = [NSMutableDictionary dictionary];
+    for (uint32_t i = 0; i < fileCount; i++) {
+        if (offset + sizeof(uint32_t) > total) return nil;
+        uint32_t nameLen;
+        memcpy(&nameLen, bytes + offset, sizeof(nameLen));
+        offset += sizeof(nameLen);
+
+        if (offset + nameLen > total) return nil;
+        NSString *name = [[NSString alloc] initWithBytes:bytes + offset length:nameLen encoding:NSUTF8StringEncoding];
+        offset += nameLen;
+
+        if (offset + sizeof(uint64_t) > total) return nil;
+        uint64_t dataLen;
+        memcpy(&dataLen, bytes + offset, sizeof(dataLen));
+        offset += sizeof(dataLen);
+
+        if (offset + dataLen > total) return nil;
+        NSData *data = [NSData dataWithBytes:bytes + offset length:(NSUInteger)dataLen];
+        offset += (NSUInteger)dataLen;
+
+        if (name && data) {
+            result[name] = data;
+        }
+    }
+
+    return result;
+}
+
+// --- Core Snapshot Capture ---
+
+// Called DIRECTLY from the swizzle (which runs on the main thread inside
+// actionEnd:save:error:). Grabs the library path and metadata synchronously
+// (fast — just reading properties), then dispatches the file read + compress
+// + DB write to sHistoryQueue. NEVER enqueues work on the main queue.
+static void SpliceKit_captureHistorySnapshotOnMainThread(NSString *actionName, int64_t editSeq) {
+    // We're on the main thread — grab the store path quickly, dispatch everything else
+    if (!sHistoryEnabled || sHistoryCapturing) {
+        SpliceKit_log(@"History: capture skipped (enabled=%d capturing=%d)", sHistoryEnabled, sHistoryCapturing);
+        return;
+    }
+
+    // Get library path — fast property reads, no blocking calls
+    id app = ((id (*)(id, SEL))objc_msgSend)(
+        objc_getClass("NSApplication"), @selector(sharedApplication));
+    id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
+    SEL tLibSel = NSSelectorFromString(@"_targetLibrary");
+    if (!delegate || ![delegate respondsToSelector:tLibSel]) {
+        SpliceKit_log(@"History: capture skipped — no delegate or _targetLibrary");
+        return;
+    }
+    id library = ((id (*)(id, SEL))objc_msgSend)(delegate, tLibSel);
+    if (!library) {
+        SpliceKit_log(@"History: capture skipped — library is nil");
+        return;
+    }
+
+    NSURL *libURL = ((id (*)(id, SEL))objc_msgSend)(library, @selector(URL));
+    if (!libURL) {
+        SpliceKit_log(@"History: capture skipped — library URL is nil");
+        return;
+    }
+
+    // Grab library path, sequence name, and the event store path
+    NSString *libPath = [libURL path];
+    NSString *seqName = @"";
+
+    // Force ALL Core Data stores to flush pending writes to disk.
+    // FCP uses multiple .fcpevent files (event-level + project-level).
+    // _saveDuringUpdate: triggers a full save pass across all stores.
+    id libDoc = ((id (*)(id, SEL))objc_msgSend)(library, @selector(libraryDocument));
+    if (libDoc) {
+        @try {
+            SEL saveSel = NSSelectorFromString(@"_saveDuringUpdate:");
+            if ([libDoc respondsToSelector:saveSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(libDoc, saveSel, nil);
+            } else {
+                SEL flushSel = NSSelectorFromString(@"flushStorage:");
+                if ([libDoc respondsToSelector:flushSel]) {
+                    ((BOOL (*)(id, SEL, id *))objc_msgSend)(libDoc, flushSel, NULL);
+                }
+            }
+        } @catch (NSException *e) {}
+    }
+    NSInteger itemCount = 0;
+    double durationSeconds = 0;
+    double playheadSeconds = 0;
+
+    id timeline = SpliceKit_getActiveTimelineModule();
+    if (timeline) {
+        id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+        if (sequence) {
+            if ([sequence respondsToSelector:@selector(displayName)])
+                seqName = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(displayName)) ?: @"";
+
+            // Collect real metadata — item count from containedItems
+            @try {
+                SEL primarySel = NSSelectorFromString(@"primaryObject");
+                if ([sequence respondsToSelector:primarySel]) {
+                    id primary = ((id (*)(id, SEL))objc_msgSend)(sequence, primarySel);
+                    if (primary) {
+                        SEL containedSel = NSSelectorFromString(@"containedItems");
+                        if ([primary respondsToSelector:containedSel]) {
+                            id items = ((id (*)(id, SEL))objc_msgSend)(primary, containedSel);
+                            if ([items respondsToSelector:@selector(count)]) {
+                                itemCount = [(NSArray *)items count];
+                            }
+                        }
+                    }
+                }
+                // Duration from sequence
+                SEL durSel = NSSelectorFromString(@"duration");
+                if ([sequence respondsToSelector:durSel]) {
+                    SpliceKit_CMTime dur = ((SpliceKit_CMTime (*)(id, SEL))objc_msgSend)(sequence, durSel);
+                    if (dur.timescale > 0) {
+                        durationSeconds = (double)dur.value / (double)dur.timescale;
+                    }
+                }
+            } @catch (NSException *e) {}
+        }
+
+        // Playhead position
+        @try {
+            SEL posSel = NSSelectorFromString(@"currentPosition");
+            if ([timeline respondsToSelector:posSel]) {
+                SpliceKit_CMTime pos = ((SpliceKit_CMTime (*)(id, SEL))objc_msgSend)(timeline, posSel);
+                if (pos.timescale > 0) {
+                    playheadSeconds = (double)pos.value / (double)pos.timescale;
+                }
+            }
+        } @catch (NSException *e) {}
+    }
+
+    // Find the event folder containing this project's .fcpevent files.
+    // FCP stores timeline data across BOTH:
+    //   <library>.fcpbundle/<event>/CurrentVersion.fcpevent (event-level index)
+    //   <library>.fcpbundle/<event>/<project>/CurrentVersion.fcpevent (project data)
+    // Both must be captured and restored together for consistency.
+    NSString *eventFolderPath = nil;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *eventDirs = [fm contentsOfDirectoryAtPath:libPath error:nil];
+    for (NSString *eventDir in eventDirs) {
+        if ([eventDir hasPrefix:@"__"] || [eventDir hasPrefix:@"."]) continue;
+        NSString *eventPath = [libPath stringByAppendingPathComponent:eventDir];
+        NSString *projDir = [eventPath stringByAppendingPathComponent:seqName];
+        NSString *projStore = [projDir stringByAppendingPathComponent:@"CurrentVersion.fcpevent"];
+        if ([fm fileExistsAtPath:projStore]) {
+            eventFolderPath = eventPath;
+            break;
+        }
+    }
+    if (!eventFolderPath) {
+        SpliceKit_log(@"History: capture skipped — no event folder found for \"%@\" in %@", seqName, libPath);
+        return;
+    }
+
+    // Copy immutable values for the background block
+    NSString *ep = [eventFolderPath copy], *sn = [seqName copy];
+    NSString *li = [libPath copy], *ac = [actionName copy];
+    NSInteger ic = itemCount;
+    double ds = durationSeconds, ps = playheadSeconds;
+    int64_t es = editSeq;
+
+    // EVERYTHING else on background — file read, compress, DB write
+    dispatch_async(sHistoryQueue, ^{
+        @autoreleasepool {
+            // Pack all .fcpevent files in the event folder (event-level + project-level)
+            // into a single blob. Uses relative paths from the event folder so restore
+            // can write them back to the correct locations.
+            NSFileManager *bgFM = [NSFileManager defaultManager];
+            NSMutableData *packed = [NSMutableData data];
+            NSMutableArray *fileEntries = [NSMutableArray array];
+
+            // Collect: event-level CurrentVersion.fcpevent + <project>/CurrentVersion.fcpevent
+            NSString *eventStore = [ep stringByAppendingPathComponent:@"CurrentVersion.fcpevent"];
+            if ([bgFM fileExistsAtPath:eventStore]) {
+                NSData *d = [NSData dataWithContentsOfFile:eventStore];
+                if (d) [fileEntries addObject:@{@"name": @"CurrentVersion.fcpevent", @"data": d}];
+            }
+            NSString *projStore = [[ep stringByAppendingPathComponent:sn]
+                                    stringByAppendingPathComponent:@"CurrentVersion.fcpevent"];
+            if ([bgFM fileExistsAtPath:projStore]) {
+                NSData *d = [NSData dataWithContentsOfFile:projStore];
+                NSString *relName = [NSString stringWithFormat:@"%@/CurrentVersion.fcpevent", sn];
+                if (d) [fileEntries addObject:@{@"name": relName, @"data": d}];
+            }
+
+            if (fileEntries.count == 0) {
+                SpliceKit_log(@"History: capture failed — no .fcpevent files in %@", ep);
+                return;
+            }
+
+            // Pack using the same format as SpliceKit_packStoreFiles
+            uint32_t fileCount = (uint32_t)fileEntries.count;
+            [packed appendBytes:&fileCount length:sizeof(fileCount)];
+            for (NSDictionary *entry in fileEntries) {
+                const char *nameUTF8 = [entry[@"name"] UTF8String];
+                uint32_t nameLen = (uint32_t)strlen(nameUTF8);
+                NSData *data = entry[@"data"];
+                uint64_t dataLen = (uint64_t)data.length;
+                [packed appendBytes:&nameLen length:sizeof(nameLen)];
+                [packed appendBytes:nameUTF8 length:nameLen];
+                [packed appendBytes:&dataLen length:sizeof(dataLen)];
+                [packed appendBytes:data.bytes length:data.length];
+            }
+
+            NSData *packedData = packed;
+            if (!packedData || packedData.length == 0) {
+                SpliceKit_log(@"History: capture failed — empty packed data");
+                return;
+            }
+
+            NSData *compressed = SpliceKit_zlibCompress(packedData);
+            if (!compressed) {
+                SpliceKit_log(@"History: capture failed — zlib compression failed");
+                return;
+            }
+
+            NSString *key = SpliceKit_historyProjectKey(li, sn);
+            if (!SpliceKit_historyOpenDB(key)) {
+                SpliceKit_log(@"History: capture failed — could not open DB for key %@", key);
+                return;
+            }
+
+            NSUInteger originalSize = packedData.length;
+            int64_t sid = SpliceKit_historyInsertSnapshot(ac, sn, ic, ds, ps, compressed, originalSize, es);
+            if (sid > 0) {
+                SpliceKit_log(@"History: snapshot #%lld — \"%@\" editSeq=%lld (%lu→%lu bytes, %ld items, %.1fs)",
+                              sid, ac, es, (unsigned long)originalSize, (unsigned long)compressed.length,
+                              (long)ic, ds);
+                // Auto-prune after successful insert
+                SpliceKit_historyAutoPrune();
+            }
+        }
+    });
+}
+
+// --- Swizzle: actionEnd:save:error: ---
+
+static NSDate *sHistoryInstallTime = nil;
+
+// IMP replacement for -[FFAnchoredSequence actionEnd:save:error:]
+//
+// MUST use void* for all object parameters — NOT id. ARC inserts
+// objc_storeStrong at function entry for id params, which crashes because
+// FCP passes actionName values that aren't always valid retainable objects
+// (confirmed by crash: objc_retain → objc_storeStrong → SpliceKit_swizzled_actionEnd).
+// void* has identical ABI (same registers, same sizes) but ARC ignores it.
+//
+// We bridge to id only briefly via __bridge casts for the string copy,
+// wrapped in @try/@catch to handle any invalid pointer gracefully.
+static BOOL SpliceKit_swizzled_actionEnd(void *self_ptr, SEL _cmd,
+                                        void *actionName_ptr, BOOL save,
+                                        void *error_ptr) {
+    // (no debug logging in production)
+
+    // Capture the action name BEFORE calling original — bridge to id momentarily
+    NSString *action = @"Edit";
+    if (actionName_ptr) {
+        @try {
+            id nameObj = (__bridge id)actionName_ptr;
+            NSString *desc = [nameObj description];
+            if (desc) action = [desc copy];
+        } @catch (NSException *e) {
+            action = @"Edit";
+        }
+    }
+
+    // Check actionCount BEFORE calling original — the original decrements it.
+    // We only capture when the outermost transaction completes (actionCount == 1 → 0).
+    // FCP's `save` parameter does NOT mean "save the edit" — it controls whether
+    // extra cleanup (lane conflict resolution, auto-editing) is performed. Edits are
+    // committed regardless of the `save` value.
+    int actionCount = 0;
+    @try {
+        id selfObj = (__bridge id)self_ptr;
+        if ([selfObj respondsToSelector:@selector(actionCount)]) {
+            actionCount = (int)((long (*)(id, SEL))objc_msgSend)(selfObj, @selector(actionCount));
+        }
+    } @catch (NSException *e) {}
+
+    // Call original IMP — FCP completes the edit
+    // DO NOT touch actionName_ptr after this — the object may be freed
+    BOOL result = ((BOOL (*)(void *, SEL, void *, BOOL, void *))sOrigActionEnd)(
+        self_ptr, _cmd, actionName_ptr, save, error_ptr);
+
+    // Only capture when outermost transaction completes (actionCount was 1)
+    if (actionCount != 1) return result;
+
+    // Increment edit counter on every outermost transaction end
+    sHistoryEditSeq++;
+
+    if (!sHistoryEnabled || sHistoryCapturing) return result;
+
+    // Skip captures during startup (first 15 seconds) to avoid blocking FCP load
+    if (sHistoryInstallTime && [[NSDate date] timeIntervalSinceDate:sHistoryInstallTime] < 15.0) {
+        return result;
+    }
+
+    // Debounce: skip if another snapshot was taken within the debounce interval
+    NSDate *now = [NSDate date];
+    if (sHistoryLastSnapshot && [now timeIntervalSinceDate:sHistoryLastSnapshot] < sHistoryDebounceInterval) {
+        return result;
+    }
+    sHistoryLastSnapshot = now;
+
+    int64_t currentEditSeq = sHistoryEditSeq;
+
+    // Run capture directly — we're on the main thread, it dispatches I/O to background
+    SpliceKit_captureHistorySnapshotOnMainThread(action, currentEditSeq);
+    return result;
+}
+
+void SpliceKit_installHistorySwizzle(void) {
+    // Create the history dispatch queue
+    sHistoryQueue = dispatch_queue_create("com.splicekit.history", DISPATCH_QUEUE_SERIAL);
+
+    // Load config from NSUserDefaults
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([defaults objectForKey:@"SpliceKitHistoryEnabled"]) {
+        sHistoryEnabled = [defaults boolForKey:@"SpliceKitHistoryEnabled"];
+    }
+    if ([defaults objectForKey:@"SpliceKitHistoryMaxSnapshots"]) {
+        sHistoryMaxSnapshots = [defaults integerForKey:@"SpliceKitHistoryMaxSnapshots"];
+    }
+    if ([defaults objectForKey:@"SpliceKitHistoryMaxAgeDays"]) {
+        sHistoryMaxAgeDays = [defaults integerForKey:@"SpliceKitHistoryMaxAgeDays"];
+    }
+
+    // Swizzle -[FFAnchoredSequence actionEnd:save:error:]
+    Class seqClass = objc_getClass("FFAnchoredSequence");
+    if (!seqClass) {
+        SpliceKit_log(@"History: FFAnchoredSequence class not found — swizzle skipped");
+        return;
+    }
+
+    SEL sel = NSSelectorFromString(@"actionEnd:save:error:");
+    Method m = class_getInstanceMethod(seqClass, sel);
+    if (!m) {
+        SpliceKit_log(@"History: actionEnd:save:error: method not found — swizzle skipped");
+        return;
+    }
+
+    sOrigActionEnd = method_setImplementation(m, (IMP)SpliceKit_swizzled_actionEnd);
+    sHistoryInstallTime = [NSDate date];
+    SpliceKit_log(@"History: installed actionEnd:save:error: swizzle on FFAnchoredSequence");
+
+    // Pre-open the history DB after FCP finishes launching.
+    // At install time no library/project is loaded yet, so we delay 20s
+    // to give FCP time to restore its last session.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (SpliceKit_historyEnsureDBForCurrentProject()) {
+            SpliceKit_log(@"History: pre-opened DB for current project after launch delay");
+        }
+    });
+}
+
+// --- RPC Handlers ---
+
+static NSDictionary *SpliceKit_handleHistorySnapshot(NSDictionary *params) {
+    if (!sHistoryEnabled) {
+        return @{@"error": @"History system is disabled"};
+    }
+
+    NSString *label = params[@"action"] ?: params[@"label"] ?: @"Manual Snapshot";
+
+    // Run capture on main thread (reads ObjC properties), which dispatches
+    // the file I/O to sHistoryQueue
+    int64_t seq = sHistoryEditSeq;
+    SpliceKit_executeOnMainThread(^{
+        SpliceKit_captureHistorySnapshotOnMainThread(label, seq);
+    });
+
+    // Wait for the background write to complete so the caller gets a
+    // reliable confirmation (dispatch_sync on the serial queue acts as barrier)
+    dispatch_sync(sHistoryQueue, ^{});
+
+    // Verify the snapshot was actually written
+    if (SpliceKit_historyEnsureDBForCurrentProject()) {
+        NSArray *recent = SpliceKit_historyQuerySnapshots(1, 0);
+        if (recent.count > 0) {
+            return @{
+                @"status": @"ok",
+                @"message": @"Snapshot captured and persisted",
+                @"snapshot": recent[0],
+            };
+        }
+    }
+    return @{@"status": @"ok", @"message": @"Snapshot submitted (could not verify persistence)"};
+}
+
+static NSDictionary *SpliceKit_handleHistoryList(NSDictionary *params) {
+    if (!SpliceKit_historyEnsureDBForCurrentProject()) {
+        return @{@"error": @"No active project or history database"};
+    }
+
+    NSInteger limit = [params[@"limit"] integerValue] ?: 20;
+    NSInteger offset = [params[@"offset"] integerValue];
+
+    NSArray *snapshots = SpliceKit_historyQuerySnapshots(limit, offset);
+    return @{@"status": @"ok", @"snapshots": snapshots, @"count": @(snapshots.count)};
+}
+
+static NSDictionary *SpliceKit_handleHistoryStatus(NSDictionary *params) {
+    // Try to open DB for current project if not already open
+    SpliceKit_historyEnsureDBForCurrentProject();
+    return SpliceKit_historyGetStats();
+}
+
+// --- Async Store Swap (cross-restart restore) ---
+//
+// Runs as an async state machine on the main queue via dispatch_after.
+// Each step yields back to the runloop so FCP can process document teardown,
+// sidebar registration, etc. sHistoryCapturing stays YES the entire time.
+
+static void SpliceKit_storeSwapStep2_writeAndReopen(NSString *eventFolderPath,
+                                                      NSData *packedStoreData,
+                                                      NSURL *libURL,
+                                                      NSString *backupDir,
+                                                      NSString *projectName) {
+    // Step 2: document has had time to close — swap store files and reopen
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    // Unpack snapshot bundle — contains relative paths like:
+    //   "CurrentVersion.fcpevent" (event-level)
+    //   "Untitled Project 1/CurrentVersion.fcpevent" (project-level)
+    NSDictionary<NSString *, NSData *> *files = SpliceKit_unpackStoreFiles(packedStoreData);
+    if (!files || files.count == 0) {
+        SpliceKit_log(@"History: store swap failed — could not unpack snapshot data");
+        sHistoryCapturing = NO;
+        return;
+    }
+
+    // Back up existing files, remove them, write snapshot data
+    BOOL writeOK = YES;
+    for (NSString *relPath in files) {
+        NSString *destPath = [eventFolderPath stringByAppendingPathComponent:relPath];
+        NSString *backupPath = [backupDir stringByAppendingPathComponent:relPath];
+
+        // Ensure backup directory exists
+        [fm createDirectoryAtPath:[backupPath stringByDeletingLastPathComponent]
+      withIntermediateDirectories:YES attributes:nil error:nil];
+        // Back up
+        [fm removeItemAtPath:backupPath error:nil];
+        [fm copyItemAtPath:destPath toPath:backupPath error:nil];
+        // Remove existing + WAL/SHM
+        [fm removeItemAtPath:destPath error:nil];
+        [fm removeItemAtPath:[destPath stringByAppendingString:@"-wal"] error:nil];
+        [fm removeItemAtPath:[destPath stringByAppendingString:@"-shm"] error:nil];
+        // Write snapshot data
+        NSError *err = nil;
+        [files[relPath] writeToFile:destPath options:NSDataWritingAtomic error:&err];
+        if (err) {
+            SpliceKit_log(@"History: failed to write %@: %@", relPath, err);
+            writeOK = NO;
+            break;
+        }
+    }
+
+    if (!writeOK) {
+        SpliceKit_log(@"History: store swap write failed, restoring backups");
+        for (NSString *relPath in files) {
+            NSString *destPath = [eventFolderPath stringByAppendingPathComponent:relPath];
+            NSString *backupPath = [backupDir stringByAppendingPathComponent:relPath];
+            [fm removeItemAtPath:destPath error:nil];
+            [fm moveItemAtPath:backupPath toPath:destPath error:nil];
+        }
+        sHistoryCapturing = NO;
+        return;
+    }
+
+    SpliceKit_log(@"History: store files written (%lu files), reopening library", (unsigned long)files.count);
+
+    // Reopen via PEDocumentController openDocumentWithContentsOfURL:display:error:
+    // This is Cocoa's standard document-open path and correctly registers the
+    // library in FCP's sidebar. NSWorkspace openURL: does NOT work because
+    // .fcpbundle isn't registered with Launch Services, and application:openFile:
+    // returns false for library bundles.
+    id docController = ((id (*)(id, SEL))objc_msgSend)(
+        objc_getClass("NSDocumentController"), @selector(sharedDocumentController));
+    id newDoc = ((id (*)(id, SEL, id, BOOL, id *))objc_msgSend)(
+        docController,
+        NSSelectorFromString(@"openDocumentWithContentsOfURL:display:error:"),
+        libURL, YES, NULL);
+    BOOL opened = (newDoc != nil);
+    SpliceKit_log(@"History: library reopen %@ (doc=%@)",
+                  opened ? @"succeeded" : @"FAILED", newDoc);
+
+    // Clean up backup directory
+    [fm removeItemAtPath:backupDir error:nil];
+
+    // Step 3: wait for Core Data to fully load, then open the project via
+    // +[PEDocument makeSequenceActive:] — this is the same code path the
+    // sidebar uses, and it handles document creation more robustly than
+    // loadEditorForSequence:.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        @try {
+            NSString *targetLibPath = [libURL path];
+            id libs = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("FFLibraryDocument"), NSSelectorFromString(@"copyActiveLibraries"));
+            if (!libs || [(NSArray *)libs count] == 0) {
+                SpliceKit_log(@"History: no libraries after reopen");
+                sHistoryCapturing = NO;
+                return;
+            }
+            // Find library by URL
+            id lib = nil;
+            for (id candidate in (NSArray *)libs) {
+                NSURL *candURL = ((id (*)(id, SEL))objc_msgSend)(candidate, @selector(URL));
+                if (candURL && [[candURL path] isEqualToString:targetLibPath]) {
+                    lib = candidate;
+                    break;
+                }
+            }
+            if (!lib) lib = [(NSArray *)libs objectAtIndex:0];
+
+            // Find the target sequence
+            SEL deepSeqSel = NSSelectorFromString(@"_deepLoadedSequences");
+            id sequences = ((id (*)(id, SEL))objc_msgSend)(lib, deepSeqSel);
+            id allSeqs = ((id (*)(id, SEL))objc_msgSend)(sequences, @selector(allObjects));
+
+            for (id seq in allSeqs) {
+                NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq, @selector(displayName));
+                BOOL hasContent = ((BOOL (*)(id, SEL))objc_msgSend)(
+                    seq, NSSelectorFromString(@"hasContainedItems"));
+                if (hasContent && [name isEqualToString:projectName]) {
+                    // Use +[PEDocument makeSequenceActive:] — the sidebar's code path
+                    Class peDocClass = objc_getClass("PEDocument");
+                    SEL makeSel = NSSelectorFromString(@"makeSequenceActive:");
+                    if (peDocClass && [peDocClass respondsToSelector:makeSel]) {
+                        ((void (*)(id, SEL, id))objc_msgSend)(peDocClass, makeSel, seq);
+                        SpliceKit_log(@"History: restored project \"%@\" via PEDocument makeSequenceActive:", name);
+                    }
+                    break;
+                }
+            }
+        } @catch (NSException *e) {
+            SpliceKit_log(@"History: project reload exception: %@", e.reason);
+        }
+        sHistoryCapturing = NO;
+        SpliceKit_log(@"History: store swap restore complete — capture re-enabled");
+    });
+}
+
+static NSDictionary *SpliceKit_handleHistoryRestore(NSDictionary *params) {
+    if (!SpliceKit_historyEnsureDBForCurrentProject()) {
+        return @{@"error": @"No active project or history database"};
+    }
+
+    if (sHistoryCapturing) {
+        return @{@"error": @"A restore operation is already in progress"};
+    }
+
+    NSNumber *snapshotIdNum = params[@"id"];
+    if (!snapshotIdNum) {
+        return @{@"error": @"Missing required parameter: id"};
+    }
+    int64_t targetId = [snapshotIdNum longLongValue];
+
+    // Fetch the target snapshot to know what state we're aiming for
+    NSDictionary *targetSnapshot = SpliceKit_historyGetSnapshot(targetId);
+    if (!targetSnapshot) {
+        return @{@"error": [NSString stringWithFormat:@"Snapshot #%lld not found", targetId]};
+    }
+
+    // Temporarily disable capture so undos don't trigger new snapshots
+    sHistoryCapturing = YES;
+
+    // Find the current snapshot (most recent) and compute undo steps
+    NSArray *recentList = SpliceKit_historyQuerySnapshots(1, 0);
+    if (recentList.count == 0) {
+        sHistoryCapturing = NO;
+        return @{@"error": @"No snapshots in history"};
+    }
+    int64_t currentId = [recentList[0][@"id"] longLongValue];
+
+    if (targetId >= currentId) {
+        sHistoryCapturing = NO;
+        return @{@"error": @"Target snapshot is not older than current state — nothing to undo"};
+    }
+
+    // Compute undo steps using the monotonic edit counter (undo_seq).
+    // undo_seq is only valid within a single FCP session — it resets to 0 on restart.
+    // After a restart, the native undo stack is empty, so we go straight to store swap.
+    int64_t currentUndoSeq = sHistoryEditSeq;
+    int64_t targetUndoSeq = [targetSnapshot[@"undoSeq"] longLongValue];
+
+    // Check if we can use native undo (same session, target is reachable)
+    BOOL canUseNativeUndo = (currentUndoSeq > 0 && targetUndoSeq > 0 &&
+                              currentUndoSeq > targetUndoSeq);
+    int undoSteps = canUseNativeUndo ? (int)(currentUndoSeq - targetUndoSeq) : 0;
+
+    // Execute native undos if available
+    __block int undosPerformed = 0;
+    __block NSString *lastUndoAction = @"";
+    __block BOOL undoExhausted = NO;
+
+    if (canUseNativeUndo) {
+        SpliceKit_log(@"History: restoring to snapshot #%lld via native undo (%d steps, seq %lld→%lld)",
+                      targetId, undoSteps, currentUndoSeq, targetUndoSeq);
+
+        SpliceKit_executeOnMainThread(^{
+            @try {
+                id app = ((id (*)(id, SEL))objc_msgSend)(
+                    objc_getClass("NSApplication"), @selector(sharedApplication));
+                id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
+                SEL libSel = NSSelectorFromString(@"_targetLibrary");
+                id library = ((id (*)(id, SEL))objc_msgSend)(delegate, libSel);
+                if (!library) {
+                    id libs = ((id (*)(id, SEL))objc_msgSend)(
+                        objc_getClass("FFLibraryDocument"), NSSelectorFromString(@"copyActiveLibraries"));
+                    if ([(NSArray *)libs count] > 0) {
+                        library = [(NSArray *)libs objectAtIndex:0];
+                    }
+                }
+                if (!library) { undoExhausted = YES; return; }
+
+                id doc = ((id (*)(id, SEL))objc_msgSend)(library, @selector(libraryDocument));
+                if (!doc) { undoExhausted = YES; return; }
+                id um = ((id (*)(id, SEL))objc_msgSend)(doc, @selector(undoManager));
+                if (!um) { undoExhausted = YES; return; }
+
+                for (int i = 0; i < undoSteps; i++) {
+                    BOOL canUndo = ((BOOL (*)(id, SEL))objc_msgSend)(um, @selector(canUndo));
+                    if (!canUndo) {
+                        undoExhausted = YES;
+                        break;
+                    }
+                    lastUndoAction = ((id (*)(id, SEL))objc_msgSend)(um, @selector(undoActionName)) ?: @"";
+                    ((void (*)(id, SEL))objc_msgSend)(um, @selector(undo));
+                    undosPerformed++;
+                }
+            } @catch (NSException *e) {
+                SpliceKit_log(@"History: undo exception: %@", e.reason);
+                undoExhausted = YES;
+            }
+        });
+    } else {
+        // Cross-session: undo stack is empty after restart, go straight to store swap
+        undoExhausted = YES;
+        SpliceKit_log(@"History: cross-session restore to #%lld — undo stack empty, using store swap",
+                      targetId);
+    }
+
+    // Restore playhead position from the target snapshot
+    double playheadSeconds = [targetSnapshot[@"playheadSeconds"] doubleValue];
+    if (playheadSeconds > 0 && !undoExhausted) {
+        SpliceKit_executeOnMainThread(^{
+            @try {
+                id timeline = SpliceKit_getActiveTimelineModule();
+                if (!timeline) return;
+                SEL seekSel = NSSelectorFromString(@"seekToTime:");
+                if ([timeline respondsToSelector:seekSel]) {
+                    int32_t timescale = 600;
+                    SpliceKit_CMTime seekTime = {
+                        .value = (int64_t)(playheadSeconds * timescale),
+                        .timescale = timescale,
+                        .flags = 1,
+                        .epoch = 0
+                    };
+                    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(timeline, seekSel, seekTime);
+                }
+            } @catch (NSException *e) {}
+        });
+    }
+
+    if (!undoExhausted) {
+        // All undos succeeded via native undo manager — done synchronously
+        sHistoryCapturing = NO;
+        return @{
+            @"status": @"ok",
+            @"method": @"native_undo",
+            @"restoredSnapshot": @(targetId),
+            @"action": targetSnapshot[@"action"] ?: @"",
+            @"undoStepsRequested": @(undoSteps),
+            @"undoStepsPerformed": @(undosPerformed),
+            @"lastUndoAction": lastUndoAction,
+            @"playheadSeconds": @(playheadSeconds),
+        };
+    }
+
+    // --- Cross-restart fallback: async store swap ---
+    // Undo stack is exhausted (FCP was restarted since these snapshots).
+    // Decompress, close library, swap files, reopen — all async on main queue.
+
+    SpliceKit_log(@"History: undo exhausted after %d steps (needed %d), falling back to store swap", undosPerformed, undoSteps);
+
+    NSData *compressed = targetSnapshot[@"storeCompressed"];
+    NSUInteger originalSize = [targetSnapshot[@"storeSize"] unsignedIntegerValue];
+    NSData *packedStoreData = SpliceKit_zlibDecompress(compressed, originalSize);
+    if (!packedStoreData || packedStoreData.length == 0) {
+        sHistoryCapturing = NO;
+        return @{@"error": @"Failed to decompress snapshot store data"};
+    }
+
+    NSString *projectName = [targetSnapshot[@"sequence"] copy] ?: @"";
+
+    // Step 1: close the library — dispatched to main queue, non-blocking
+    // sHistoryCapturing stays YES until the entire async chain completes
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            id app = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("NSApplication"), @selector(sharedApplication));
+            id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
+            SEL tLibSel = NSSelectorFromString(@"_targetLibrary");
+            id library = ((id (*)(id, SEL))objc_msgSend)(delegate, tLibSel);
+            if (!library) {
+                SpliceKit_log(@"History: store swap — no library to close");
+                sHistoryCapturing = NO;
+                return;
+            }
+
+            NSURL *libURL = ((id (*)(id, SEL))objc_msgSend)(library, @selector(URL));
+            if (!libURL) {
+                sHistoryCapturing = NO;
+                return;
+            }
+            NSString *libPath = [libURL path];
+            // Find the event folder containing this project (same search as capture)
+            NSString *eventFolderPath = nil;
+            NSFileManager *searchFM = [NSFileManager defaultManager];
+            NSArray *dirs = [searchFM contentsOfDirectoryAtPath:libPath error:nil];
+            for (NSString *dir in dirs) {
+                if ([dir hasPrefix:@"__"] || [dir hasPrefix:@"."]) continue;
+                NSString *eventPath = [libPath stringByAppendingPathComponent:dir];
+                NSString *projStore = [[eventPath stringByAppendingPathComponent:projectName]
+                                        stringByAppendingPathComponent:@"CurrentVersion.fcpevent"];
+                if ([searchFM fileExistsAtPath:projStore]) {
+                    eventFolderPath = eventPath;
+                    break;
+                }
+            }
+            if (!eventFolderPath) {
+                SpliceKit_log(@"History: store swap — no event folder found for \"%@\"", projectName);
+                sHistoryCapturing = NO;
+                return;
+            }
+
+            id doc = ((id (*)(id, SEL))objc_msgSend)(library, @selector(libraryDocument));
+            if (!doc) {
+                sHistoryCapturing = NO;
+                return;
+            }
+
+            // Create backup directory
+            NSString *backupDir = [[eventFolderPath stringByDeletingLastPathComponent]
+                                    stringByAppendingPathComponent:@"__splicekit_backup"];
+            [searchFM removeItemAtPath:backupDir error:nil];
+
+            SpliceKit_log(@"History: closing library document for store swap");
+
+            // Close the library — yields to the runloop after this block
+            ((void (*)(id, SEL))objc_msgSend)(doc, @selector(close));
+
+            // Step 2: after a delay for close to finish, write files and reopen
+            NSURL *libURLCopy = [libURL copy];
+            NSString *eventPathCopy = [eventFolderPath copy];
+            NSString *backupDirCopy = [backupDir copy];
+
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                SpliceKit_storeSwapStep2_writeAndReopen(eventPathCopy, packedStoreData,
+                                                         libURLCopy, backupDirCopy, projectName);
+            });
+
+        } @catch (NSException *e) {
+            SpliceKit_log(@"History: store swap close exception: %@", e.reason);
+            sHistoryCapturing = NO;
+        }
+    });
+
+    // Return immediately — the store swap runs async on the main queue
+    return @{
+        @"status": @"ok",
+        @"method": @"store_swap_async",
+        @"message": @"Undo stack exhausted (FCP was restarted since this snapshot). "
+                     "Store swap initiated — the library will close and reopen. "
+                     "After it reopens, open the project manually in FCP's sidebar "
+                     "to see the restored state.",
+        @"restoredSnapshot": @(targetId),
+        @"action": targetSnapshot[@"action"] ?: @"",
+        @"undoStepsRequested": @(undoSteps),
+        @"undoStepsPerformed": @(undosPerformed),
+    };
+}
+
+static NSDictionary *SpliceKit_handleHistoryCompare(NSDictionary *params) {
+    if (!SpliceKit_historyEnsureDBForCurrentProject()) {
+        return @{@"error": @"No active project or history database"};
+    }
+
+    NSNumber *id1Num = params[@"id1"];
+    if (!id1Num) {
+        return @{@"error": @"Missing required parameter: id1"};
+    }
+
+    NSDictionary *snap1 = SpliceKit_historyGetSnapshot([id1Num longLongValue]);
+    if (!snap1) {
+        return @{@"error": [NSString stringWithFormat:@"Snapshot #%@ not found", id1Num]};
+    }
+
+    // If id2 provided, compare two snapshots. Otherwise compare snap1 to current state.
+    NSNumber *id2Num = params[@"id2"];
+    NSDictionary *snap2 = nil;
+    NSString *compareTarget = @"current";
+
+    if (id2Num) {
+        snap2 = SpliceKit_historyGetSnapshot([id2Num longLongValue]);
+        if (!snap2) {
+            return @{@"error": [NSString stringWithFormat:@"Snapshot #%@ not found", id2Num]};
+        }
+        compareTarget = [NSString stringWithFormat:@"snapshot #%@", id2Num];
+    }
+
+    // Get current state for comparison if no id2
+    __block NSInteger currentItemCount = 0;
+    __block double currentDuration = 0;
+    if (!id2Num) {
+        NSDictionary *state = SpliceKit_handleTimelineGetDetailedState(@{});
+        if (!state[@"error"]) {
+            currentItemCount = [state[@"itemCount"] integerValue];
+            if (state[@"duration"]) {
+                NSDictionary *dur = state[@"duration"];
+                int64_t val = [dur[@"value"] longLongValue];
+                int32_t ts = [dur[@"timescale"] intValue];
+                if (ts > 0) currentDuration = (double)val / (double)ts;
+            }
+        }
+    }
+
+    NSInteger count1 = [snap1[@"itemCount"] integerValue];
+    NSInteger count2 = id2Num ? [snap2[@"itemCount"] integerValue] : currentItemCount;
+    double dur1 = [snap1[@"durationSeconds"] doubleValue];
+    double dur2 = id2Num ? [snap2[@"durationSeconds"] doubleValue] : currentDuration;
+
+    return @{
+        @"status": @"ok",
+        @"snapshot1": @{
+            @"id": snap1[@"id"],
+            @"action": snap1[@"action"] ?: @"",
+            @"itemCount": @(count1),
+            @"durationSeconds": @(dur1),
+        },
+        @"compareTo": compareTarget,
+        @"snapshot2": id2Num ? @{
+            @"id": snap2[@"id"],
+            @"action": snap2[@"action"] ?: @"",
+            @"itemCount": @(count2),
+            @"durationSeconds": @(dur2),
+        } : @{
+            @"itemCount": @(count2),
+            @"durationSeconds": @(dur2),
+        },
+        @"diff": @{
+            @"itemCountDelta": @(count2 - count1),
+            @"durationDelta": @(dur2 - dur1),
+        },
+    };
+}
+
+static NSDictionary *SpliceKit_handleHistoryConfigure(NSDictionary *params) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+    if (params[@"enabled"]) {
+        sHistoryEnabled = [params[@"enabled"] boolValue];
+        [defaults setBool:sHistoryEnabled forKey:@"SpliceKitHistoryEnabled"];
+    }
+    if (params[@"maxSnapshots"]) {
+        sHistoryMaxSnapshots = [params[@"maxSnapshots"] integerValue];
+        [defaults setInteger:sHistoryMaxSnapshots forKey:@"SpliceKitHistoryMaxSnapshots"];
+    }
+    if (params[@"maxAgeDays"]) {
+        sHistoryMaxAgeDays = [params[@"maxAgeDays"] integerValue];
+        [defaults setInteger:sHistoryMaxAgeDays forKey:@"SpliceKitHistoryMaxAgeDays"];
+    }
+
+    [defaults synchronize];
+    return SpliceKit_historyGetStats();
+}
+
+static NSDictionary *SpliceKit_handleHistoryDelete(NSDictionary *params) {
+    if (!SpliceKit_historyEnsureDBForCurrentProject()) {
+        return @{@"error": @"No active project or history database"};
+    }
+
+    if (params[@"id"]) {
+        int64_t snapshotId = [params[@"id"] longLongValue];
+        const char *sql = "DELETE FROM snapshots WHERE id = ?;";
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(sHistoryDB, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, snapshotId);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+        return @{@"status": @"ok", @"deleted": @(snapshotId)};
+    }
+
+    if (params[@"before_timestamp"]) {
+        double cutoff = [params[@"before_timestamp"] doubleValue];
+        const char *sql = "DELETE FROM snapshots WHERE timestamp < ?;";
+        sqlite3_stmt *stmt = NULL;
+        int deleted = 0;
+        if (sqlite3_prepare_v2(sHistoryDB, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_double(stmt, 1, cutoff);
+            sqlite3_step(stmt);
+            deleted = sqlite3_changes(sHistoryDB);
+            sqlite3_finalize(stmt);
+        }
+        return @{@"status": @"ok", @"deletedCount": @(deleted)};
+    }
+
+    if ([params[@"all"] boolValue]) {
+        sqlite3_exec(sHistoryDB, "DELETE FROM snapshots;", NULL, NULL, NULL);
+        sqlite3_exec(sHistoryDB, "VACUUM;", NULL, NULL, NULL);
+        return @{@"status": @"ok", @"message": @"All snapshots deleted"};
+    }
+
+    return @{@"error": @"Specify 'id', 'before_timestamp', or 'all' parameter"};
+}
+
+// history.getData — extract the raw store snapshot to a file
+// The payload is a Core Data SQLite file (binary), not text. Must write to a file path.
+// Also handles the legacy "history.getFCPXML" route for backwards compatibility.
+static NSDictionary *SpliceKit_handleHistoryGetData(NSDictionary *params) {
+    if (!SpliceKit_historyEnsureDBForCurrentProject()) {
+        return @{@"error": @"No active project or history database"};
+    }
+
+    NSNumber *snapshotIdNum = params[@"id"];
+    if (!snapshotIdNum) {
+        return @{@"error": @"Missing required parameter: id"};
+    }
+
+    NSDictionary *snapshot = SpliceKit_historyGetSnapshot([snapshotIdNum longLongValue]);
+    if (!snapshot) {
+        return @{@"error": [NSString stringWithFormat:@"Snapshot #%@ not found", snapshotIdNum]};
+    }
+
+    NSData *compressed = snapshot[@"storeCompressed"];
+    NSUInteger originalSize = [snapshot[@"storeSize"] unsignedIntegerValue];
+    NSData *packedData = SpliceKit_zlibDecompress(compressed, originalSize);
+    if (!packedData) {
+        return @{@"error": @"Failed to decompress snapshot store data"};
+    }
+
+    // Unpack the store bundle (main DB + WAL + SHM files)
+    NSDictionary<NSString *, NSData *> *files = SpliceKit_unpackStoreFiles(packedData);
+    if (!files || files.count == 0) {
+        return @{@"error": @"Failed to unpack store bundle"};
+    }
+
+    // Determine output directory
+    NSString *path = params[@"path"];
+    if (!path || path.length == 0) {
+        path = [NSString stringWithFormat:@"/tmp/splicekit_snapshot_%@", snapshotIdNum];
+    }
+
+    // Create output directory and write each file
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
+
+    NSMutableArray *writtenFiles = [NSMutableArray array];
+    NSUInteger totalBytes = 0;
+    for (NSString *filename in files) {
+        NSString *filePath = [path stringByAppendingPathComponent:filename];
+        NSError *writeErr = nil;
+        [files[filename] writeToFile:filePath options:NSDataWritingAtomic error:&writeErr];
+        if (writeErr) {
+            return @{@"error": [NSString stringWithFormat:@"Write failed for %@: %@", filename, writeErr.localizedDescription]};
+        }
+        [writtenFiles addObject:filename];
+        totalBytes += files[filename].length;
+    }
+
+    return @{
+        @"status": @"ok",
+        @"path": path,
+        @"files": writtenFiles,
+        @"totalBytes": @(totalBytes),
+        @"payloadKind": @"coredata_store",
+    };
+}
+
+#pragma mark - Auto-Dismiss Known Dialogs
+
+// Check for and auto-dismiss known blocking dialogs (e.g. "video properties not recognized").
+// Called at the start of every request to clear stale dialogs that block interaction.
+static void SpliceKit_autoDismissBlockingDialogs(void) {
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            // Check for sheets on all windows
+            for (NSWindow *window in [NSApp windows]) {
+                NSWindow *sheet = [window attachedSheet];
+                if (!sheet) continue;
+
+                // Scan text labels in the sheet for known blocking messages
+                NSMutableArray *labels = [NSMutableArray array];
+                NSMutableArray *buttons = [NSMutableArray array];
+
+                // Recursive BFS to find text fields and buttons
+                NSMutableArray *queue = [NSMutableArray arrayWithObject:[sheet contentView]];
+                while (queue.count > 0) {
+                    NSView *view = queue.firstObject;
+                    [queue removeObjectAtIndex:0];
+                    if (!view) continue;
+
+                    if ([view isKindOfClass:[NSTextField class]] && ![(NSTextField *)view isEditable]) {
+                        NSString *val = [(NSTextField *)view stringValue];
+                        if (val.length > 0) [labels addObject:val];
+                    }
+                    if ([view isKindOfClass:[NSButton class]]) {
+                        [buttons addObject:(NSButton *)view];
+                    }
+                    NSArray *subs = [view subviews];
+                    if (subs) [queue addObjectsFromArray:subs];
+                }
+
+                // Check for "video properties" dialog
+                BOOL isVideoPropsDialog = NO;
+                for (NSString *label in labels) {
+                    if ([label localizedCaseInsensitiveContainsString:@"video properties"] &&
+                        [label localizedCaseInsensitiveContainsString:@"not recognized"]) {
+                        isVideoPropsDialog = YES;
+                        break;
+                    }
+                }
+
+                if (isVideoPropsDialog) {
+                    // Click "Continue" or "OK" or the default button
+                    for (NSButton *btn in buttons) {
+                        NSString *title = [btn title] ?: @"";
+                        if ([title localizedCaseInsensitiveContainsString:@"continue"] ||
+                            [title localizedCaseInsensitiveContainsString:@"ok"] ||
+                            [[btn keyEquivalent] isEqualToString:@"\r"]) {
+                            [btn performClick:nil];
+                            SpliceKit_log(@"Auto-dismissed 'video properties not recognized' dialog");
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Also check modal windows
+            NSWindow *modalWindow = [NSApp modalWindow];
+            if (modalWindow) {
+                NSMutableArray *labels = [NSMutableArray array];
+                NSMutableArray *queue = [NSMutableArray arrayWithObject:[modalWindow contentView]];
+                while (queue.count > 0) {
+                    NSView *view = queue.firstObject;
+                    [queue removeObjectAtIndex:0];
+                    if (!view) continue;
+                    if ([view isKindOfClass:[NSTextField class]] && ![(NSTextField *)view isEditable]) {
+                        NSString *val = [(NSTextField *)view stringValue];
+                        if (val.length > 0) [labels addObject:val];
+                    }
+                    NSArray *subs = [view subviews];
+                    if (subs) [queue addObjectsFromArray:subs];
+                }
+
+                for (NSString *label in labels) {
+                    if ([label localizedCaseInsensitiveContainsString:@"video properties"] &&
+                        [label localizedCaseInsensitiveContainsString:@"not recognized"]) {
+                        // Try to end the modal session
+                        [NSApp stopModal];
+                        [modalWindow close];
+                        SpliceKit_log(@"Auto-dismissed modal 'video properties' dialog");
+                        break;
+                    }
+                }
+            }
+        } @catch (NSException *e) {
+            // Silently ignore - auto-dismiss is best-effort
+        }
+    });
 }
 
 #pragma mark - Tool Selection Handler
@@ -16769,7 +19265,7 @@ static NSDictionary *SpliceKit_handleDebugBreakpoint(NSDictionary *params) {
 // works fine. The string comparisons are fast enough — we're not doing thousands per second.
 //
 
-static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
+NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
     NSString *method = request[@"method"];
     NSDictionary *params = request[@"params"] ?: @{};
 
@@ -16778,6 +19274,9 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
     }
 
     SpliceKit_installEffectDragSwizzlesNow();
+
+    // Auto-dismiss known blocking dialogs before processing any request
+    SpliceKit_autoDismissBlockingDialogs();
 
     NSDictionary *result = nil;
 
@@ -16828,6 +19327,10 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleSetRange(params);
     } else if ([method isEqualToString:@"timeline.addMarkers"]) {
         result = SpliceKit_handleBatchAddMarkers(params);
+    } else if ([method isEqualToString:@"timeline.bladeAtTimes"]) {
+        result = SpliceKit_handleBladeAtTimes(params);
+    } else if ([method isEqualToString:@"timeline.batchActions"]) {
+        result = SpliceKit_handleBatchActions(params);
     } else if ([method isEqualToString:@"timeline.batchExport"]) {
         result = SpliceKit_handleBatchExport(params);
     }
@@ -16848,6 +19351,25 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleFCPXMLImport(params);
     } else if ([method isEqualToString:@"fcpxml.pasteImport"]) {
         result = SpliceKit_handlePasteboardImportXML(params);
+    }
+    // history.* namespace (persistent unlimited undo)
+    else if ([method isEqualToString:@"history.snapshot"]) {
+        result = SpliceKit_handleHistorySnapshot(params);
+    } else if ([method isEqualToString:@"history.list"]) {
+        result = SpliceKit_handleHistoryList(params);
+    } else if ([method isEqualToString:@"history.status"]) {
+        result = SpliceKit_handleHistoryStatus(params);
+    } else if ([method isEqualToString:@"history.restore"]) {
+        result = SpliceKit_handleHistoryRestore(params);
+    } else if ([method isEqualToString:@"history.compare"]) {
+        result = SpliceKit_handleHistoryCompare(params);
+    } else if ([method isEqualToString:@"history.configure"]) {
+        result = SpliceKit_handleHistoryConfigure(params);
+    } else if ([method isEqualToString:@"history.delete"]) {
+        result = SpliceKit_handleHistoryDelete(params);
+    } else if ([method isEqualToString:@"history.getData"] ||
+               [method isEqualToString:@"history.getFCPXML"]) {
+        result = SpliceKit_handleHistoryGetData(params);
     }
     // effects.* namespace
     else if ([method isEqualToString:@"effects.list"]) {
@@ -16942,6 +19464,10 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleCommandExecute(params);
     } else if ([method isEqualToString:@"command.ai"]) {
         result = SpliceKit_handleCommandAI(params);
+    } else if ([method isEqualToString:@"command.aiGemma"]) {
+        result = SpliceKit_handleCommandAIGemma(params);
+    } else if ([method isEqualToString:@"command.aiAppleAgentic"]) {
+        result = SpliceKit_handleCommandAIAppleAgentic(params);
     }
     // browser.* namespace
     else if ([method isEqualToString:@"browser.listClips"]) {
@@ -16984,6 +19510,20 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleEventCreate(params);
     } else if ([method isEqualToString:@"project.createLibrary"]) {
         result = SpliceKit_handleLibraryCreate(params);
+    } else if ([method isEqualToString:@"project.open"]) {
+        result = SpliceKit_handleProjectOpen(params);
+    }
+    // timeline lane selection
+    else if ([method isEqualToString:@"timeline.selectClipInLane"]) {
+        result = SpliceKit_handleSelectClipAtPlayheadLane(params);
+    }
+    // viewer capture
+    else if ([method isEqualToString:@"viewer.capture"]) {
+        result = SpliceKit_handleCaptureViewer(params);
+    }
+    // fcpxml export (programmatic, no dialog)
+    else if ([method isEqualToString:@"fcpxml.export"]) {
+        result = SpliceKit_handleFCPXMLExport(params);
     }
     // tool.* namespace
     else if ([method isEqualToString:@"tool.select"]) {
@@ -17086,6 +19626,18 @@ static NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleDebugInstallMenuBar(params);
     } else if ([method isEqualToString:@"debug.breakpoint"]) {
         result = SpliceKit_handleDebugBreakpoint(params);
+    }
+    // lua.* namespace — embedded Lua scripting engine
+    else if ([method isEqualToString:@"lua.execute"]) {
+        result = SpliceKit_handleLuaExecute(params);
+    } else if ([method isEqualToString:@"lua.executeFile"]) {
+        result = SpliceKit_handleLuaExecuteFile(params);
+    } else if ([method isEqualToString:@"lua.reset"]) {
+        result = SpliceKit_handleLuaReset(params);
+    } else if ([method isEqualToString:@"lua.getState"]) {
+        result = SpliceKit_handleLuaGetState(params);
+    } else if ([method isEqualToString:@"lua.watch"]) {
+        result = SpliceKit_handleLuaWatch(params);
     }
     else {
         return @{@"error": @{@"code": @(-32601), @"message":

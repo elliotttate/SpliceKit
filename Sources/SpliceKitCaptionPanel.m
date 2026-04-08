@@ -63,8 +63,9 @@ typedef struct {
 //
 static NSString * const kWP_ContentPositionKey = @"9999/10003/1/100/101";
 static NSString * const kWP_ContentOpacityKey  = @"9999/10003/1/200/202";
-// Caption Large clone: Main(999166631) → Title(999166633) → behaviors → SeqText(500001)
-static NSString * const kWP_CustomSpeedKey     = @"9999/999166631/999166633/4/500001/201/209";
+// Neon Grow TM4C key path (mCaptions template with Sequence Text behaviors)
+// Content(10003) → TextGroup01-03 → Text(10061) → SeqText(3291121706)
+static NSString * const kWP_CustomSpeedKey     = @"9999/10003/3336225139/3336225138/3336087544/10061/4/3291121706/201/209";
 
 static NSString * const kWP_TemplateUID  = @"~/Titles.localized/SpliceKit/SpliceKit Caption/SpliceKit Caption.moti";
 static NSString * const kWP_TemplateName = @"SpliceKit Caption";
