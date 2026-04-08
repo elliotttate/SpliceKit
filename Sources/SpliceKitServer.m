@@ -10424,8 +10424,18 @@ static NSDictionary *SpliceKit_handleCommandAI(NSDictionary *params) {
     NSString *query = params[@"query"];
     if (!query) return @{@"error": @"query parameter required"};
 
-    // Route to the configured AI engine
+    // Allow overriding the engine via params: "engine": "standard" | "agentic" | "gemma"
+    NSString *engineOverride = params[@"engine"];
     SpliceKitAIEngine engine = [SpliceKitCommandPalette sharedPalette].aiEngine;
+    if ([engineOverride isEqualToString:@"standard"]) {
+        engine = SpliceKitAIEngineAppleIntelligence;
+    } else if ([engineOverride isEqualToString:@"agentic"]) {
+        engine = SpliceKitAIEngineAppleAgentic;
+    } else if ([engineOverride isEqualToString:@"gemma"]) {
+        engine = SpliceKitAIEngineGemma4;
+    }
+
+    // Route to the configured AI engine
     if (engine == SpliceKitAIEngineAppleAgentic) {
         return SpliceKit_handleCommandAIAppleAgentic(params);
     }

@@ -2991,11 +2991,9 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     // Content Position param — baked into FCPXML so every title gets it
     NSString *posParam = [self contentPositionParamXML];
     if (posParam.length > 0) [xml appendFormat:@"%@    %@", indent, posParam];
-    // adjust-transform — FCP-level position (reliable fallback)
-    CGFloat adjustY = [self yOffsetForPosition];
-    if (fabs(adjustY) > 1.0) {
-        [xml appendFormat:@"%@    <adjust-transform position=\"0 %.0f\"/>\n", indent, adjustY];
-    }
+    // NOTE: Do NOT add <adjust-transform> here — it crashes FCP's FCPXML parser
+    // when combined with multiple <text-style ref> elements (word-highlight mode).
+    // Content Position param handles positioning for word-highlight titles.
 
     // Text with per-word highlighting
     [xml appendFormat:@"%@    <text>\n", indent];
