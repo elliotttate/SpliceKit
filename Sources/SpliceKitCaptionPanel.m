@@ -2339,8 +2339,9 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     // back → cleanup. It uses NSDisableScreenUpdates() to minimize flicker.
     // ---------------------------------------------------------------
     __block BOOL pasteHandled = NO;
+
+    // Step 2a: Write FCPXML to pasteboard, seek to start, deselect
     SpliceKit_executeOnMainThread(^{
-        // Write FCPXML to pasteboard
         NSPasteboard *pb = [NSPasteboard generalPasteboard];
         [pb clearContents];
         NSString *xmlType = ((id (*)(id, SEL))objc_msgSend)(
@@ -2348,7 +2349,6 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
         [pb setString:xml forType:xmlType];
         SpliceKit_log(@"[Captions] Wrote %lu bytes FCPXML to pasteboard", (unsigned long)xml.length);
 
-        // Seek playhead to time 0
         id tm = SpliceKit_getActiveTimelineModule();
         if (tm) {
             SpliceKitCaption_CMTime zeroTime = {0, 600, 1, 0};
@@ -2357,21 +2357,23 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
                 ((void (*)(id, SEL, SpliceKitCaption_CMTime))objc_msgSend)(tm, setSel, zeroTime);
             }
         }
-
-        // Deselect all
         [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"deselectAll:")
                                                    to:nil from:nil];
+    });
 
-        // Paste as connected — the pasteAnchored: swizzle detects FCPXML on the
-        // pasteboard and runs SpliceKit_convertFCPXMLToNativeClipboard() internally
-        // (import → temp project → copy → switch back), then the original paste
-        // runs with native data. This is the proven path that works reliably.
+    // Brief pause so the pasteboard change registers before the swizzle reads it
+    [NSThread sleepForTimeInterval:0.2];
+
+    // Step 2b: Paste — the pasteAnchored: swizzle detects FCPXML, converts to
+    // native (import → temp → copy → switch back), then original paste runs.
+    SpliceKit_executeOnMainThread(^{
         pasteHandled = [[NSApplication sharedApplication]
             sendAction:NSSelectorFromString(@"pasteAnchored:")
                     to:nil from:nil];
-        // Wait for the swizzle pipeline to complete (it spins the runloop internally)
-        [NSThread sleepForTimeInterval:1.0];
     });
+
+    // Wait for the swizzle pipeline to complete
+    [NSThread sleepForTimeInterval:1.0];
 
     SpliceKit_log(@"[Captions] Paste as connected: %@", pasteHandled ? @"YES" : @"NO");
 
