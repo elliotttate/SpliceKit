@@ -2711,6 +2711,17 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
             continue;
         }
 
+        // Handle menu command: {"type":"menu","path":["File","New","Project..."]}
+        if ([type isEqualToString:@"menu"]) {
+            NSArray *menuPath = action[@"path"];
+            if ([menuPath isKindOfClass:[NSArray class]] && menuPath.count > 0) {
+                extern NSDictionary *SpliceKit_handleMenuExecute(NSDictionary *params);
+                NSDictionary *result = SpliceKit_handleMenuExecute(@{@"menuPath": menuPath});
+                SpliceKit_log(@"AI executed menu: %@ -> %@", [menuPath componentsJoinedByString:@" > "], result);
+            }
+            continue;
+        }
+
         int repeats = repeatCount ? repeatCount.intValue : 1;
         for (int i = 0; i < repeats; i++) {
             [self executeCommand:name type:type];
@@ -3287,6 +3298,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         "   Speed: retimeNormal, retimeFast2x, retimeFast4x, retimeFast8x, retimeFast20x, retimeSlow50, retimeSlow25, retimeSlow10, retimeReverse, retimeHold, freezeFrame, retimeBladeSpeed\n"
         "   Clips: solo, disable, createCompoundClip, removeEffects, breakApartClipItems, addAdjustmentClip\n"
         "   View: zoomToFit, zoomIn, zoomOut, toggleSnapping, renderAll, analyzeAndFix, exportXML\n"
+        "   App: showPreferences (open app preferences/settings)\n"
         "\n"
         "2. Playback: {\"type\":\"playback\",\"action\":\"NAME\"}\n"
         "   playPause, goToStart, goToEnd, nextFrame, prevFrame, nextFrame10, prevFrame10\n"
@@ -3301,6 +3313,11 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         "\n"
         "5. Transition: {\"type\":\"transition\",\"name\":\"NAME\"} — apply a transition\n"
         "   Cross Dissolve, Flow, Fade To Color, Wipe, Push, Slide, Spin, Page Curl, Star, Zoom\n"
+        "\n"
+        "6. Menu: {\"type\":\"menu\",\"path\":[\"TopMenu\",\"SubMenu\",\"Item\"]} — execute any menu command\n"
+        "   Use for app-level commands not in the lists above.\n"
+        "   Example: open preferences = {\"type\":\"timeline\",\"action\":\"showPreferences\"}\n"
+        "   Example: new project = {\"type\":\"menu\",\"path\":[\"File\",\"New\",\"Project...\"]}\n"
         "\n"
         "CRITICAL RULES:\n"
         "- Effects MUST use {\\\"type\\\":\\\"effect\\\",\\\"name\\\":\\\"...\\\"}. NEVER put effect names in timeline actions.\n"
@@ -3334,6 +3351,8 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         "- \\\"markers every 5s\\\" (15s) -> [{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":5},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addMarker\\\"},{\\\"type\\\":\\\"seek\\\",\\\"seconds\\\":10},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"addMarker\\\"}]\n"
         "- \\\"remove all markers\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectAll\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"deleteMarkersInSelection\\\"}]\n"
         "- \\\"select and remove effects\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"selectClipAtPlayhead\\\"},{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"removeEffects\\\"}]\n"
+        "- \\\"open preferences\\\" or \\\"settings\\\" -> [{\\\"type\\\":\\\"timeline\\\",\\\"action\\\":\\\"showPreferences\\\"}]\n"
+        "- \\\"new project\\\" -> [{\\\"type\\\":\\\"menu\\\",\\\"path\\\":[\\\"File\\\",\\\"New\\\",\\\"Project...\\\"]}]\n"
         "\"\"\"\n"
         "\n"
         "let fullQuery = \"\\(timelineContext)\\n\\nUser request: \\(query)\"\n"
@@ -3544,6 +3563,10 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
         [actions addObject:@{@"type": @"timeline", @"action": @"analyzeAndFix"}];
     } else if ([q containsString:@"adjustment layer"] || [q containsString:@"adjustment clip"]) {
         [actions addObject:@{@"type": @"timeline", @"action": @"addAdjustmentClip"}];
+    }
+    // ── App ──
+    else if ([q containsString:@"preference"] || [q containsString:@"settings"]) {
+        [actions addObject:@{@"type": @"timeline", @"action": @"showPreferences"}];
     }
     // ── Effects (by keyword) ──
     else if ([q containsString:@"luma keyer"]) {
@@ -4066,7 +4089,8 @@ static NSString *SpliceKit_tailLogFile(NSString *path, NSUInteger maxBytes) {
         @"retimeNormal, retimeSlow50, retimeSlow25, retimeFast2x, retimeFast4x, retimeReverse, freezeFrame, "
         @"addBasicTitle, addBasicLowerThird, adjustVolumeUp, adjustVolumeDown, "
         @"solo, disable, removeEffects, detachAudio, zoomToFit, renderAll, exportXML, "
-        @"favorite, reject, unrate, createCompoundClip, autoReframe, addKeyframe, deleteKeyframes",
+        @"favorite, reject, unrate, createCompoundClip, autoReframe, addKeyframe, deleteKeyframes, "
+        @"showPreferences (open app preferences/settings)",
         @{@"type": @"object",
           @"properties": @{
               @"action": @{@"type": @"string", @"description": @"Action name"}
@@ -4743,7 +4767,7 @@ static NSString * const kGemmaSystemPrompt =
         "    return s\n"
         "}\n"
         "\n"
-        "@Generable struct ActArgs { @Guide(description: \"blade(=cut/split),delete,undo,redo,selectClipAtPlayhead,selectAll,addMarker,addChapterMarker,nextEdit,previousEdit,addTransition,addColorBoard,retimeSlow50,retimeFast2x,freezeFrame,addBasicTitle,removeEffects\") var action: String }\n"
+        "@Generable struct ActArgs { @Guide(description: \"blade(=cut/split),delete,undo,redo,selectClipAtPlayhead,selectAll,addMarker,addChapterMarker,nextEdit,previousEdit,addTransition,addColorBoard,retimeSlow50,retimeFast2x,freezeFrame,addBasicTitle,removeEffects,showPreferences(=settings/preferences)\") var action: String }\n"
         "@Generable struct SeekArgs { @Guide(description: \"seconds\") var seconds: Double }\n"
         "@Generable struct ClipArgs { @Guide(description: \"max clips\") var limit: Int? }\n"
         "@Generable struct RepeatArgs {\n"
@@ -4752,6 +4776,7 @@ static NSString * const kGemmaSystemPrompt =
         "    @Guide(description: \"Total duration in seconds (0 = auto from timeline)\") var duration: Double?\n"
         "}\n"
         "@Generable struct FxArgs { @Guide(description: \"effect name\") var name: String }\n"
+        "@Generable struct MenuArgs { @Guide(description: \"Menu path, e.g. ['File','New','Project...']\") var path: [String] }\n"
         "\n"
         "struct Act: Tool {\n"
         "    let name = \"edit\"\n"
@@ -4791,10 +4816,15 @@ static NSString * const kGemmaSystemPrompt =
         "    let description = \"Apply effect to selected clip\"\n"
         "    func call(arguments: FxArgs) async throws -> String { bridge(\"effects.apply\", [\"name\": arguments.name]) }\n"
         "}\n"
+        "struct Menu: Tool {\n"
+        "    let name = \"menu\"\n"
+        "    let description = \"Execute any menu command by path\"\n"
+        "    func call(arguments: MenuArgs) async throws -> String { bridge(\"menu.execute\", [\"menuPath\": arguments.path]) }\n"
+        "}\n"
         "\n"
         "Task {\n"
         "    do {\n"
-        "        let s = LanguageModelSession(tools: [Act(), Seek(), Clips(), Repeat(), Fx()],\n"
+        "        let s = LanguageModelSession(tools: [Act(), Seek(), Clips(), Repeat(), Fx(), Menu()],\n"
         "            instructions: \"You control Final Cut Pro via tools. %@ IMPORTANT: cut/split means blade NOT delete. For cut/blade/marker every N seconds use repeat_action. Summarize what you did.\")\n"
         "        let r = try await s.respond(to: \"%@\")\n"
         "        print(r.content ?? \"Done.\")\n"

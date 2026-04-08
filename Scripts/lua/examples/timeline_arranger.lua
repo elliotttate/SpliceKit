@@ -44,13 +44,18 @@
     - get_real_clips() helper: filters out gaps and transitions to
       get only "real" media clips with timing data. Used by every
       operation in this module.
-    - Cut-and-paste reordering: FCP does not have a "move clip to
-      position" API, so we use cut -> seek to target -> paste. This
-      is O(n^2) but undo-safe (each cut/paste is a single undo step).
+    - Build-from-left reordering: FCP's magnetic timeline ripples
+      positions on every cut/paste. We build the target order from
+      left to right — clips 1..step are finalized, the rest are
+      unsorted. Each step cuts from the unsorted portion and inserts
+      at the build cursor. This is O(n) re-reads but correct.
+    - Identity-based clip tracking: shuffle matches clips by
+      (name, duration) rather than index, since indices become
+      stale after each edit.
     - Fisher-Yates shuffle: the standard unbiased shuffle algorithm
-      used to randomize clip indices before reordering.
+      used to randomize the desired clip order.
     - Reverse iteration for deletion: standard pattern for removing
-      items without invalidating indices.
+      items without invalidating indices (every_nth, extract).
     - Range-based operations: loop_section uses setRange + copy + paste
       to duplicate a time range without touching individual clips.
     - Statistical analysis: mean, median, standard deviation, histogram
@@ -105,53 +110,55 @@ end
 
 -----------------------------------------------------------
 -- Reverse: reverse clip order on the timeline.
--- Strategy: starting from the last clip, cut it and paste at
--- the beginning. Repeat for each clip from back to front.
--- This is O(n) cuts and pastes.
---
--- WHY cut+paste: FCP has no "move clip to index" API. Cut removes
--- the clip and places it on the clipboard; paste inserts it at the
--- playhead. By always pasting at the start, we build the reversed
--- order one clip at a time.
+-- Strategy: build the reversed order from left to right.
+-- On each step, cut the LAST remaining unsorted clip and insert
+-- it at the next build position. After step i, the first i clips
+-- are in their final reversed positions.
 --
 -- @return number  Count of clips reversed.
 -----------------------------------------------------------
 function arranger.reverse()
     local clips = get_real_clips()
     if #clips < 2 then
-        print("Need at least 2 clips to reverse")
+        sk.alert("Arranger", "Need at least 2 clips to reverse")
         return
     end
 
-    sk.log("[Arranger] Reversing " .. #clips .. " clips...")
-
-    -- Strategy: blade between every clip, then reverse order
-    -- by cutting from end and pasting at start repeatedly.
-    -- Simpler approach: use undo-able sequence of operations.
-
-    -- Record the clip order (we'll use cut+paste approach)
     local count = #clips
+    sk.log("[Arranger] Reversing " .. count .. " clips...")
 
-    -- Work from the last clip backwards: cut it and paste at start
-    for i = count, 2, -1 do
-        -- Re-read state (positions shift after each operation)
+    -- Build the reversed order from left to right. On each step,
+    -- cut the LAST remaining unsorted clip and insert it at the
+    -- next build position. After step i, clips 1..i are in their
+    -- final reversed positions.
+    --
+    -- Trace for [A,B,C,D,E]:
+    --   step 1: cut E (last), paste at start     → [E, A,B,C,D]
+    --   step 2: cut D (last), paste after E      → [E,D, A,B,C]
+    --   step 3: cut C (last), paste after D      → [E,D,C, A,B]
+    --   step 4: cut B (last), paste after C      → [E,D,C,B, A]
+
+    for step = 1, count - 1 do
         local current = get_real_clips()
-        if i > #current then goto skip end
+        local last_clip = current[#current]
 
-        local clip = current[i]
-        sk.seek(clip.start + 0.01)
+        -- Cut the last unsorted clip
+        sk.seek(last_clip.start + 0.01)
         sk.select_clip()
         sk.timeline("cut")
 
-        -- Go to start and paste
-        sk.go_to_start()
+        -- Insert at the build position
+        if step == 1 then
+            sk.go_to_start()
+        else
+            local current2 = get_real_clips()
+            sk.seek(current2[step].start)
+        end
         sk.timeline("paste")
-
-        ::skip::
     end
 
     sk.log(string.format("[Arranger] Reversed %d clips", count))
-    print(string.format("Reversed %d clips (undo with sk.undo())", count))
+    sk.alert("Arranger", string.format("Reversed %d clips\n\nUndo with sk.undo()", count))
     return count
 end
 
@@ -168,51 +175,64 @@ function arranger.shuffle(seed)
 
     local clips = get_real_clips()
     if #clips < 2 then
-        print("Need at least 2 clips to shuffle")
+        sk.alert("Arranger", "Need at least 2 clips to shuffle")
         return
     end
 
-    sk.log("[Arranger] Shuffling " .. #clips .. " clips...")
+    local count = #clips
+    sk.log("[Arranger] Shuffling " .. count .. " clips...")
 
-    -- Fisher-Yates shuffle: iterate from end to start, swapping each
-    -- element with a random earlier element. This produces an unbiased
-    -- permutation in O(n) time.
-    local indices = {}
-    for i = 1, #clips do indices[i] = i end
-    for i = #indices, 2, -1 do
+    -- Record clip identities (name + duration) and Fisher-Yates shuffle them.
+    -- We track identity rather than indices because indices become stale
+    -- after each cut/paste operation on the magnetic timeline.
+    local desired = {}
+    for i, c in ipairs(clips) do
+        desired[i] = {name = c.name, duration = c.duration}
+    end
+    for i = #desired, 2, -1 do
         local j = math.random(1, i)
-        indices[i], indices[j] = indices[j], indices[i]
+        desired[i], desired[j] = desired[j], desired[i]
     end
 
-    -- Execute the permutation via cut+paste.
-    -- WHY O(n^2): each cut/paste changes positions, so we must re-read
-    -- state. But n is typically small (< 100 clips) and each step is
-    -- individually undoable.
+    -- Build the shuffled order from left to right. For each target
+    -- position, find the desired clip among the remaining unsorted
+    -- clips (positions step..n), cut it, and insert at position step.
+    -- Clips at positions 1..step-1 are already placed and untouched.
     local moved = 0
-    for target_pos = 1, #indices do
-        local source_idx = indices[target_pos]
-        if source_idx ~= target_pos then
-            -- Re-read current state
-            local current = get_real_clips()
-            if source_idx <= #current and target_pos <= #current then
-                local source_clip = current[source_idx]
-                local target_clip = current[target_pos]
+    for step = 1, count - 1 do
+        local current = get_real_clips()
+        local target = desired[step]
 
-                -- Cut the source clip
-                sk.seek(source_clip.start + 0.01)
-                sk.select_clip()
-                sk.timeline("cut")
-
-                -- Paste at target position
-                sk.seek(target_clip.start)
-                sk.timeline("paste")
-                moved = moved + 1
+        -- Find the matching clip from position step onward
+        local found_at = nil
+        for j = step, #current do
+            if current[j].name == target.name
+               and math.abs(current[j].duration - target.duration) < 0.01 then
+                found_at = j
+                break
             end
+        end
+
+        if found_at and found_at ~= step then
+            -- Cut the clip from its current position
+            sk.seek(current[found_at].start + 0.01)
+            sk.select_clip()
+            sk.timeline("cut")
+
+            -- Insert at the build position
+            if step == 1 then
+                sk.go_to_start()
+            else
+                local current2 = get_real_clips()
+                sk.seek(current2[step].start)
+            end
+            sk.timeline("paste")
+            moved = moved + 1
         end
     end
 
-    sk.log(string.format("[Arranger] Shuffled %d clips (%d moves)", #clips, moved))
-    print(string.format("Shuffled %d clips (undo with sk.undo())", #clips))
+    sk.log(string.format("[Arranger] Shuffled %d clips (%d moves)", count, moved))
+    sk.alert("Arranger", string.format("Shuffled %d clips (%d moves)\n\nUndo with sk.undo()", count, moved))
     return moved
 end
 
@@ -232,7 +252,7 @@ function arranger.every_nth(n, keep_or_delete)
 
     local clips = get_real_clips()
     if #clips < n then
-        print("Not enough clips for every-" .. n)
+        sk.alert("Arranger", "Not enough clips for every-" .. n)
         return
     end
 
@@ -257,7 +277,7 @@ function arranger.every_nth(n, keep_or_delete)
     local kept = #clips - #to_remove
     sk.log(string.format("[Arranger] Kept %d, removed %d (every %d, mode: %s)",
         kept, #to_remove, n, keep_or_delete))
-    print(string.format("Kept %d clips, removed %d", kept, #to_remove))
+    sk.alert("Arranger", string.format("Kept %d clips, removed %d", kept, #to_remove))
     return kept
 end
 
@@ -277,17 +297,17 @@ end
 -----------------------------------------------------------
 function arranger.loop_section(start_time, end_time, repetitions)
     if not start_time or not end_time or not repetitions then
-        print("Usage: arranger.loop_section(start_sec, end_sec, reps)")
+        sk.alert("Arranger", "Usage: arranger.loop_section(start_sec, end_sec, reps)")
         return
     end
     if repetitions < 1 or repetitions > 50 then
-        print("Repetitions must be 1-50")
+        sk.alert("Arranger", "Repetitions must be 1-50")
         return
     end
 
     local section_dur = end_time - start_time
     if section_dur <= 0 then
-        print("End time must be after start time")
+        sk.alert("Arranger", "End time must be after start time")
         return
     end
 
@@ -312,7 +332,7 @@ function arranger.loop_section(start_time, end_time, repetitions)
     end
 
     local total_added = section_dur * repetitions
-    print(string.format("Looped %.1fs section %d times (added %.1fs)",
+    sk.alert("Arranger", string.format("Looped %.1fs section %d times (added %.1fs)",
         section_dur, repetitions, total_added))
     return repetitions
 end
@@ -369,7 +389,7 @@ function arranger.extract(criteria)
         sk.timeline("delete")
     end
 
-    print(string.format("Extracted %d clips, removed %d", #keep, #remove))
+    sk.alert("Arranger", string.format("Extracted %d clips, removed %d", #keep, #remove))
     return #keep
 end
 
@@ -383,7 +403,7 @@ end
 function arranger.analyze()
     local clips = get_real_clips()
     if #clips == 0 then
-        print("No clips to analyze")
+        sk.alert("Arranger", "No clips to analyze")
         return
     end
 
@@ -423,51 +443,50 @@ function arranger.analyze()
         else buckets[5] = buckets[5] + 1 end
     end
 
-    print("")
-    print("  TIMELINE PACING ANALYSIS")
-    print("  " .. string.rep("=", 45))
-    print(string.format("  Clips:     %d", #clips))
-    print(string.format("  Total:     %.1fs (%.0f min)", total, total / 60))
-    print(string.format("  Mean:      %.2fs", mean))
-    print(string.format("  Median:    %.2fs", median))
-    print(string.format("  Std dev:   %.2fs", stddev))
-    print(string.format("  Shortest:  %.2fs", shortest))
-    print(string.format("  Longest:   %.2fs", longest))
-    print("")
-    print("  Duration Distribution:")
+    -- Build output string for alert display
+    local lines = {}
+    local function add(s) lines[#lines + 1] = s end
+
+    add(string.format("Clips:      %d", #clips))
+    add(string.format("Total:      %.1fs (%.0f min)", total, total / 60))
+    add(string.format("Mean:       %.2fs", mean))
+    add(string.format("Median:     %.2fs", median))
+    add(string.format("Std dev:    %.2fs", stddev))
+    add(string.format("Shortest:   %.2fs", shortest))
+    add(string.format("Longest:    %.2fs", longest))
+    add("")
+    add("Duration Distribution:")
     local max_bucket = math.max(table.unpack(buckets))
     for i, count in ipairs(buckets) do
-        local bar_len = max_bucket > 0 and math.floor(count / max_bucket * 25) or 0
-        print(string.format("    %-6s  %s %d",
+        local bar_len = max_bucket > 0 and math.floor(count / max_bucket * 20) or 0
+        add(string.format("  %-6s  %s %d",
             bucket_labels[i],
             string.rep("#", bar_len),
             count))
     end
 
     -- Pacing assessment based on average cut length.
-    -- These thresholds are borrowed from film editing theory:
-    -- action/music videos < 2s, documentaries 5-15s, etc.
-    print("")
+    add("")
     if mean < 2 then
-        print("  Pacing: FAST (avg < 2s per cut)")
+        add("Pacing:  FAST (avg < 2s per cut)")
     elseif mean < 5 then
-        print("  Pacing: MODERATE (avg 2-5s per cut)")
+        add("Pacing:  MODERATE (avg 2-5s per cut)")
     elseif mean < 15 then
-        print("  Pacing: SLOW (avg 5-15s per cut)")
+        add("Pacing:  SLOW (avg 5-15s per cut)")
     else
-        print("  Pacing: VERY SLOW (avg > 15s per cut)")
+        add("Pacing:  VERY SLOW (avg > 15s per cut)")
     end
 
     -- Rhythm: coefficient of variation (stddev/mean).
-    -- Low CV = cuts are similar lengths; high CV = mixed short and long.
     if stddev / mean > 1.0 then
-        print("  Rhythm:  IRREGULAR (high variation)")
+        add("Rhythm:  IRREGULAR (high variation)")
     elseif stddev / mean > 0.5 then
-        print("  Rhythm:  VARIED (moderate variation)")
+        add("Rhythm:  VARIED (moderate variation)")
     else
-        print("  Rhythm:  CONSISTENT (low variation)")
+        add("Rhythm:  CONSISTENT (low variation)")
     end
-    print("  " .. string.rep("=", 45))
+
+    sk.alert("Pacing Analysis", table.concat(lines, "\n"))
 
     return {
         count = #clips,
@@ -483,13 +502,13 @@ end
 -- Register globally
 _G.arranger = arranger
 
-print("Timeline Arranger loaded. Commands:")
-print("  arranger.reverse()                     -- reverse clip order")
-print("  arranger.shuffle()                     -- randomize clip order")
-print("  arranger.every_nth(3)                  -- keep every 3rd clip")
-print("  arranger.every_nth(2, 'delete')        -- delete every 2nd clip")
-print("  arranger.loop_section(10, 15, 4)       -- loop 10-15s section 4 times")
-print("  arranger.extract({min_duration=3.0})   -- keep only clips >= 3s")
-print("  arranger.analyze()                     -- pacing & rhythm analysis")
+sk.alert("Timeline Arranger",
+    "arranger.reverse()                    — reverse clip order\n" ..
+    "arranger.shuffle()                    — randomize clip order\n" ..
+    "arranger.every_nth(3)                 — keep every 3rd clip\n" ..
+    "arranger.every_nth(2, 'delete')       — delete every 2nd clip\n" ..
+    "arranger.loop_section(10, 15, 4)      — loop 10-15s x4\n" ..
+    "arranger.extract({min_duration=3.0})  — keep clips >= 3s\n" ..
+    "arranger.analyze()                    — pacing & rhythm analysis")
 
 return arranger
