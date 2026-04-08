@@ -2333,169 +2333,23 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     [xml writeToFile:xmlPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
     // ---------------------------------------------------------------
-    // Step 2: Import FCPXML → temp project → copy → switch back → paste.
-    // Self-contained pipeline with snapshot overlay (no shared cache/function).
+    // Step 2: Write FCPXML to pasteboard, convert to native via the proven
+    // SpliceKit_convertFCPXMLToNativeClipboard() pipeline, then paste.
+    // The shared function handles import → temp project → copy → switch
+    // back → cleanup. It uses NSDisableScreenUpdates() to minimize flicker.
     // ---------------------------------------------------------------
     __block BOOL pasteHandled = NO;
     SpliceKit_executeOnMainThread(^{
-        // --- Save user's current state ---
-        id userSequence = nil;
-        NSString *userSequenceName = nil;
+        // Write FCPXML to pasteboard
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        [pb clearContents];
+        NSString *xmlType = ((id (*)(id, SEL))objc_msgSend)(
+            objc_getClass("IXXMLPasteboardType"), NSSelectorFromString(@"generic"));
+        [pb setString:xml forType:xmlType];
+        SpliceKit_log(@"[Captions] Wrote %lu bytes FCPXML to pasteboard", (unsigned long)xml.length);
+
+        // Seek playhead to time 0
         id tm = SpliceKit_getActiveTimelineModule();
-        if (tm) {
-            userSequence = ((id (*)(id, SEL))objc_msgSend)(tm, NSSelectorFromString(@"sequence"));
-            if (userSequence) {
-                userSequenceName = ((id (*)(id, SEL))objc_msgSend)(userSequence,
-                    NSSelectorFromString(@"displayName"));
-            }
-        }
-        if (!userSequence) {
-            SpliceKit_log(@"[Captions] No active sequence for paste");
-            return;
-        }
-        SpliceKit_log(@"[Captions] User's project: %@", userSequenceName);
-
-        // --- Create snapshot overlay ---
-        NSWindow *mainWindow = [NSApp mainWindow];
-        NSWindow *overlay = nil;
-        if (mainWindow) {
-            @try {
-                NSView *contentView = mainWindow.contentView;
-                NSBitmapImageRep *rep = [contentView bitmapImageRepForCachingDisplayInRect:contentView.bounds];
-                if (rep) {
-                    [contentView cacheDisplayInRect:contentView.bounds toBitmapImageRep:rep];
-                    NSImage *snapshot = [[NSImage alloc] initWithSize:contentView.bounds.size];
-                    [snapshot addRepresentation:rep];
-                    overlay = [[NSWindow alloc] initWithContentRect:mainWindow.frame
-                        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
-                    overlay.opaque = YES;
-                    overlay.hasShadow = NO;
-                    overlay.level = NSScreenSaverWindowLevel;
-                    overlay.backgroundColor = [NSColor blackColor];
-                    NSImageView *iv = [[NSImageView alloc] initWithFrame:
-                        NSMakeRect(0, 0, mainWindow.frame.size.width, mainWindow.frame.size.height)];
-                    iv.image = snapshot;
-                    iv.imageScaling = NSImageScaleAxesIndependently;
-                    [overlay.contentView addSubview:iv];
-                    [overlay orderFront:nil];
-                    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
-                }
-            } @catch (NSException *e) {}
-        }
-        SpliceKit_log(@"[Captions] Starting import pipeline (overlay %@)", overlay ? @"active" : @"none");
-
-        // --- Inject unique temp project name to avoid conflicts ---
-        NSString *tempName = [NSString stringWithFormat:@"_SKCap_%u", arc4random() % 100000];
-        NSString *importXml = [xml stringByReplacingOccurrencesOfString:@"<project name=\"SpliceKit Captions\">"
-            withString:[NSString stringWithFormat:@"<project name=\"%@\">", tempName]];
-
-        // --- Import FCPXML via FFXMLTranslationTask ---
-        NSDictionary *importResult = SpliceKit_handlePasteboardImportXML(@{@"xml": importXml});
-        if (importResult[@"error"]) {
-            SpliceKit_log(@"[Captions] Import failed: %@", importResult[@"error"]);
-            if (overlay) [overlay orderOut:nil];
-            return;
-        }
-        id tempSeq = nil;
-        for (int attempt = 0; attempt < 20 && !tempSeq; attempt++) {
-            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
-            id libs = ((id (*)(id, SEL))objc_msgSend)(
-                objc_getClass("FFLibraryDocument"), NSSelectorFromString(@"copyActiveLibraries"));
-            if (!libs || ![(NSArray *)libs count]) continue;
-            id lib = [(NSArray *)libs objectAtIndex:0];
-            id seqs = ((id (*)(id, SEL))objc_msgSend)(lib, NSSelectorFromString(@"_deepLoadedSequences"));
-            if (!seqs) continue;
-            for (id seq in (NSSet *)seqs) {
-                NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq, NSSelectorFromString(@"displayName"));
-                if (name && [name hasPrefix:tempName] && seq != userSequence) {
-                    tempSeq = seq;
-                    break;
-                }
-            }
-        }
-        if (!tempSeq) {
-            SpliceKit_log(@"[Captions] Temp project '%@' not found after import", tempName);
-            if (overlay) [overlay orderOut:nil];
-            return;
-        }
-        SpliceKit_log(@"[Captions] Found temp project, loading...");
-
-        // --- Load temp project in editor ---
-        id appDelegate = [NSApp delegate];
-        id editorContainer = ((id (*)(id, SEL))objc_msgSend)(appDelegate,
-            NSSelectorFromString(@"activeEditorContainer"));
-        if (!editorContainer) {
-            if (overlay) [overlay orderOut:nil];
-            return;
-        }
-        ((void (*)(id, SEL, id))objc_msgSend)(editorContainer,
-            NSSelectorFromString(@"loadEditorForSequence:"), tempSeq);
-
-        // Wait until temp project is active
-        BOOL tempLoaded = NO;
-        for (int i = 0; i < 30; i++) {
-            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
-            id curTm = SpliceKit_getActiveTimelineModule();
-            if (!curTm) continue;
-            id curSeq = ((id (*)(id, SEL))objc_msgSend)(curTm, NSSelectorFromString(@"sequence"));
-            if (curSeq == tempSeq) { tempLoaded = YES; break; }
-        }
-        if (!tempLoaded) {
-            SpliceKit_log(@"[Captions] Temp project failed to load in editor");
-            SpliceKitCaption_deleteSequence(tempSeq);
-            if (overlay) [overlay orderOut:nil];
-            return;
-        }
-        // Extra settle time for timeline items to become available
-        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
-
-        // --- Select all + copy from temp project ---
-        // Must target the timeline module directly — the overlay window may
-        // have stolen first responder, causing selectAll/copy to go to it
-        // instead of the timeline.
-        id tempTm = SpliceKit_getActiveTimelineModule();
-        if (tempTm) {
-            ((void (*)(id, SEL, id))objc_msgSend)(tempTm, NSSelectorFromString(@"selectAll:"), nil);
-            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
-            ((void (*)(id, SEL, id))objc_msgSend)(tempTm, NSSelectorFromString(@"copy:"), nil);
-            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
-            SpliceKit_log(@"[Captions] Copied from temp project (direct on timeline module)");
-        } else {
-            SpliceKit_log(@"[Captions] ERROR: no timeline module for selectAll+copy");
-        }
-
-        // --- Switch back to user's project ---
-        // Re-find the user's sequence fresh from the library (the saved pointer
-        // may have been invalidated by the library update during import).
-        if (userSequenceName) {
-            for (id seq in SpliceKitCaption_allSequences()) {
-                NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq,
-                    NSSelectorFromString(@"displayName"));
-                if ([name isEqualToString:userSequenceName] && seq != tempSeq) {
-                    userSequence = seq;
-                    break;
-                }
-            }
-        }
-
-        ((void (*)(id, SEL, id))objc_msgSend)(editorContainer,
-            NSSelectorFromString(@"loadEditorForSequence:"), userSequence);
-
-        BOOL userLoaded = NO;
-        for (int i = 0; i < 30; i++) {
-            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
-            id curTm = SpliceKit_getActiveTimelineModule();
-            if (!curTm) continue;
-            id curSeq = ((id (*)(id, SEL))objc_msgSend)(curTm, NSSelectorFromString(@"sequence"));
-            if (!curSeq) continue;
-            NSString *curName = ((id (*)(id, SEL))objc_msgSend)(curSeq, NSSelectorFromString(@"displayName"));
-            if (curName && [curName isEqualToString:userSequenceName]) { userLoaded = YES; break; }
-        }
-        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
-        SpliceKit_log(@"[Captions] Switched back to user's project: %@", userLoaded ? @"YES" : @"TIMEOUT");
-
-        // --- Seek to 0, deselect, paste as connected ---
-        tm = SpliceKit_getActiveTimelineModule();
         if (tm) {
             SpliceKitCaption_CMTime zeroTime = {0, 600, 1, 0};
             SEL setSel = NSSelectorFromString(@"setPlayheadTime:");
@@ -2503,41 +2357,30 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
                 ((void (*)(id, SEL, SpliceKitCaption_CMTime))objc_msgSend)(tm, setSel, zeroTime);
             }
         }
-        [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"deselectAll:") to:nil from:nil];
-        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
 
-        // Paste directly on the timeline module (responder chain may not route
-        // correctly after a project switch — first responder might not be timeline).
-        tm = SpliceKit_getActiveTimelineModule();
-        SEL pasteSel = NSSelectorFromString(@"pasteAnchored:");
-        if (tm && [tm respondsToSelector:pasteSel]) {
-            ((void (*)(id, SEL, id))objc_msgSend)(tm, pasteSel, nil);
-            pasteHandled = YES;
-            SpliceKit_log(@"[Captions] pasteAnchored: called directly on timeline module");
-        } else {
-            // Fallback: try responder chain
-            pasteHandled = [[NSApplication sharedApplication]
-                sendAction:pasteSel to:nil from:nil];
-            SpliceKit_log(@"[Captions] pasteAnchored: via responder chain: %@", pasteHandled ? @"YES" : @"NO");
-        }
-        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+        // Deselect all
+        [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"deselectAll:")
+                                                   to:nil from:nil];
 
-        // --- Clean up temp project ---
-        @try {
-            SpliceKitCaption_deleteSequence(tempSeq);
-            SpliceKit_log(@"[Captions] Temp project deleted");
-        } @catch (NSException *e) {
-            SpliceKit_log(@"[Captions] Temp cleanup failed: %@", e.reason);
-        }
+        // Convert FCPXML to native clipboard (import → temp → copy → switch back).
+        // Uses the proven shared function — no overlay (it interferes with focus).
+        BOOL converted = SpliceKit_convertFCPXMLToNativeClipboard();
+        SpliceKit_log(@"[Captions] FCPXML-to-native conversion: %@", converted ? @"OK" : @"FAILED");
 
-        // --- Remove overlay ---
-        if (overlay) {
-            [overlay orderOut:nil];
-            SpliceKit_log(@"[Captions] Overlay removed");
+        if (converted) {
+            // Paste as connected storyline — call directly on timeline module
+            tm = SpliceKit_getActiveTimelineModule();
+            SEL pasteSel = NSSelectorFromString(@"pasteAnchored:");
+            if (tm && [tm respondsToSelector:pasteSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(tm, pasteSel, nil);
+                pasteHandled = YES;
+                SpliceKit_log(@"[Captions] pasteAnchored: OK");
+            }
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
         }
     });
 
-    SpliceKit_log(@"[Captions] Pipeline complete: paste=%@", pasteHandled ? @"YES" : @"NO");
+    SpliceKit_log(@"[Captions] Paste as connected: %@", pasteHandled ? @"YES" : @"NO");
 
     // ---------------------------------------------------------------
     // Step 3: Post-process — reload Motion templates, set position, verify.
