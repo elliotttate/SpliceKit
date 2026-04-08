@@ -2340,14 +2340,20 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
     SpliceKit_executeOnMainThread(^{
         // --- Save user's current state ---
         id userSequence = nil;
+        NSString *userSequenceName = nil;
         id tm = SpliceKit_getActiveTimelineModule();
         if (tm) {
             userSequence = ((id (*)(id, SEL))objc_msgSend)(tm, NSSelectorFromString(@"sequence"));
+            if (userSequence) {
+                userSequenceName = ((id (*)(id, SEL))objc_msgSend)(userSequence,
+                    NSSelectorFromString(@"displayName"));
+            }
         }
         if (!userSequence) {
             SpliceKit_log(@"[Captions] No active sequence for paste");
             return;
         }
+        SpliceKit_log(@"[Captions] User's project: %@", userSequenceName);
 
         // --- Create snapshot overlay ---
         NSWindow *mainWindow = [NSApp mainWindow];
@@ -2451,18 +2457,34 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
         SpliceKit_log(@"[Captions] Copied from temp project");
 
         // --- Switch back to user's project ---
+        // Re-find the user's sequence fresh from the library (the saved pointer
+        // may have been invalidated by the library update during import).
+        if (userSequenceName) {
+            for (id seq in SpliceKitCaption_allSequences()) {
+                NSString *name = ((id (*)(id, SEL))objc_msgSend)(seq,
+                    NSSelectorFromString(@"displayName"));
+                if ([name isEqualToString:userSequenceName] && seq != tempSeq) {
+                    userSequence = seq;
+                    break;
+                }
+            }
+        }
+
         ((void (*)(id, SEL, id))objc_msgSend)(editorContainer,
             NSSelectorFromString(@"loadEditorForSequence:"), userSequence);
 
-        for (int i = 0; i < 25; i++) {
+        BOOL userLoaded = NO;
+        for (int i = 0; i < 30; i++) {
             [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
             id curTm = SpliceKit_getActiveTimelineModule();
             if (!curTm) continue;
             id curSeq = ((id (*)(id, SEL))objc_msgSend)(curTm, NSSelectorFromString(@"sequence"));
-            if (curSeq == userSequence) break;
+            if (!curSeq) continue;
+            NSString *curName = ((id (*)(id, SEL))objc_msgSend)(curSeq, NSSelectorFromString(@"displayName"));
+            if (curName && [curName isEqualToString:userSequenceName]) { userLoaded = YES; break; }
         }
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
-        SpliceKit_log(@"[Captions] Switched back to user's project");
+        SpliceKit_log(@"[Captions] Switched back to user's project: %@", userLoaded ? @"YES" : @"TIMEOUT");
 
         // --- Seek to 0, deselect, paste as connected ---
         tm = SpliceKit_getActiveTimelineModule();
