@@ -36,6 +36,9 @@ ENTITLEMENTS = entitlements.plist
 
 SILENCE_DETECTOR = $(BUILD_DIR)/silence-detector
 TOOLS_DIR = $(HOME)/Applications/SpliceKit/tools
+PARAKEET_PKG_DIR = patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber
+PARAKEET_RELEASE_BIN = $(PARAKEET_PKG_DIR)/.build/release/parakeet-transcriber
+PARAKEET_DEBUG_BIN = $(PARAKEET_PKG_DIR)/.build/debug/parakeet-transcriber
 
 .PHONY: all clean deploy launch tools
 
@@ -85,8 +88,13 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 	@# Deploy tools
 	@mkdir -p "$(TOOLS_DIR)"
 	@cp $(SILENCE_DETECTOR) "$(TOOLS_DIR)/silence-detector" 2>/dev/null || true
-	@test -f tools/parakeet-transcriber/.build/release/parakeet-transcriber && \
-		cp tools/parakeet-transcriber/.build/release/parakeet-transcriber "$(TOOLS_DIR)/parakeet-transcriber" || true
+	@if [ -f "$(PARAKEET_RELEASE_BIN)" ]; then \
+		cp "$(PARAKEET_RELEASE_BIN)" "$(TOOLS_DIR)/parakeet-transcriber"; \
+		cp "$(PARAKEET_RELEASE_BIN)" "$(FW_DIR)/Versions/A/Resources/parakeet-transcriber"; \
+	elif [ -f "$(PARAKEET_DEBUG_BIN)" ]; then \
+		cp "$(PARAKEET_DEBUG_BIN)" "$(TOOLS_DIR)/parakeet-transcriber"; \
+		cp "$(PARAKEET_DEBUG_BIN)" "$(FW_DIR)/Versions/A/Resources/parakeet-transcriber"; \
+	fi
 	@# Copy Lua example scripts
 	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/examples"
 	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/auto"

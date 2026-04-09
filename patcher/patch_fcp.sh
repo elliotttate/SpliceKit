@@ -363,8 +363,6 @@ cat > "$ENTITLEMENTS" << 'ENT'
 <plist version="1.0">
 <dict>
     <key>com.apple.security.cs-disable-library-validation</key><true/>
-    <key>com.apple.security.cs-allow-dyld-environment-variables</key><true/>
-    <key>com.apple.security.get-task-allow</key><true/>
 </dict>
 </plist>
 ENT
@@ -377,7 +375,7 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
     info "Using signing identity: $SIGN_IDENTITY"
 else
     SIGN_IDENTITY="-"
-    info "No local codesigning identity found; falling back to ad-hoc signing"
+    info "No local codesigning identity found; falling back to ad-hoc signing (higher risk of macOS launch/security blocks)"
 fi
 
 info "Signing main application..."
@@ -387,7 +385,7 @@ if ! sign_modded_app "$SIGN_IDENTITY"; then
         exit 1
     fi
 
-    warn "Developer signing failed; retrying with ad-hoc signature"
+    warn "Developer signing failed; retrying with ad-hoc signature (higher risk of macOS launch/security blocks)"
     sign_modded_app "-"
     SIGN_IDENTITY="-"
 fi

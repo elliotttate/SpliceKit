@@ -7,6 +7,7 @@ set -e
 
 VERSION="$1"
 NOTES="$2"
+REPO_ROOT="$(pwd)"
 if [ -z "$VERSION" ]; then
     echo "Usage: ./release.sh <version> [\"release notes\"]"
     echo "Example: ./release.sh 3.0.0 \"Wizard UI, DMG distribution\""
@@ -41,8 +42,9 @@ echo "[2/14] Building SpliceKit dylib + tools..."
 make clean && make && make tools
 
 echo "[3/14] Building parakeet-transcriber..."
-cd tools/parakeet-transcriber && swift build -c release 2>&1 | tail -3 && cd ../..
-PARAKEET_BIN="tools/parakeet-transcriber/.build/release/parakeet-transcriber"
+PARAKEET_PKG_DIR="patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
+cd "${PARAKEET_PKG_DIR}" && swift build -c release 2>&1 | tail -3 && cd "${REPO_ROOT}"
+PARAKEET_BIN="${PARAKEET_PKG_DIR}/.build/release/parakeet-transcriber"
 if [ -f "$PARAKEET_BIN" ]; then
     echo "  Built: $(du -h "$PARAKEET_BIN" | cut -f1)"
 else

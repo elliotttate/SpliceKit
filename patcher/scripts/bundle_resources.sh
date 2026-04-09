@@ -47,11 +47,15 @@ if [ -f "$REPO_DIR/tools/silence-detector.swift" ]; then
 fi
 
 # Copy parakeet-transcriber: prefer pre-built binary, fall back to sources
-PARAKEET_BIN="$REPO_DIR/tools/parakeet-transcriber/.build/release/parakeet-transcriber"
-PARAKEET_SRC="$REPO_DIR/tools/parakeet-transcriber"
-if [ -f "$PARAKEET_BIN" ]; then
-    cp "$PARAKEET_BIN" "$APP_RESOURCES/tools/parakeet-transcriber"
+PARAKEET_SRC="$REPO_DIR/patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
+PARAKEET_RELEASE_BIN="$PARAKEET_SRC/.build/release/parakeet-transcriber"
+PARAKEET_DEBUG_BIN="$PARAKEET_SRC/.build/debug/parakeet-transcriber"
+if [ -f "$PARAKEET_RELEASE_BIN" ]; then
+    cp "$PARAKEET_RELEASE_BIN" "$APP_RESOURCES/tools/parakeet-transcriber"
     echo "Bundled parakeet-transcriber binary (pre-built)"
+elif [ -f "$PARAKEET_DEBUG_BIN" ]; then
+    cp "$PARAKEET_DEBUG_BIN" "$APP_RESOURCES/tools/parakeet-transcriber"
+    echo "Bundled parakeet-transcriber binary (debug build)"
 elif [ -d "$PARAKEET_SRC" ]; then
     mkdir -p "$APP_RESOURCES/tools/parakeet-transcriber"
     rsync -a --delete \

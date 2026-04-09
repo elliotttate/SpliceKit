@@ -8,10 +8,11 @@ import UniformTypeIdentifiers
 
 // MARK: - Types
 
-enum PatchStatus: Equatable {
-    case notPatched
-    case patched
-    case running
+enum InstallState: Equatable {
+    case notInstalled       // No modded FCP found
+    case current            // Installed, framework matches patcher's build
+    case updateAvailable    // SpliceKit framework differs from patcher's build
+    case fcpUpdateAvailable // Stock FCP version changed since modded copy was made
     case unknown
 }
 
@@ -45,7 +46,7 @@ enum PatchError: LocalizedError {
 
 @MainActor
 class PatcherModel: ObservableObject {
-    @Published var status: PatchStatus = .unknown
+    @Published var status: InstallState = .unknown
     @Published var currentStep: PatchStep?
     @Published var completedSteps: Set<PatchStep> = []
     @Published var log: String = ""
@@ -53,7 +54,9 @@ class PatcherModel: ObservableObject {
     @Published var isPatchComplete = false
     @Published var errorMessage: String?
     @Published var fcpVersion: String = ""
+    @Published var stockFcpVersion: String = ""
     @Published var bridgeConnected = false
+    @Published var isUpdateMode = false
     @Published var currentPanel: WizardPanel = .welcome
 
     static let standardApp = "/Applications/Final Cut Pro.app"
@@ -196,44 +199,67 @@ class PatcherModel: ObservableObject {
                 sourceApp = found
             }
             checkStatus()
-            if status == .patched {
-                currentPanel = .complete  // skip to "done" panel
+            if status != .notInstalled && status != .unknown {
+                currentPanel = .complete
             }
         }
     }
 
-    /// Check whether the modded FCP exists, has SpliceKit injected, and if the bridge is up.
+    /// Evaluate install state: is SpliceKit injected? Is it the current build? Is FCP up to date?
     func checkStatus() {
         let binary = moddedApp + "/Contents/MacOS/Final Cut Pro"
-        if FileManager.default.fileExists(atPath: binary) {
-            let result = shell("otool -L '\(binary)' 2>/dev/null | grep '@rpath/SpliceKit'")
-            if !result.isEmpty {
-                status = .patched
-                let ps = shell("lsof -i :9876 2>/dev/null | grep LISTEN")
-                bridgeConnected = !ps.isEmpty
-                let ver = shell("/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '\(moddedApp)/Contents/Info.plist' 2>/dev/null")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if !ver.contains("Doesn't Exist") { fcpVersion = ver }
-            } else {
-                status = .notPatched
-            }
-        } else {
-            status = .notPatched
+        let installedDylib = moddedApp + "/Contents/Frameworks/SpliceKit.framework/Versions/A/SpliceKit"
+
+        // Read stock FCP version (also shown on the welcome panel)
+        stockFcpVersion = readPlistVersion(sourceApp)
+        if fcpVersion.isEmpty { fcpVersion = stockFcpVersion }
+
+        // Q1: Is a modded FCP present with the SpliceKit load command?
+        guard FileManager.default.fileExists(atPath: binary) else {
+            status = .notInstalled
+            bridgeConnected = false
+            return
+        }
+        let otoolResult = shell("otool -L '\(binary)' 2>/dev/null | grep '@rpath/SpliceKit'")
+        guard !otoolResult.isEmpty else {
+            status = .notInstalled
+            bridgeConnected = false
+            return
         }
 
-        if fcpVersion.isEmpty && FileManager.default.fileExists(atPath: sourceApp + "/Contents/Info.plist") {
-            let ver = shell("/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '\(sourceApp)/Contents/Info.plist' 2>/dev/null")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            // PlistBuddy prints "File Doesn't Exist, Will Create:" when plist is missing
-            if !ver.isEmpty && !ver.contains("Doesn't Exist") {
-                fcpVersion = ver
+        // Bridge check
+        let ps = shell("lsof -i :9876 2>/dev/null | grep LISTEN")
+        bridgeConnected = !ps.isEmpty
+
+        // Read modded FCP version
+        let moddedVer = readPlistVersion(moddedApp)
+        if !moddedVer.isEmpty { fcpVersion = moddedVer }
+
+        // Q2a: Has stock FCP been updated since the modded copy was made?
+        if !stockFcpVersion.isEmpty && !moddedVer.isEmpty && stockFcpVersion != moddedVer {
+            status = .fcpUpdateAvailable
+            return
+        }
+
+        // Q2b: Does the installed SpliceKit binary match the patcher's build?
+        let bundledDylib = (Bundle.main.resourcePath ?? "") + "/SpliceKit"
+        if FileManager.default.fileExists(atPath: bundledDylib),
+           FileManager.default.fileExists(atPath: installedDylib) {
+            let bundledHash = fileHash(bundledDylib)
+            let installedHash = fileHash(installedDylib)
+            if !bundledHash.isEmpty && !installedHash.isEmpty && bundledHash != installedHash {
+                status = .updateAvailable
+                return
             }
         }
+
+        status = .current
     }
 
     func patch() {
         guard !isPatching else { return }
         isPatching = true
+        isUpdateMode = false
         isPatchComplete = false
         errorMessage = nil
         log = ""
@@ -245,7 +271,7 @@ class PatcherModel: ObservableObject {
                 try await self.runPatch()
                 await MainActor.run {
                     self.isPatchComplete = true
-                    self.status = .patched
+                    self.status = .current
                 }
             } catch {
                 await MainActor.run {
@@ -287,12 +313,53 @@ class PatcherModel: ObservableObject {
         do {
             try FileManager.default.removeItem(atPath: destDir)
             appendLog("Removed \(destDir)")
-            status = .notPatched
+            status = .notInstalled
             bridgeConnected = false
             currentPanel = .welcome
         } catch {
             appendLog("Error: \(error.localizedDescription)")
         }
+    }
+
+    /// In-place framework update: rebuild dylib + tools, re-sign. No FCP re-copy needed.
+    func updateSpliceKit() {
+        guard !isPatching else { return }
+        isPatching = true
+        isUpdateMode = true
+        isPatchComplete = false
+        errorMessage = nil
+        log = ""
+        completedSteps = []
+        currentPanel = .patching
+
+        Task.detached { [self] in
+            do {
+                try await self.runUpdate()
+                await MainActor.run {
+                    self.isPatchComplete = true
+                    self.status = .current
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.appendLog("ERROR: \(error.localizedDescription)")
+                }
+            }
+            await MainActor.run {
+                self.isPatching = false
+                self.isUpdateMode = false
+            }
+        }
+    }
+
+    /// Delete the modded FCP and re-patch from the current stock FCP.
+    func rebuildModdedApp() {
+        guard !isPatching else { return }
+        appendLog("Removing old modded FCP for rebuild...")
+        shell("pkill -f 'Applications/SpliceKit' 2>/dev/null; sleep 1")
+        try? FileManager.default.removeItem(atPath: moddedApp)
+        bridgeConnected = false
+        patch()
     }
 
     // MARK: - Patch Steps
@@ -402,11 +469,16 @@ class PatcherModel: ObservableObject {
 
         let parakeetBin = buildDir + "/parakeet-transcriber"
         let bundledParakeet = (Bundle.main.resourcePath ?? "") + "/tools/parakeet-transcriber"
-        if FileManager.default.fileExists(atPath: bundledParakeet) {
+        var bundledParakeetIsDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: bundledParakeet, isDirectory: &bundledParakeetIsDirectory),
+           !bundledParakeetIsDirectory.boolValue {
             shell("cp '\(bundledParakeet)' '\(parakeetBin)'")
             await logAsync("Using pre-built Parakeet transcriber from app bundle")
         } else {
-            let parakeetSrcDir = repoDir + "/tools/parakeet-transcriber"
+            let bundledParakeetSources = bundledParakeetIsDirectory.boolValue ? bundledParakeet : ""
+            let parakeetSrcDir = FileManager.default.fileExists(atPath: bundledParakeetSources + "/Package.swift")
+                ? bundledParakeetSources
+                : repoDir + "/patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
             if FileManager.default.fileExists(atPath: parakeetSrcDir + "/Package.swift") {
                 await logAsync("Building Parakeet transcriber (may take a moment on first run)...")
                 let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/SpliceKit/tools/parakeet-transcriber"
@@ -449,13 +521,14 @@ class PatcherModel: ObservableObject {
             cd '\(fwDir)' && ln -sf Versions/Current/SpliceKit SpliceKit
             cd '\(fwDir)' && ln -sf Versions/Current/Resources Resources
             """)
+        let patcherVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
         let plist = """
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
             <plist version="1.0"><dict>
             <key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string>
             <key>CFBundleName</key><string>SpliceKit</string>
-            <key>CFBundleVersion</key><string>3.0.0</string>
+            <key>CFBundleVersion</key><string>\(patcherVersion)</string>
             <key>CFBundlePackageType</key><string>FMWK</string>
             <key>CFBundleExecutable</key><string>SpliceKit</string>
             </dict></plist>
@@ -503,7 +576,7 @@ class PatcherModel: ObservableObject {
         await setStepAsync(.signApp)
         var signIdentity = preferredSigningIdentity() ?? "-"
         if signIdentity == "-" {
-            await logAsync("No local codesigning identity found; using ad-hoc signature")
+            await logAsync("No local codesigning identity found; using ad-hoc signature (higher risk of macOS launch/security blocks)")
         } else {
             await logAsync("Using signing identity: \(signIdentity)")
         }
@@ -513,8 +586,6 @@ class PatcherModel: ObservableObject {
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
             <plist version="1.0"><dict>
             <key>com.apple.security.cs-disable-library-validation</key><true/>
-            <key>com.apple.security.cs-allow-dyld-environment-variables</key><true/>
-            <key>com.apple.security.get-task-allow</key><true/>
             </dict></plist>
             """
         try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)
@@ -527,7 +598,7 @@ class PatcherModel: ObservableObject {
             codesign --force --sign \(quotedIdentity) --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
             """)
         if signResult.status != 0 && signIdentity != "-" {
-            await logAsync("Developer signing failed; retrying with ad-hoc signature")
+            await logAsync("Developer signing failed; retrying with ad-hoc signature (higher risk of macOS launch/security blocks)")
             if !signResult.output.isEmpty {
                 await logAsync(String(signResult.output.suffix(400)))
             }
@@ -573,7 +644,198 @@ class PatcherModel: ObservableObject {
         await logAsync("\nSetup complete! You can now launch the enhanced Final Cut Pro.")
     }
 
+    /// Update path: rebuild framework + tools, re-sign. Skips FCP copy and dylib injection.
+    private nonisolated func runUpdate() async throws {
+        let repoDir = await MainActor.run { self.repoDir }
+        let moddedApp = await MainActor.run { self.moddedApp }
+
+        // Mark skipped steps as complete
+        await completeStepAsync(.checkPrereqs)
+        await completeStepAsync(.copyApp)
+
+        // Build dylib
+        await setStepAsync(.buildDylib)
+        let buildDir = NSTemporaryDirectory() + "SpliceKit_build"
+        shell("mkdir -p '\(buildDir)'")
+
+        let bundledDylib = (Bundle.main.resourcePath ?? "") + "/SpliceKit"
+        if FileManager.default.fileExists(atPath: bundledDylib) {
+            await logAsync("Using pre-built SpliceKit dylib from app bundle")
+            shell("cp '\(bundledDylib)' '\(buildDir)/SpliceKit'")
+        } else {
+            await logAsync("Compiling SpliceKit dylib...")
+            let sources = ["SpliceKit.m", "SpliceKitRuntime.m", "SpliceKitSwizzle.m", "SpliceKitServer.m", "SpliceKitLogPanel.m", "SpliceKitTranscriptPanel.m", "SpliceKitCaptionPanel.m", "SpliceKitCommandPalette.m", "SpliceKitDebugUI.m"]
+                .map { "'\(repoDir)/Sources/\($0)'" }.joined(separator: " ")
+            let buildResult = shell("""
+                clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
+                -framework Foundation -framework AppKit -framework AVFoundation \
+                -fobjc-arc -fmodules -Wno-deprecated-declarations \
+                -undefined dynamic_lookup -dynamiclib \
+                -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
+                -I '\(repoDir)/Sources' \
+                \(sources) -o '\(buildDir)/SpliceKit' 2>&1
+                """)
+            guard FileManager.default.fileExists(atPath: buildDir + "/SpliceKit") else {
+                throw PatchError.msg("Build failed:\n\(buildResult)")
+            }
+            await logAsync("Built universal dylib (arm64 + x86_64)")
+        }
+
+        // Build tools
+        let silenceBin = buildDir + "/silence-detector"
+        let bundledSilence = (Bundle.main.resourcePath ?? "") + "/tools/silence-detector"
+        if FileManager.default.fileExists(atPath: bundledSilence) {
+            shell("cp '\(bundledSilence)' '\(silenceBin)'")
+        } else {
+            let silenceSwift = repoDir + "/tools/silence-detector.swift"
+            if FileManager.default.fileExists(atPath: silenceSwift) {
+                _ = shell("swiftc -O -suppress-warnings -o '\(silenceBin)' '\(silenceSwift)' 2>&1")
+            }
+        }
+
+        let parakeetBin = buildDir + "/parakeet-transcriber"
+        let bundledParakeet = (Bundle.main.resourcePath ?? "") + "/tools/parakeet-transcriber"
+        var bundledParakeetIsDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: bundledParakeet, isDirectory: &bundledParakeetIsDirectory),
+           !bundledParakeetIsDirectory.boolValue {
+            shell("cp '\(bundledParakeet)' '\(parakeetBin)'")
+        } else {
+            let bundledParakeetSources = bundledParakeetIsDirectory.boolValue ? bundledParakeet : ""
+            let parakeetSrcDir = FileManager.default.fileExists(atPath: bundledParakeetSources + "/Package.swift")
+                ? bundledParakeetSources
+                : repoDir + "/patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
+            if FileManager.default.fileExists(atPath: parakeetSrcDir + "/Package.swift") {
+                let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/SpliceKit/tools/parakeet-transcriber"
+                let sourcePath = URL(fileURLWithPath: parakeetSrcDir).standardizedFileURL.path
+                let cachePath = URL(fileURLWithPath: parakeetCacheDir).standardizedFileURL.path
+                let parakeetPkgDir: String
+                if sourcePath == cachePath {
+                    parakeetPkgDir = parakeetSrcDir
+                } else {
+                    shell("""
+                        rm -rf '\(parakeetCacheDir)' && \
+                        mkdir -p '\((parakeetCacheDir as NSString).deletingLastPathComponent)' && \
+                        ditto '\(parakeetSrcDir)' '\(parakeetCacheDir)' && \
+                        rm -rf '\(parakeetCacheDir)/.build' '\(parakeetCacheDir)/.swiftpm' 2>&1
+                        """)
+                    parakeetPkgDir = parakeetCacheDir
+                }
+                let parakeetResult = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
+                let parakeetBuilt = parakeetPkgDir + "/.build/release/parakeet-transcriber"
+                if FileManager.default.fileExists(atPath: parakeetBuilt) {
+                    shell("cp '\(parakeetBuilt)' '\(parakeetBin)'")
+                }
+            }
+        }
+        await completeStepAsync(.buildDylib)
+
+        // Install framework (overwrite existing binary)
+        await setStepAsync(.installFramework)
+        let fwDir = moddedApp + "/Contents/Frameworks/SpliceKit.framework"
+        shell("cp '\(buildDir)/SpliceKit' '\(fwDir)/Versions/A/SpliceKit'")
+
+        let patcherVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        let plist = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0"><dict>
+            <key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string>
+            <key>CFBundleName</key><string>SpliceKit</string>
+            <key>CFBundleVersion</key><string>\(patcherVersion)</string>
+            <key>CFBundlePackageType</key><string>FMWK</string>
+            <key>CFBundleExecutable</key><string>SpliceKit</string>
+            </dict></plist>
+            """
+        try plist.write(toFile: fwDir + "/Versions/A/Resources/Info.plist", atomically: true, encoding: .utf8)
+
+        // Deploy tools
+        let toolsDir = NSHomeDirectory() + "/Applications/SpliceKit/tools"
+        shell("mkdir -p '\(toolsDir)'")
+        if FileManager.default.fileExists(atPath: silenceBin) {
+            shell("cp '\(silenceBin)' '\(toolsDir)/silence-detector'")
+        }
+        if FileManager.default.fileExists(atPath: parakeetBin) {
+            shell("cp '\(parakeetBin)' '\(toolsDir)/parakeet-transcriber'")
+        }
+
+        await logAsync("Framework updated")
+        await completeStepAsync(.installFramework)
+
+        // Skip inject (load command already present)
+        await completeStepAsync(.injectDylib)
+
+        // Re-sign
+        await setStepAsync(.signApp)
+        var signIdentity = preferredSigningIdentity() ?? "-"
+        if signIdentity == "-" {
+            await logAsync("No local codesigning identity found; using ad-hoc signature (higher risk of macOS launch/security blocks)")
+        } else {
+            await logAsync("Using signing identity: \(signIdentity)")
+        }
+        let entitlements = buildDir + "/entitlements.plist"
+        let entPlist = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0"><dict>
+            <key>com.apple.security.cs-disable-library-validation</key><true/>
+            </dict></plist>
+            """
+        try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)
+
+        let quotedIdentity = shellQuote(signIdentity)
+        var signResult = shellResult("""
+            codesign --force --sign \(quotedIdentity) '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
+            codesign --force --sign \(quotedIdentity) --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
+            """)
+        if signResult.status != 0 && signIdentity != "-" {
+            await logAsync("Developer signing failed; retrying with ad-hoc signature (higher risk of macOS launch/security blocks)")
+            if !signResult.output.isEmpty {
+                await logAsync(String(signResult.output.suffix(400)))
+            }
+            signIdentity = "-"
+            signResult = shellResult("""
+                codesign --force --sign - '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
+                codesign --force --sign - --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
+                """)
+        }
+        guard signResult.status == 0 else {
+            throw PatchError.msg("Signing failed:\n\(signResult.output)")
+        }
+        if signIdentity == "-" {
+            await logAsync("Applied ad-hoc signature")
+        } else {
+            await logAsync("Applied signature: \(signIdentity)")
+        }
+
+        let verify = shell("codesign --verify --verbose '\(moddedApp)' 2>&1")
+        if verify.contains("valid") || verify.contains("satisfies") {
+            await logAsync("Signature verified")
+        } else {
+            await logAsync("Signature note: \(verify)")
+        }
+        await completeStepAsync(.signApp)
+
+        await completeStepAsync(.configureDefaults)
+        await completeStepAsync(.setupMCP)
+
+        await setStepAsync(.done)
+        await logAsync("\nSpliceKit updated! You can now launch Final Cut Pro.")
+    }
+
     // MARK: - Helpers
+
+    /// SHA-256 hash of a file on disk.
+    nonisolated func fileHash(_ path: String) -> String {
+        shell("shasum -a 256 '\(path)' 2>/dev/null | awk '{print $1}'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Read CFBundleShortVersionString from an app bundle's Info.plist.
+    private nonisolated func readPlistVersion(_ appPath: String) -> String {
+        let ver = shell("/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '\(appPath)/Contents/Info.plist' 2>/dev/null")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (ver.isEmpty || ver.contains("Doesn't Exist")) ? "" : ver
+    }
 
     /// Run a shell command synchronously; nonisolated for use in background tasks.
     nonisolated func shellResult(_ command: String) -> (output: String, status: Int32) {
