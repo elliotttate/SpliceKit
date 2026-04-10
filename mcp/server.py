@@ -140,6 +140,381 @@ montage_auto(song_uid, event_name, style) -- one-shot auto-montage
 )
 
 
+READ_ONLY = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+
+LOCAL_WRITE = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+
+DESTRUCTIVE_LOCAL_WRITE = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+
+READ_ONLY_TOOLS = {
+    "bridge_status",
+    "get_timeline_clips",
+    "get_selected_clips",
+    "verify_action",
+    "get_object_property",
+    "generate_fcpxml",
+    "get_clip_effects",
+    "analyze_timeline",
+    "get_active_libraries",
+    "is_library_updating",
+    "get_classes",
+    "get_methods",
+    "get_properties",
+    "get_ivars",
+    "get_protocols",
+    "get_superchain",
+    "explore_class",
+    "search_methods",
+    "get_transcript",
+    "search_transcript",
+    "list_effects",
+    "list_transitions",
+    "search_commands",
+    "list_menus",
+    "get_inspector_properties",
+    "get_title_text",
+    "verify_captions",
+    "get_playhead_position",
+    "detect_dialog",
+    "get_viewer_zoom",
+    "get_bridge_options",
+    "detect_scene_changes",
+    "detect_beats",
+    "flexmusic_list_songs",
+    "flexmusic_get_song",
+    "flexmusic_get_timing",
+    "montage_analyze_clips",
+    "montage_plan_edit",
+    "debug_get_config",
+    "dump_runtime_metadata",
+    "list_loaded_images",
+    "get_image_sections",
+    "get_image_symbols",
+    "get_notification_names",
+    "debug_threads",
+    "debug_eval",
+    "browser_list_clips",
+    "get_caption_state",
+    "get_caption_styles",
+    "verify_native_captions",
+    "list_handles",
+    "inspect_handle",
+}
+
+DESTRUCTIVE_TOOLS = {
+    "timeline_action",
+    "timeline_destructive_action",
+    "history_action",
+    "batch_export",
+    "call_method",
+    "call_method_with_args",
+    "set_object_property",
+    "import_fcpxml",
+    "batch_timeline_actions",
+    "delete_transcript_words",
+    "move_transcript_words",
+    "delete_transcript_silences",
+    "blade_at_times",
+    "apply_effect",
+    "apply_transition",
+    "execute_command",
+    "ai_command",
+    "execute_menu_command",
+    "set_inspector_property",
+    "share_project",
+    "create_project",
+    "create_event",
+    "create_library",
+    "click_dialog_button",
+    "fill_dialog_field",
+    "toggle_dialog_checkbox",
+    "select_dialog_popup",
+    "dismiss_dialog",
+    "flexmusic_render_to_file",
+    "flexmusic_add_to_timeline",
+    "montage_assemble",
+    "montage_auto",
+    "debug_set_config",
+    "debug_reset_config",
+    "debug_enable_preset",
+    "debug_load_plugin",
+    "direct_timeline_action",
+    "browser_append_clip",
+    "paste_fcpxml",
+    "stabilize_subject",
+    "insert_title",
+    "generate_captions",
+    "export_captions_srt",
+    "export_captions_txt",
+    "generate_native_captions",
+    "blade_scene_changes",
+    "ai_command_gemma",
+    "deploy_and_restart",
+    "lua_execute",
+    "lua_execute_file",
+    "lua_reset",
+    "lua_watch",
+    "raw_call",
+}
+
+IDEMPOTENT_LOCAL_WRITE_TOOLS = {
+    "seek_to_time",
+    "set_timeline_range",
+    "set_silence_threshold",
+    "set_viewer_zoom",
+    "set_bridge_option",
+    "set_bridge_option_value",
+    "set_workspace",
+    "select_tool",
+    "assign_role",
+    "set_transcript_engine",
+    "open_project",
+    "select_clip_in_lane",
+}
+
+CUSTOM_TOOL_TITLES = {
+    "bridge_status": "Bridge Status",
+    "get_timeline_clips": "Get Timeline Clips",
+    "get_selected_clips": "Get Selected Clips",
+    "set_timeline_range": "Set Timeline Range",
+    "batch_export": "Batch Export Clips",
+    "verify_action": "Verify Timeline Action",
+    "call_method_with_args": "Call Method With Args",
+    "manage_handles": "Manage Object Handles",
+    "list_handles": "List Object Handles",
+    "inspect_handle": "Inspect Object Handle",
+    "release_handle": "Release Object Handle",
+    "release_all_handles": "Release All Handles",
+    "get_object_property": "Get Object Property",
+    "set_object_property": "Set Object Property",
+    "import_fcpxml": "Import FCPXML",
+    "generate_fcpxml": "Generate FCPXML",
+    "batch_timeline_actions": "Batch Timeline Actions",
+    "import_srt_as_markers": "Import SRT As Markers",
+    "blade_at_times": "Blade At Times",
+    "open_project": "Open Project",
+    "select_clip_in_lane": "Select Clip In Lane",
+    "capture_viewer": "Capture Viewer",
+    "export_xml": "Export FCPXML",
+    "is_library_updating": "Check Library Updating",
+    "search_methods": "Search Methods",
+    "raw_call": "Raw JSON-RPC Call",
+    "ai_command_gemma": "AI Command Gemma",
+    "delete_transcript_words": "Delete Transcript Words",
+    "move_transcript_words": "Move Transcript Words",
+    "close_transcript": "Close Transcript Panel",
+    "search_transcript": "Search Transcript",
+    "delete_transcript_silences": "Delete Transcript Silences",
+    "set_silence_threshold": "Set Silence Threshold",
+    "show_command_palette": "Show Command Palette",
+    "hide_command_palette": "Hide Command Palette",
+    "ai_command": "AI Command",
+    "execute_menu_command": "Execute Menu Command",
+    "get_inspector_properties": "Get Inspector Properties",
+    "set_inspector_property": "Set Inspector Property",
+    "get_title_text": "Get Title Text",
+    "toggle_panel": "Toggle Panel",
+    "get_playhead_position": "Get Playhead Position",
+    "detect_dialog": "Detect Dialog",
+    "click_dialog_button": "Click Dialog Button",
+    "fill_dialog_field": "Fill Dialog Field",
+    "toggle_dialog_checkbox": "Toggle Dialog Checkbox",
+    "select_dialog_popup": "Select Dialog Popup",
+    "dismiss_dialog": "Dismiss Dialog",
+    "get_viewer_zoom": "Get Viewer Zoom",
+    "set_viewer_zoom": "Set Viewer Zoom",
+    "get_bridge_options": "Get Bridge Options",
+    "set_bridge_option": "Set Bridge Option",
+    "set_bridge_option_value": "Set Bridge Option Value",
+    "detect_beats": "Detect Beats",
+    "flexmusic_list_songs": "List FlexMusic Songs",
+    "flexmusic_get_song": "Get FlexMusic Song",
+    "flexmusic_get_timing": "Get FlexMusic Timing",
+    "flexmusic_render_to_file": "Render FlexMusic To File",
+    "flexmusic_add_to_timeline": "Add FlexMusic To Timeline",
+    "montage_analyze_clips": "Analyze Montage Clips",
+    "montage_plan_edit": "Plan Montage Edit",
+    "montage_assemble": "Assemble Montage",
+    "montage_auto": "Auto Montage",
+    "debug_get_config": "Get Debug Config",
+    "debug_set_config": "Set Debug Config",
+    "debug_reset_config": "Reset Debug Config",
+    "debug_enable_preset": "Enable Debug Preset",
+    "debug_start_framerate_monitor": "Start Framerate Monitor",
+    "debug_stop_framerate_monitor": "Stop Framerate Monitor",
+    "dump_runtime_metadata": "Dump Runtime Metadata",
+    "list_loaded_images": "List Loaded Images",
+    "get_image_sections": "Get Image Sections",
+    "get_image_symbols": "Get Image Symbols",
+    "get_notification_names": "Get Notification Names",
+    "debug_trace_method": "Trace Method",
+    "debug_watch": "Watch Property Changes",
+    "debug_crash_handler": "Crash Handler",
+    "debug_eval": "Evaluate Debug Expression",
+    "debug_load_plugin": "Load Debug Plugin",
+    "debug_observe_notification": "Observe Notifications",
+    "direct_timeline_action": "Direct Timeline Action",
+    "browser_list_clips": "List Browser Clips",
+    "browser_append_clip": "Append Browser Clip",
+    "paste_fcpxml": "Paste FCPXML",
+    "stabilize_subject": "Stabilize Subject",
+    "insert_title": "Insert Title",
+    "set_transcript_engine": "Set Transcript Engine",
+    "open_captions": "Open Captions Panel",
+    "close_captions": "Close Captions Panel",
+    "get_caption_state": "Get Caption State",
+    "get_caption_styles": "Get Caption Styles",
+    "set_caption_style": "Set Caption Style",
+    "set_caption_grouping": "Set Caption Grouping",
+    "generate_captions": "Generate Captions",
+    "export_captions_srt": "Export Captions SRT",
+    "export_captions_txt": "Export Captions Text",
+    "set_caption_words": "Set Caption Words",
+    "generate_native_captions": "Generate Native Captions",
+    "verify_native_captions": "Verify Native Captions",
+    "mark_scene_changes": "Mark Scene Changes",
+    "blade_scene_changes": "Blade Scene Changes",
+    "timeline_navigation_action": "Timeline Navigation Action",
+    "timeline_edit_action": "Timeline Edit Action",
+    "timeline_destructive_action": "Timeline Destructive Action",
+    "history_action": "Timeline History Action",
+    "deploy_and_restart": "Deploy And Restart FCP",
+    "lua_execute": "Execute Lua Code",
+    "lua_execute_file": "Execute Lua File",
+    "lua_reset": "Reset Lua VM",
+    "lua_watch": "Watch Lua Files",
+    "lua_state": "Get Lua State",
+}
+
+TIMELINE_NAVIGATION_ACTIONS = {
+    "nextEdit", "previousEdit", "nextMarker", "previousMarker",
+    "nextKeyframe", "previousKeyframe",
+    "selectClipAtPlayhead", "selectToPlayhead", "selectAll", "deselectAll",
+    "showVideoAnimation", "showAudioAnimation", "soloAnimation",
+    "showTrackingEditor", "showCinematicEditor", "showMagneticMaskEditor",
+    "enableBeatDetection",
+    "showPrecisionEditor", "showAudioLanes", "expandSubroles",
+    "showDuplicateRanges", "showKeywordEditor", "togglePrecisionEditor",
+    "toggleSnapping", "toggleSkimming", "toggleClipSkimming",
+    "toggleAudioSkimming", "toggleInspector", "toggleTimeline",
+    "toggleTimelineIndex", "toggleInspectorHeight", "beatDetectionGrid",
+    "timelineScrolling", "enterFullScreen", "timelineHistoryBack",
+    "timelineHistoryForward", "zoomToFit", "zoomIn", "zoomOut",
+    "verticalZoomToFit", "zoomToSamples", "goToInspector", "goToTimeline",
+    "goToViewer", "goToColorBoard", "selectNextItem", "selectUpperItem",
+}
+
+TIMELINE_EDIT_ACTIONS = {
+    "addMarker", "addTodoMarker", "addChapterMarker", "addTransition",
+    "copy", "paste", "pasteAsConnected", "pasteEffects",
+    "pasteAttributes", "removeAttributes", "copyAttributes", "copyTimecode",
+    "connectToPrimaryStoryline", "insertEdit", "appendEdit", "insertGap",
+    "insertPlaceholder", "addAdjustmentClip", "addColorBoard", "addColorWheels",
+    "addColorCurves", "addColorAdjustment", "addHueSaturation",
+    "addEnhanceLightAndColor", "balanceColor", "matchColor",
+    "addMagneticMask", "smartConform", "adjustVolumeUp", "adjustVolumeDown",
+    "expandAudio", "expandAudioComponents", "addChannelEQ", "enhanceAudio",
+    "matchAudio", "detachAudio", "addBasicTitle", "addBasicLowerThird",
+    "addKeyframe",
+    "favorite", "reject", "unrate", "setRangeStart", "setRangeEnd",
+    "clearRange", "setClipRange", "solo", "disable", "createCompoundClip",
+    "autoReframe", "synchronizeClips", "openClip", "renameClip",
+    "addToSoloedClips", "referenceNewParentClip", "changeDuration",
+    "createStoryline", "liftFromPrimaryStoryline", "createAudition",
+    "finalizeAudition", "nextAuditionPick", "previousAuditionPick",
+    "addCaption", "createMulticamClip", "addKeywordGroup1", "addKeywordGroup2",
+    "addKeywordGroup3", "addKeywordGroup4", "addKeywordGroup5",
+    "addKeywordGroup6", "addKeywordGroup7", "nextColorEffect",
+    "previousColorEffect", "resetColorBoard", "toggleAllColorOff",
+    "alignAudioToVideo", "volumeMute", "addDefaultAudioEffect",
+    "addDefaultVideoEffect", "applyAudioFades", "makeClipsUnique",
+    "enableDisable", "transcodeMedia", "pasteAllAttributes", "duplicateProject", "snapshotProject",
+    "projectProperties", "libraryProperties", "consolidateEventMedia",
+    "mergeEvents", "renderSelection", "renderAll", "exportXML",
+    "shareSelection", "find", "findAndReplaceTitle", "revealInBrowser",
+    "revealProjectInBrowser", "revealInFinder", "analyzeAndFix",
+    "backgroundTasks", "recordVoiceover", "editRoles", "addVideoGenerator",
+}
+
+TIMELINE_DESTRUCTIVE_ACTIONS = {
+    "blade", "bladeAll", "deleteMarker", "deleteMarkersInSelection",
+    "delete", "cut", "replaceWithGap", "overwriteEdit", "trimToPlayhead",
+    "extendEditToPlayhead", "trimStart", "trimEnd", "joinClips", "nudgeLeft",
+    "nudgeRight", "nudgeUp", "nudgeDown", "retimeNormal", "retimeFast2x",
+    "retimeFast4x", "retimeFast8x", "retimeFast20x", "retimeSlow50",
+    "retimeSlow25", "retimeSlow10", "retimeReverse", "retimeHold",
+    "freezeFrame", "retimeBladeSpeed", "retimeSpeedRampToZero",
+    "retimeSpeedRampFromZero", "deleteKeyframes", "breakApartClipItems",
+    "removeEffects", "overwriteToPrimaryStoryline", "collapseToConnectedStoryline",
+    "splitCaption", "resolveOverlaps", "toggleSelectedEffectsOff",
+    "toggleDuplicateDetection", "insertEditAudio", "insertEditVideo",
+    "appendEditAudio", "appendEditVideo", "overwriteEditAudio",
+    "overwriteEditVideo", "connectEditAudio", "connectEditVideo",
+    "connectEditBacktimed", "avEditModeAudio", "avEditModeVideo",
+    "avEditModeBoth", "replaceFromStart", "replaceFromEnd", "replaceWhole",
+    "retimeCustomSpeed", "retimeInstantReplayHalf", "retimeInstantReplayQuarter",
+    "retimeReset", "retimeOpticalFlow", "retimeFrameBlending",
+    "retimeFloorFrame", "removeAllKeywords", "removeAnalysisKeywords",
+    "closeLibrary", "deleteGeneratedFiles", "moveToTrash", "hideClip",
+}
+
+TIMELINE_HISTORY_ACTIONS = {
+    "undo", "redo",
+}
+
+
+def _titleize_tool_name(name: str) -> str:
+    return " ".join(part.upper() if part in {"ai", "fcpxml", "srt"} else part.capitalize()
+                    for part in name.split("_"))
+
+
+def _tool_annotations(name: str) -> dict:
+    if name in READ_ONLY_TOOLS:
+        annotations = dict(READ_ONLY)
+    elif name in DESTRUCTIVE_TOOLS:
+        annotations = dict(DESTRUCTIVE_LOCAL_WRITE)
+    else:
+        annotations = dict(LOCAL_WRITE)
+
+    if name in IDEMPOTENT_LOCAL_WRITE_TOOLS:
+        annotations["idempotentHint"] = True
+
+    annotations["title"] = CUSTOM_TOOL_TITLES.get(name, _titleize_tool_name(name))
+    return annotations
+
+
+def _handle_management_response(action: str, handle: str = "") -> str:
+    if action == "list":
+        r = bridge.call("object.list")
+    elif action == "inspect" and handle:
+        r = bridge.call("object.get", handle=handle)
+    elif action == "release" and handle:
+        r = bridge.call("object.release", handle=handle)
+    elif action == "release_all":
+        r = bridge.call("object.release", all=True)
+    else:
+        return "Usage: manage_handles(action='list|inspect|release|release_all', handle='obj_N')"
+
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
 class BridgeConnection:
     """Persistent TCP connection to the SpliceKit JSON-RPC server inside FCP.
 
@@ -237,7 +612,7 @@ def _call_or_error(method: str, **params) -> str:
 # The first thing any client should do is call bridge_status() to
 # verify FCP is running and the bridge is responsive.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("bridge_status"))
 def bridge_status() -> str:
     """Check if SpliceKit is running and get FCP version info."""
     r = bridge.call("system.version")
@@ -252,9 +627,9 @@ def bridge_status() -> str:
 # These map directly to FCP's IBAction methods on the timeline module.
 # Most require a clip to be selected first (selectClipAtPlayhead).
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("timeline_action"))
 def timeline_action(action: str) -> str:
-    """Perform a timeline editing action via direct ObjC calls.
+    """Use this legacy catch-all tool when a timeline action does not fit the narrower action tools.
 
     Actions:
       Blade: blade, bladeAll
@@ -329,9 +704,53 @@ def timeline_action(action: str) -> str:
     return _call_or_error("timeline.action", action=action)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("timeline_navigation_action"))
+def timeline_navigation_action(action: str) -> str:
+    """Use this tool for non-destructive timeline navigation, selection, and view-state actions."""
+    if action not in TIMELINE_NAVIGATION_ACTIONS:
+        return (
+            f"Error: '{action}' is not a supported navigation action. "
+            "Use timeline_edit_action(), timeline_destructive_action(), history_action(), or legacy timeline_action()."
+        )
+    return _call_or_error("timeline.action", action=action)
+
+
+@mcp.tool(annotations=_tool_annotations("timeline_edit_action"))
+def timeline_edit_action(action: str) -> str:
+    """Use this tool for non-destructive timeline edits like markers, effects, titles, and range changes."""
+    if action not in TIMELINE_EDIT_ACTIONS:
+        return (
+            f"Error: '{action}' is not a supported non-destructive edit action. "
+            "Use timeline_navigation_action(), timeline_destructive_action(), history_action(), or legacy timeline_action()."
+        )
+    return _call_or_error("timeline.action", action=action)
+
+
+@mcp.tool(annotations=_tool_annotations("timeline_destructive_action"))
+def timeline_destructive_action(action: str) -> str:
+    """Use this tool for destructive timeline edits such as delete, cut, blade, replace, trim, and retime."""
+    if action not in TIMELINE_DESTRUCTIVE_ACTIONS:
+        return (
+            f"Error: '{action}' is not a supported destructive action. "
+            "Use timeline_navigation_action(), timeline_edit_action(), history_action(), or legacy timeline_action()."
+        )
+    return _call_or_error("timeline.action", action=action)
+
+
+@mcp.tool(annotations=_tool_annotations("history_action"))
+def history_action(action: str) -> str:
+    """Use this tool for timeline history operations that can undo or reapply prior edits."""
+    if action not in TIMELINE_HISTORY_ACTIONS:
+        return (
+            f"Error: '{action}' is not a supported history action. "
+            "Valid actions are: undo, redo."
+        )
+    return _call_or_error("timeline.action", action=action)
+
+
+@mcp.tool(annotations=_tool_annotations("playback_action"))
 def playback_action(action: str) -> str:
-    """Control playback via responder chain.
+    """Use this tool to move playback state without changing timeline content.
 
     Actions: playPause, goToStart, goToEnd, nextFrame, prevFrame,
              nextFrame10, prevFrame10, playAroundCurrent, playFromStart,
@@ -346,7 +765,7 @@ def playback_action(action: str) -> str:
     return _call_or_error("playback.action", action=action)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_playback_speed"))
 def set_playback_speed(rate: float = None, action: str = None) -> str:
     """Set playback speed to an exact rate, or use shuttle actions.
 
@@ -382,18 +801,21 @@ def set_playback_speed(rate: float = None, action: str = None) -> str:
     return "Error: provide either rate (float) or action (string)"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("detect_scene_changes"))
 def detect_scene_changes(threshold: float = 0.35, action: str = "detect", sample_interval: float = 0.1) -> str:
-    """Detect scene changes (cuts) in the timeline media using histogram analysis.
+    """Use this read-only tool to inspect scene changes before deciding whether to mark or blade them.
 
     Args:
         threshold: Sensitivity (0.0-1.0). Lower = more sensitive. Default 0.35.
-        action: "detect" (just list), "markers" (add markers at cuts), "blade" (blade at cuts)
+        action: Deprecated compatibility argument. Only "detect" is accepted here.
         sample_interval: Seconds between sampled frames. Default 0.1.
 
     Returns list of scene change timestamps with confidence scores.
     Uses GPU-style histogram comparison (same approach as FCP internally).
     """
+    if action != "detect":
+        return "Error: detect_scene_changes() is read-only. Use mark_scene_changes() or blade_scene_changes()."
+
     r = bridge.call("scene.detect", threshold=threshold, action=action, sampleInterval=sample_interval)
     if _err(r):
         return f"Error: {r.get('error', r)}"
@@ -408,9 +830,21 @@ def detect_scene_changes(threshold: float = 0.35, action: str = "detect", sample
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("mark_scene_changes"))
+def mark_scene_changes(threshold: float = 0.35, sample_interval: float = 0.1) -> str:
+    """Use this tool to add markers at detected scene changes without cutting the timeline."""
+    return _call_or_error("scene.detect", threshold=threshold, action="markers", sampleInterval=sample_interval)
+
+
+@mcp.tool(annotations=_tool_annotations("blade_scene_changes"))
+def blade_scene_changes(threshold: float = 0.35, sample_interval: float = 0.1) -> str:
+    """Use this tool to blade the timeline at detected scene changes."""
+    return _call_or_error("scene.detect", threshold=threshold, action="blade", sampleInterval=sample_interval)
+
+
+@mcp.tool(annotations=_tool_annotations("seek_to_time"))
 def seek_to_time(seconds: float) -> str:
-    """Move the playhead to an exact time instantly (no playback).
+    """Use this tool to jump the playhead to an exact time before another operation.
 
     Args:
         seconds: Time in seconds (e.g. 3.5 = 3 seconds 500ms)
@@ -427,7 +861,7 @@ def seek_to_time(seconds: float) -> str:
 # Read the timeline's current contents as structured data.
 # This is how the AI "sees" what's in the project.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_timeline_clips"))
 def get_timeline_clips(limit: int = 100) -> str:
     """Get structured list of all clips in the current timeline.
     Returns: sequence name, playhead time, duration, and for each item:
@@ -487,7 +921,7 @@ def get_timeline_clips(limit: int = 100) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_selected_clips"))
 def get_selected_clips() -> str:
     """Get only the currently selected clips in the timeline."""
     r = bridge.call("timeline.getDetailedState")
@@ -499,7 +933,7 @@ def get_selected_clips() -> str:
     return _fmt({"selectedCount": len(items), "items": items})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_timeline_range"))
 def set_timeline_range(start_seconds: float, end_seconds: float) -> str:
     """Set the timeline in/out range (mark in/out) to specific times in seconds.
     This positions the playhead and marks the range start and end points.
@@ -515,7 +949,7 @@ def set_timeline_range(start_seconds: float, end_seconds: float) -> str:
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("batch_export"))
 def batch_export(scope: str = "all", folder: str = "") -> str:
     """Batch export every clip from the active timeline as individual files.
     A folder picker appears once, then all clips are exported automatically
@@ -547,7 +981,7 @@ def batch_export(scope: str = "all", folder: str = "") -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("verify_action"))
 def verify_action(description: str = "") -> str:
     """Capture timeline state for before/after verification.
     Call before an action, then after, and compare the snapshots.
@@ -575,7 +1009,7 @@ def verify_action(description: str = "") -> str:
 # The swiss army knife — call any ObjC method on any object.
 # Use this when a specific tool doesn't exist for what you need.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("call_method_with_args"))
 def call_method_with_args(target: str, selector: str, args: str | list = "[]",
                           class_method: bool = True, return_handle: bool = False) -> str:
     """Call any ObjC method with typed arguments via NSInvocation.
@@ -640,9 +1074,9 @@ def call_method_with_args(target: str, selector: str, args: str | list = "[]",
 # across multiple tool calls. Think of handles as pointers that
 # survive between requests. Always release_all when you're done.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("manage_handles"))
 def manage_handles(action: str = "list", handle: str = "") -> str:
-    """Manage object handles stored by SpliceKit.
+    """Use this legacy handle-management tool when you need both inspection and release operations in one interface.
 
     Actions:
       list - show all active handles with class names
@@ -650,25 +1084,36 @@ def manage_handles(action: str = "list", handle: str = "") -> str:
       release <handle> - release a specific handle
       release_all - release all handles
     """
-    if action == "list":
-        r = bridge.call("object.list")
-    elif action == "inspect" and handle:
-        r = bridge.call("object.get", handle=handle)
-    elif action == "release" and handle:
-        r = bridge.call("object.release", handle=handle)
-    elif action == "release_all":
-        r = bridge.call("object.release", all=True)
-    else:
-        return "Usage: manage_handles(action='list|inspect|release|release_all', handle='obj_N')"
-
-    if _err(r):
-        return f"Error: {r.get('error', r)}"
-    return _fmt(r)
+    return _handle_management_response(action, handle)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("list_handles"))
+def list_handles() -> str:
+    """Use this tool to inspect the currently retained bridge object handles."""
+    return _handle_management_response("list")
+
+
+@mcp.tool(annotations=_tool_annotations("inspect_handle"))
+def inspect_handle(handle: str) -> str:
+    """Use this tool to inspect one retained bridge object handle."""
+    return _handle_management_response("inspect", handle)
+
+
+@mcp.tool(annotations=_tool_annotations("release_handle"))
+def release_handle(handle: str) -> str:
+    """Use this tool to release one retained bridge object handle when it is no longer needed."""
+    return _handle_management_response("release", handle)
+
+
+@mcp.tool(annotations=_tool_annotations("release_all_handles"))
+def release_all_handles() -> str:
+    """Use this tool to release every retained bridge object handle."""
+    return _handle_management_response("release_all")
+
+
+@mcp.tool(annotations=_tool_annotations("get_object_property"))
 def get_object_property(handle: str, key: str, return_handle: bool = False) -> str:
-    """Read a property from an object handle using Key-Value Coding.
+    """Use this tool to inspect one property on a retained Objective-C object handle.
 
     handle: object handle ID (e.g. "obj_3")
     key: property name (e.g. "displayName", "duration", "containedItems")
@@ -682,7 +1127,7 @@ def get_object_property(handle: str, key: str, return_handle: bool = False) -> s
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_object_property"))
 def set_object_property(handle: str, key: str, value: str, value_type: str = "string") -> str:
     """Set a property on an object handle using Key-Value Coding.
 
@@ -714,7 +1159,7 @@ def set_object_property(handle: str, key: str, value: str, value_type: str = "st
 # generate it programmatically and import it to create complex
 # timelines without clicking through FCP's UI.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("import_fcpxml"))
 def import_fcpxml(xml: str, internal: bool = True) -> str:
     """Import FCPXML into FCP. If internal=True, uses PEAppController's import method
     (imports into the running instance without restart). If internal=False, opens via NSWorkspace.
@@ -726,7 +1171,7 @@ def import_fcpxml(xml: str, internal: bool = True) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("generate_fcpxml"))
 def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "SpliceKit Project",
                     frame_rate: str = "24", width: int = 1920, height: int = 1080,
                     items: str = "[]") -> str:
@@ -857,7 +1302,7 @@ def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "Sp
 # ============================================================
 # Tools for inspecting and applying effects on clips.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_clip_effects"))
 def get_clip_effects(handle: str = "") -> str:
     """Get the effects applied to a clip. If no handle provided, uses the first selected clip.
     Returns effect names, IDs, classes, and handles for further inspection.
@@ -887,7 +1332,7 @@ def get_clip_effects(handle: str = "") -> str:
 # Lets the AI chain many small edits in one round-trip instead
 # of making a separate tool call for each step.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("batch_timeline_actions"))
 def batch_timeline_actions(actions: str) -> str:
     """Execute multiple timeline/playback actions in sequence.
     Much more efficient than calling individual tools.
@@ -944,7 +1389,7 @@ def batch_timeline_actions(actions: str) -> str:
 # Computes statistics the AI can use to understand the timeline
 # before suggesting edits (pacing, flash frames, etc).
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("analyze_timeline"))
 def analyze_timeline() -> str:
     """Analyze the current timeline: duration, clip count, pacing stats,
     potential issues (short clips, gaps). Returns a structured report.
@@ -1023,7 +1468,7 @@ def analyze_timeline() -> str:
 # Bulk marker placement. The bridge handles seeking internally
 # so we don't have to move the playhead for each marker.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("add_markers_at_times"))
 def add_markers_at_times(markers: str) -> str:
     """Add multiple markers at specific times in a single batch call.
     Much faster than seeking + adding markers one at a time.
@@ -1053,7 +1498,7 @@ def add_markers_at_times(markers: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("blade_at_times"))
 def blade_at_times(times: str) -> str:
     """Blade (cut) the timeline at multiple specific times in a single batch call.
     Much faster than seeking + blading one at a time.
@@ -1083,7 +1528,7 @@ def blade_at_times(times: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("import_srt_as_markers"))
 def import_srt_as_markers(srt_content: str) -> str:
     """Import SRT subtitle content as markers in the current timeline.
     Each subtitle becomes a standard marker at the corresponding timecode.
@@ -1142,7 +1587,7 @@ def import_srt_as_markers(srt_content: str) -> str:
 # ============================================================
 # Thin wrappers around FCP's FFLibraryDocument class methods.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_active_libraries"))
 def get_active_libraries() -> str:
     """Get list of currently open libraries in FCP."""
     r = bridge.call("system.callMethodWithArgs", target="FFLibraryDocument",
@@ -1152,7 +1597,7 @@ def get_active_libraries() -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("is_library_updating"))
 def is_library_updating() -> str:
     """Check if any library is currently being updated/saved."""
     r = bridge.call("system.callMethod", className="FFLibraryDocument",
@@ -1168,7 +1613,7 @@ def is_library_updating() -> str:
 # Reverse-engineering tools — enumerate classes, explore methods,
 # inspect the class hierarchy. Use these to discover new APIs.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_classes"))
 def get_classes(filter: str = "") -> str:
     """List ObjC classes loaded in FCP's process.
     Common prefixes: FF (Flexo), OZ (Ozone), PE (ProEditor), LK (LunaKit), TK (TimelineKit), IX (Interchange).
@@ -1183,7 +1628,7 @@ def get_classes(filter: str = "") -> str:
     return f"Found {count} classes:\n" + "\n".join(classes)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_methods"))
 def get_methods(class_name: str, include_super: bool = False) -> str:
     """List all methods on an ObjC class with type encodings."""
     r = bridge.call("system.getMethods", className=class_name, includeSuper=include_super)
@@ -1201,7 +1646,7 @@ def get_methods(class_name: str, include_super: bool = False) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_properties"))
 def get_properties(class_name: str) -> str:
     """List declared @property definitions on an ObjC class."""
     r = bridge.call("system.getProperties", className=class_name)
@@ -1213,7 +1658,7 @@ def get_properties(class_name: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_ivars"))
 def get_ivars(class_name: str) -> str:
     """List instance variables of an ObjC class with their types."""
     r = bridge.call("system.getIvars", className=class_name)
@@ -1225,7 +1670,7 @@ def get_ivars(class_name: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_protocols"))
 def get_protocols(class_name: str) -> str:
     """List protocols adopted by an ObjC class."""
     r = bridge.call("system.getProtocols", className=class_name)
@@ -1234,7 +1679,7 @@ def get_protocols(class_name: str) -> str:
     return f"{class_name}: {r.get('count', 0)} protocols\n" + "\n".join(f"  {p}" for p in r.get("protocols", []))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_superchain"))
 def get_superchain(class_name: str) -> str:
     """Get the inheritance chain for an ObjC class."""
     r = bridge.call("system.getSuperchain", className=class_name)
@@ -1243,7 +1688,7 @@ def get_superchain(class_name: str) -> str:
     return " -> ".join(r.get("superchain", []))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("explore_class"))
 def explore_class(class_name: str) -> str:
     """Comprehensive overview of an ObjC class: inheritance, protocols, properties, ivars, key methods."""
     lines = [f"=== {class_name} ===\n"]
@@ -1283,7 +1728,7 @@ def explore_class(class_name: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("search_methods"))
 def search_methods(class_name: str, keyword: str) -> str:
     """Search for methods on a class by keyword."""
     r = bridge.call("system.getMethods", className=class_name)
@@ -1303,7 +1748,7 @@ def search_methods(class_name: str, keyword: str) -> str:
 
 # -- Low-level escape hatches for arbitrary ObjC calls --
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("call_method"))
 def call_method(class_name: str, selector: str, class_method: bool = True) -> str:
     """Call a zero-argument ObjC method. For methods WITH arguments, use call_method_with_args instead."""
     r = bridge.call("system.callMethod", className=class_name, selector=selector, classMethod=class_method)
@@ -1312,7 +1757,7 @@ def call_method(class_name: str, selector: str, class_method: bool = True) -> st
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("raw_call"))
 def raw_call(method: str, params: str = "{}") -> str:
     """Send a raw JSON-RPC call to SpliceKit. Last resort when no other tool fits."""
     try:
@@ -1330,7 +1775,7 @@ def raw_call(method: str, params: str = "{}") -> str:
 # editing the text. Delete words to remove video segments,
 # drag words to reorder clips.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("open_transcript"))
 def open_transcript(file_url: str = "") -> str:
     """Open the transcript panel and start transcribing.
 
@@ -1353,7 +1798,7 @@ def open_transcript(file_url: str = "") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_transcript"))
 def get_transcript() -> str:
     """Get the current transcript state, including all words with timestamps, speakers, and silences.
 
@@ -1409,7 +1854,7 @@ def get_transcript() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("delete_transcript_words"))
 def delete_transcript_words(start_index: int, count: int) -> str:
     """Delete words from the transcript, which removes the corresponding video segments.
 
@@ -1431,7 +1876,7 @@ def delete_transcript_words(start_index: int, count: int) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("move_transcript_words"))
 def move_transcript_words(start_index: int, count: int, dest_index: int) -> str:
     """Move words in the transcript to a new position, which reorders clips on the timeline.
 
@@ -1454,7 +1899,7 @@ def move_transcript_words(start_index: int, count: int, dest_index: int) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("close_transcript"))
 def close_transcript() -> str:
     """Close the transcript panel."""
     r = bridge.call("transcript.close")
@@ -1463,7 +1908,7 @@ def close_transcript() -> str:
     return "Transcript panel closed."
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("search_transcript"))
 def search_transcript(query: str) -> str:
     """Search the transcript for text or special keywords.
 
@@ -1492,7 +1937,7 @@ def search_transcript(query: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("delete_transcript_silences"))
 def delete_transcript_silences(min_duration: float = 0.0) -> str:
     """Delete all detected silences/pauses from the timeline.
 
@@ -1517,7 +1962,7 @@ def delete_transcript_silences(min_duration: float = 0.0) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_transcript_speaker"))
 def set_transcript_speaker(start_index: int, count: int, speaker: str) -> str:
     """Assign a speaker name to a range of words in the transcript.
 
@@ -1534,7 +1979,7 @@ def set_transcript_speaker(start_index: int, count: int, speaker: str) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_silence_threshold"))
 def set_silence_threshold(threshold: float) -> str:
     """Set the minimum gap duration (seconds) to detect as a silence/pause.
 
@@ -1556,7 +2001,7 @@ def set_silence_threshold(threshold: float) -> str:
 # Enumerate FCP's installed effects and apply them to clips.
 # FCP organizes effects by type (filter, generator, title, audio).
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("list_effects"))
 def list_effects(type: str = "filter", filter: str = "") -> str:
     """List available effects in FCP by type.
 
@@ -1592,7 +2037,7 @@ def list_effects(type: str = "filter", filter: str = "") -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("apply_effect"))
 def apply_effect(name: str = "", effectID: str = "") -> str:
     """Apply a video effect, generator, or title to the selected clip(s).
 
@@ -1627,7 +2072,7 @@ def apply_effect(name: str = "", effectID: str = "") -> str:
 # FCP has 376+ built-in transitions. These tools enumerate them
 # and apply them at edit points (between adjacent clips).
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("list_transitions"))
 def list_transitions(filter: str = "") -> str:
     """List all available video transitions installed in FCP.
 
@@ -1664,7 +2109,7 @@ def list_transitions(filter: str = "") -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("apply_transition"))
 def apply_transition(name: str = "", effectID: str = "", freeze_extend: bool = True) -> str:
     """Apply a specific transition at the current edit point.
 
@@ -1710,7 +2155,7 @@ def apply_transition(name: str = "", effectID: str = "", freeze_extend: bool = T
 # can also pipe queries through Apple Intelligence for natural
 # language editing commands.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("show_command_palette"))
 def show_command_palette() -> str:
     """Open the command palette inside FCP.
     The palette provides quick access to all FCP actions via fuzzy search,
@@ -1723,7 +2168,7 @@ def show_command_palette() -> str:
     return "Command palette opened."
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("hide_command_palette"))
 def hide_command_palette() -> str:
     """Close the command palette."""
     r = bridge.call("command.hide")
@@ -1732,7 +2177,7 @@ def hide_command_palette() -> str:
     return "Command palette closed."
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("search_commands"))
 def search_commands(query: str, limit: int = 20) -> str:
     """Search available FCP commands by name, keyword, or category.
 
@@ -1759,7 +2204,7 @@ def search_commands(query: str, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("execute_command"))
 def execute_command(action: str, type: str = "timeline") -> str:
     """Execute a command from the palette by action name.
 
@@ -1775,7 +2220,7 @@ def execute_command(action: str, type: str = "timeline") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("ai_command"))
 def ai_command(query: str) -> str:
     """Use Apple Intelligence (on-device LLM) to interpret a natural language
     editing instruction and execute the appropriate FCP actions.
@@ -1868,7 +2313,7 @@ def ai_command(query: str) -> str:
     return f"AI executed {len(actions)} action(s):\n" + "\n".join(results)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("ai_command_gemma"))
 def ai_command_gemma(query: str, model: str = "unsloth/gemma-4-E4B-it-UD-MLX-4bit") -> str:
     """Use Gemma 4 (via MLX on Apple Silicon) for agentic natural language editing.
     Unlike ai_command which uses a fixed action schema, this runs a multi-turn
@@ -1891,7 +2336,7 @@ def ai_command_gemma(query: str, model: str = "unsloth/gemma-4-E4B-it-UD-MLX-4bi
 # Fallback for anything that doesn't have a dedicated tool.
 # Walks FCP's NSMenu hierarchy by title to reach any menu item.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("execute_menu_command"))
 def execute_menu_command(menu_path: list[str]) -> str:
     """Execute ANY FCP menu command by navigating the menu bar hierarchy.
 
@@ -1909,7 +2354,7 @@ def execute_menu_command(menu_path: list[str]) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("list_menus"))
 def list_menus(menu: str = "", depth: int = 2) -> str:
     """List FCP menu items to discover available commands.
 
@@ -1935,7 +2380,7 @@ def list_menus(menu: str = "", depth: int = 2) -> str:
 # Reads/writes FCP's internal effect parameter channels directly,
 # bypassing the inspector UI. Works on transform, compositing, audio, crop.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_inspector_properties"))
 def get_inspector_properties(property: str = "all") -> str:
     """Read properties of the selected clip from the inspector.
 
@@ -1958,7 +2403,7 @@ def get_inspector_properties(property: str = "all") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_inspector_property"))
 def set_inspector_property(property: str, value: float | str | bool) -> str:
     """Set a property on the selected clip's effect parameters.
 
@@ -1986,7 +2431,7 @@ def set_inspector_property(property: str, value: float | str | bool) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_title_text"))
 def get_title_text() -> str:
     """Read text content, font, and size from the selected Motion title clip.
 
@@ -2005,7 +2450,7 @@ def get_title_text() -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("verify_captions"))
 def verify_captions() -> str:
     """Verify that generated captions rendered correctly on the timeline.
 
@@ -2027,7 +2472,7 @@ def verify_captions() -> str:
 # ============================================================
 # Show/hide FCP's various panels and viewers.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("toggle_panel"))
 def toggle_panel(panel: str) -> str:
     """Show or hide a panel/viewer in the FCP interface.
 
@@ -2047,7 +2492,7 @@ def toggle_panel(panel: str) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_workspace"))
 def set_workspace(workspace: str) -> str:
     """Switch to a predefined workspace layout.
 
@@ -2065,7 +2510,7 @@ def set_workspace(workspace: str) -> str:
 # ============================================================
 # Switch the active editing tool (blade, trim, range, etc).
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("select_tool"))
 def select_tool(tool: str) -> str:
     """Switch to a specific editing tool.
 
@@ -2085,7 +2530,7 @@ def select_tool(tool: str) -> str:
 # Roles control how clips appear in the timeline index and
 # how they're grouped during export (e.g. separate Dialogue/Music stems).
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("assign_role"))
 def assign_role(type: str, role: str) -> str:
     """Assign a role to the selected clip.
 
@@ -2104,7 +2549,7 @@ def assign_role(type: str, role: str) -> str:
 # ============================================================
 # Triggers FCP's share destinations (Export File, YouTube, etc).
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("share_project"))
 def share_project(destination: str = "") -> str:
     """Share/export the project using a specific or default destination.
 
@@ -2127,7 +2572,7 @@ def share_project(destination: str = "") -> str:
 # ============================================================
 # Create new projects, events, and libraries via FCP's internal APIs.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("create_project"))
 def create_project() -> str:
     """Open the New Project dialog in FCP."""
     r = bridge.call("project.create")
@@ -2136,7 +2581,7 @@ def create_project() -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("create_event"))
 def create_event() -> str:
     """Create a new event in the current library."""
     r = bridge.call("project.createEvent")
@@ -2145,7 +2590,7 @@ def create_event() -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("create_library"))
 def create_library() -> str:
     """Open the New Library dialog."""
     r = bridge.call("project.createLibrary")
@@ -2160,7 +2605,7 @@ def create_library() -> str:
 # Find a sequence by name (and optionally event) and load it
 # into the editor — no manual handle navigation required.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("open_project"))
 def open_project(name: str, event: str = "") -> str:
     """Open a project/sequence by name, loading it into the timeline editor.
 
@@ -2192,7 +2637,7 @@ def open_project(name: str, event: str = "") -> str:
 # The standard selectClipAtPlayhead only selects the primary
 # storyline clip. This tool selects clips in any lane.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("select_clip_in_lane"))
 def select_clip_in_lane(lane: int = 1) -> str:
     """Select the clip at the playhead in a specific lane (connected storyline).
 
@@ -2221,7 +2666,7 @@ def select_clip_in_lane(lane: int = 1) -> str:
 # Captures the viewer/canvas contents directly — no external
 # screencapture tool needed, no other windows in the way.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("capture_viewer"))
 def capture_viewer(path: str = "/tmp/splicekit_viewer.png") -> str:
     """Capture the FCP viewer contents as a PNG image.
 
@@ -2251,7 +2696,7 @@ def capture_viewer(path: str = "/tmp/splicekit_viewer.png") -> str:
 # ============================================================
 # Export the current project to FCPXML without the save dialog.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("export_xml"))
 def export_xml(path: str = "/tmp/splicekit_export.fcpxml") -> str:
     """Export the current project/sequence as FCPXML to a file — no save dialog.
 
@@ -2282,7 +2727,7 @@ def export_xml(path: str = "/tmp/splicekit_export.fcpxml") -> str:
 # One-shot command to build, deploy, re-sign, kill FCP, relaunch,
 # and wait for the bridge to come back online.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("deploy_and_restart"))
 def deploy_and_restart(skip_build: bool = False) -> str:
     """Build SpliceKit, deploy to the modded FCP app, and restart FCP.
 
@@ -2374,7 +2819,7 @@ def deploy_and_restart(skip_build: bool = False) -> str:
 # ============================================================
 # Query current playhead position, frame rate, and play state.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_playhead_position"))
 def get_playhead_position() -> str:
     """Get the current playhead position, timeline duration, frame rate, and playing state.
 
@@ -2400,7 +2845,7 @@ def get_playhead_position() -> str:
 # export, missing media, etc). These tools detect and interact with
 # them so the AI can handle dialogs without human intervention.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("detect_dialog"))
 def detect_dialog() -> str:
     """Detect if any dialog, sheet, alert, or popup is currently showing in FCP.
 
@@ -2421,7 +2866,7 @@ def detect_dialog() -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("click_dialog_button"))
 def click_dialog_button(button: str = "", index: int = -1) -> str:
     """Click a button in the currently showing dialog/sheet/alert.
 
@@ -2444,7 +2889,7 @@ def click_dialog_button(button: str = "", index: int = -1) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("fill_dialog_field"))
 def fill_dialog_field(value: str, index: int = 0) -> str:
     """Fill a text field in the currently showing dialog.
 
@@ -2460,7 +2905,7 @@ def fill_dialog_field(value: str, index: int = 0) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("toggle_dialog_checkbox"))
 def toggle_dialog_checkbox(checkbox: str, checked: bool = None) -> str:
     """Toggle or set a checkbox in the currently showing dialog.
 
@@ -2479,7 +2924,7 @@ def toggle_dialog_checkbox(checkbox: str, checked: bool = None) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("select_dialog_popup"))
 def select_dialog_popup(select: str, popup_index: int = 0) -> str:
     """Select an item from a popup menu in the currently showing dialog.
 
@@ -2495,7 +2940,7 @@ def select_dialog_popup(select: str, popup_index: int = 0) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("dismiss_dialog"))
 def dismiss_dialog(action: str = "default") -> str:
     """Dismiss the currently showing dialog.
 
@@ -2519,7 +2964,7 @@ def dismiss_dialog(action: str = "default") -> str:
 # ============================================================
 # Get/set the canvas zoom level. 0.0 = fit-to-window.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_viewer_zoom"))
 def get_viewer_zoom() -> str:
     """Get the current viewer zoom level.
 
@@ -2532,7 +2977,7 @@ def get_viewer_zoom() -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_viewer_zoom"))
 def set_viewer_zoom(zoom: float) -> str:
     """Set the viewer zoom level to any value.
 
@@ -2552,7 +2997,7 @@ def set_viewer_zoom(zoom: float) -> str:
 # ============================================================
 # Runtime configuration for SpliceKit's own behavioral tweaks.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_bridge_options"))
 def get_bridge_options() -> str:
     """Get the current SpliceKit option settings.
 
@@ -2566,7 +3011,7 @@ def get_bridge_options() -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_bridge_option"))
 def set_bridge_option(option: str, enabled: bool) -> str:
     """Toggle a boolean SpliceKit option.
 
@@ -2585,7 +3030,7 @@ def set_bridge_option(option: str, enabled: bool) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_bridge_option_value"))
 def set_bridge_option_value(option: str, value: str) -> str:
     """Set a string-valued SpliceKit option.
 
@@ -2610,7 +3055,7 @@ def set_bridge_option_value(option: str, value: str) -> str:
 # deadlocks inside FCP's hardened runtime). Returns beat/bar/section
 # timestamps for syncing video cuts to music.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("detect_beats"))
 def detect_beats(file_path: str, sensitivity: float = 0.5, min_bpm: float = 60.0, max_bpm: float = 200.0) -> str:
     """Detect beats, bars, and sections in any audio file (MP3, WAV, M4A, etc.).
 
@@ -2664,7 +3109,7 @@ def detect_beats(file_path: str, sensitivity: float = 0.5, min_bpm: float = 60.0
 # FCP's built-in AI music engine. Songs can stretch/shrink to
 # any duration by rearranging their musical sections dynamically.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("flexmusic_list_songs"))
 def flexmusic_list_songs(filter: str = "") -> str:
     """List available FlexMusic songs that can dynamically fit any project duration.
 
@@ -2680,7 +3125,7 @@ def flexmusic_list_songs(filter: str = "") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("flexmusic_get_song"))
 def flexmusic_get_song(song_uid: str) -> str:
     """Get detailed info about a specific FlexMusic song.
 
@@ -2696,7 +3141,7 @@ def flexmusic_get_song(song_uid: str) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("flexmusic_get_timing"))
 def flexmusic_get_timing(song_uid: str, duration_seconds: float) -> str:
     """Get beat, bar, and section timing for a FlexMusic song fitted to a specific duration.
 
@@ -2717,7 +3162,7 @@ def flexmusic_get_timing(song_uid: str, duration_seconds: float) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("flexmusic_render_to_file"))
 def flexmusic_render_to_file(song_uid: str, duration_seconds: float, output_path: str, format: str = "m4a") -> str:
     """Render a FlexMusic song fitted to a specific duration as an audio file.
 
@@ -2737,7 +3182,7 @@ def flexmusic_render_to_file(song_uid: str, duration_seconds: float, output_path
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("flexmusic_add_to_timeline"))
 def flexmusic_add_to_timeline(song_uid: str, duration_seconds: float = 0) -> str:
     """Add a FlexMusic song to the current timeline as background music.
 
@@ -2762,7 +3207,7 @@ def flexmusic_add_to_timeline(song_uid: str, duration_seconds: float = 0) -> str
 # -> assemble a montage timeline. Can run as individual steps
 # or as a single montage_auto() call.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("montage_analyze_clips"))
 def montage_analyze_clips(event_name: str = "") -> str:
     """Analyze clips in the browser for montage creation.
 
@@ -2779,7 +3224,7 @@ def montage_analyze_clips(event_name: str = "") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("montage_plan_edit"))
 def montage_plan_edit(beats: str, clips: str, style: str = "bar", total_duration: float = 0) -> str:
     """Create an edit decision list (EDL) that maps clips to musical beats.
 
@@ -2804,7 +3249,7 @@ def montage_plan_edit(beats: str, clips: str, style: str = "bar", total_duration
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("montage_assemble"))
 def montage_assemble(edit_plan: str, project_name: str = "Montage", song_file: str = "") -> str:
     """Assemble a montage on the timeline from an edit plan.
 
@@ -2827,7 +3272,7 @@ def montage_assemble(edit_plan: str, project_name: str = "Montage", song_file: s
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("montage_auto"))
 def montage_auto(song_uid: str = "", event_name: str = "", style: str = "bar", project_name: str = "Montage") -> str:
     """One-shot automatic montage creation.
 
@@ -2857,7 +3302,7 @@ def montage_auto(song_uid: str = "", event_name: str = "", style: str = "bar", p
 # ProAppSupport logging, CFPreferences keys) and SpliceKit's own
 # debugging toolkit (breakpoints, tracing, eval, crash handling).
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_get_config"))
 def debug_get_config() -> str:
     """Get current state of all FCP internal debug/logging settings.
 
@@ -2875,7 +3320,7 @@ def debug_get_config() -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_set_config"))
 def debug_set_config(key: str, value: str = "true") -> str:
     """Set a single FCP internal debug/logging flag.
 
@@ -2943,7 +3388,7 @@ def debug_set_config(key: str, value: str = "true") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_reset_config"))
 def debug_reset_config(scope: str = "all") -> str:
     """Reset debug/logging settings to defaults.
 
@@ -2960,7 +3405,7 @@ def debug_reset_config(scope: str = "all") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_enable_preset"))
 def debug_enable_preset(preset: str) -> str:
     """Enable a preset group of debug settings.
 
@@ -2984,7 +3429,7 @@ def debug_enable_preset(preset: str) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_start_framerate_monitor"))
 def debug_start_framerate_monitor(interval: float = 2.0) -> str:
     """Start FCP's built-in HMD framerate monitor.
 
@@ -3002,7 +3447,7 @@ def debug_start_framerate_monitor(interval: float = 2.0) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_stop_framerate_monitor"))
 def debug_stop_framerate_monitor() -> str:
     """Stop the HMD framerate monitor."""
     r = bridge.call("debug.stopFramerateMonitor")
@@ -3013,7 +3458,7 @@ def debug_stop_framerate_monitor() -> str:
 
 # -- Runtime metadata export (for reverse engineering / IDA Pro) --
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("dump_runtime_metadata"))
 def dump_runtime_metadata(binary: str = "", classes_only: bool = False) -> str:
     """Bulk-export ObjC runtime metadata from a running FCP process for IDA Pro import.
 
@@ -3036,7 +3481,7 @@ def dump_runtime_metadata(binary: str = "", classes_only: bool = False) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("list_loaded_images"))
 def list_loaded_images(filter: str = "") -> str:
     """List all Mach-O images loaded in FCP's process with base addresses and ASLR slides.
 
@@ -3055,7 +3500,7 @@ def list_loaded_images(filter: str = "") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_image_sections"))
 def get_image_sections(binary: str) -> str:
     """Get ObjC section data for a loaded binary: selector refs, class refs, superclass refs.
 
@@ -3072,7 +3517,7 @@ def get_image_sections(binary: str) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_image_symbols"))
 def get_image_symbols(binary: str, filter: str = "", demangle: bool = True) -> str:
     """Get exported symbols from a loaded binary's symbol table.
 
@@ -3095,7 +3540,7 @@ def get_image_symbols(binary: str, filter: str = "", demangle: bool = True) -> s
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_notification_names"))
 def get_notification_names(binary: str = "") -> str:
     """Enumerate NSNotification name constants from exported symbols.
 
@@ -3121,7 +3566,7 @@ def get_notification_names(binary: str = "") -> str:
 # True breakpoints that freeze FCP mid-execution. The JSON-RPC server
 # stays alive on a background thread so you can inspect state while paused.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_breakpoint"))
 def debug_breakpoint(action: str = "list", class_name: str = "", selector: str = "",
                      condition: str = "", hit_count: int = 0, one_shot: bool = False,
                      key_path: str = "", store_result: bool = False,
@@ -3191,7 +3636,7 @@ def debug_breakpoint(action: str = "list", class_name: str = "", selector: str =
 # Non-blocking alternative to breakpoints. Swizzles methods to log calls
 # without pausing. Good for understanding call patterns and frequencies.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_trace_method"))
 def debug_trace_method(action: str = "list", class_name: str = "", selector: str = "",
                        log_stack: bool = False, log_args: bool = True,
                        limit: int = 50, class_method: bool = False) -> str:
@@ -3244,7 +3689,7 @@ def debug_trace_method(action: str = "list", class_name: str = "", selector: str
 # Uses ObjC Key-Value Observing to fire events whenever a property changes.
 # Replaces hardware watchpoints -- works on any KVO-compliant property.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_watch"))
 def debug_watch(action: str = "list", handle: str = "", class_name: str = "",
                 key_path: str = "", watch_key: str = "") -> str:
     """Watch ObjC property changes via KVO (Key-Value Observing).
@@ -3283,7 +3728,7 @@ def debug_watch(action: str = "list", handle: str = "", class_name: str = "",
 # Catches NSExceptions and Unix signals before the process dies,
 # so you get a stack trace instead of a silent crash.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_crash_handler"))
 def debug_crash_handler(action: str = "install") -> str:
     """Install or query the in-process crash handler.
 
@@ -3309,7 +3754,7 @@ def debug_crash_handler(action: str = "install") -> str:
 # ---------------------------------------------------------------------------
 # Lists all ~45 threads in FCP's process with CPU usage via Mach APIs.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_threads"))
 def debug_threads(detailed: bool = False) -> str:
     """List all threads in FCP's process with CPU usage and state.
 
@@ -3336,7 +3781,7 @@ def debug_threads(detailed: bool = False) -> str:
 # ---------------------------------------------------------------------------
 # Like lldb's `po` command. Walks ObjC property chains at runtime.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_eval"))
 def debug_eval(expression: str = "", chain: str = "", target: str = "",
                store_result: bool = False) -> str:
     """Evaluate ObjC property chains inside FCP's process.
@@ -3378,7 +3823,7 @@ def debug_eval(expression: str = "", chain: str = "", target: str = "",
 # ---------------------------------------------------------------------------
 # dlopen/dlclose for live-patching FCP without restarting.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_load_plugin"))
 def debug_load_plugin(action: str = "list", path: str = "") -> str:
     """Dynamically load or unload code in FCP's running process.
 
@@ -3415,7 +3860,7 @@ def debug_load_plugin(action: str = "list", path: str = "") -> str:
 # Subscribe to NSNotificationCenter events. FCP posts 337+ named
 # notifications internally -- this lets you see them in real time.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("debug_observe_notification"))
 def debug_observe_notification(action: str = "list", name: str = "",
                                log_object: bool = False) -> str:
     """Subscribe to FCP's internal NSNotification events.
@@ -3460,7 +3905,7 @@ def debug_observe_notification(action: str = "list", name: str = "",
 # real parameters (rates, durations, flags, etc). More powerful but
 # requires knowing which parameters each action needs.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("direct_timeline_action"))
 def direct_timeline_action(action: str = "", selector: str = "",
                            rate: float = 0, ripple: bool = False,
                            allow_variable_speed: bool = True,
@@ -3624,31 +4069,7 @@ def direct_timeline_action(action: str = "", selector: str = "",
 # ---------------------------------------------------------------------------
 
 
-# This is the bridge-side beat detection (delegates to the dylib).
-# The earlier detect_beats() runs an external subprocess instead.
-@mcp.tool()
-def detect_beats(file_path: str, sensitivity: float = 0.5,
-                 min_bpm: int = 0, max_bpm: int = 0) -> str:
-    """Detect beats, bars, sections, and BPM in an audio file.
-
-    Runs the beat-detector tool externally (FCP's hardened runtime prevents
-    in-process audio file access). Build first:
-        swiftc -O -o build/beat-detector tools/beat-detector.swift
-
-    Args:
-        file_path: Path to audio file (mp3, wav, aif, etc.)
-        sensitivity: Detection sensitivity 0.0-1.0 (higher = more beats)
-        min_bpm: Minimum BPM to consider (0 = auto)
-        max_bpm: Maximum BPM to consider (0 = auto)
-    """
-    r = bridge.call("beats.detect", file_path=file_path,
-                    sensitivity=sensitivity, min_bpm=min_bpm, max_bpm=max_bpm)
-    if _err(r):
-        return f"Error: {r.get('error', r)}"
-    return _fmt(r)
-
-
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("browser_list_clips"))
 def browser_list_clips(event: str = "") -> str:
     """List clips in the FCP browser (media library).
 
@@ -3667,7 +4088,7 @@ def browser_list_clips(event: str = "") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("browser_append_clip"))
 def browser_append_clip(handle: str = "", index: int = -1, name: str = "") -> str:
     """Append a clip from the browser to the timeline.
 
@@ -3691,7 +4112,7 @@ def browser_append_clip(handle: str = "", index: int = -1, name: str = "") -> st
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("paste_fcpxml"))
 def paste_fcpxml(xml: str = "") -> str:
     """Import FCPXML content via the pasteboard (no file I/O, no dialogs).
 
@@ -3710,23 +4131,7 @@ def paste_fcpxml(xml: str = "") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
-def seek_to_time(seconds: float) -> str:
-    """Jump the playhead to an exact time in seconds.
-
-    Faster and more precise than stepping frames. Uses CMTime internally
-    with the timeline's native timescale for frame-accurate positioning.
-
-    Args:
-        seconds: Time in seconds (e.g. 3.5 for 3.5 seconds in)
-    """
-    r = bridge.call("playback.seekToTime", seconds=seconds)
-    if _err(r):
-        return f"Error: {r.get('error', r)}"
-    return _fmt(r)
-
-
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("stabilize_subject"))
 def stabilize_subject() -> str:
     """Stabilize the selected clip around a tracked subject.
 
@@ -3743,7 +4148,7 @@ def stabilize_subject() -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("insert_title"))
 def insert_title(name: str = "", effect_id: str = "") -> str:
     """Insert a title or generator into the timeline.
 
@@ -3765,7 +4170,7 @@ def insert_title(name: str = "", effect_id: str = "") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_transcript_engine"))
 def set_transcript_engine(engine: str) -> str:
     """Set the speech recognition engine for transcript panel.
 
@@ -3789,7 +4194,7 @@ def set_transcript_engine(engine: str) -> str:
 # FCPXML title elements and imports via pasteboard.
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("open_captions"))
 def open_captions(file_url: str = "", style: str = "") -> str:
     """Open the social captions panel and start transcribing the timeline.
 
@@ -3816,7 +4221,7 @@ def open_captions(file_url: str = "", style: str = "") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("close_captions"))
 def close_captions() -> str:
     """Close the social captions panel."""
     r = bridge.call("captions.close")
@@ -3825,7 +4230,7 @@ def close_captions() -> str:
     return "Captions panel closed."
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_caption_state"))
 def get_caption_state() -> str:
     """Get the current caption panel state.
 
@@ -3859,7 +4264,7 @@ def get_caption_state() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("get_caption_styles"))
 def get_caption_styles() -> str:
     """List all available caption style presets.
 
@@ -3881,7 +4286,7 @@ def get_caption_styles() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_caption_style"))
 def set_caption_style(preset_id: str = "", font: str = "", font_size: float = 0,
                       text_color: str = "", highlight_color: str = "",
                       outline_color: str = "", outline_width: float = -1,
@@ -3933,7 +4338,7 @@ def set_caption_style(preset_id: str = "", font: str = "", font_size: float = 0,
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_caption_grouping"))
 def set_caption_grouping(mode: str = "social", max_words: int = 3,
                          max_chars: int = 20, max_seconds: float = 3.0) -> str:
     """Configure how words are grouped into caption segments.
@@ -3954,7 +4359,7 @@ def set_caption_grouping(mode: str = "social", max_words: int = 3,
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("generate_captions"))
 def generate_captions(style: str = "", position: str = "center",
                       animation: str = "pop", word_highlight: bool = True,
                       max_words: int = 3, all_caps: bool = True) -> str:
@@ -4001,7 +4406,7 @@ def generate_captions(style: str = "", position: str = "center",
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("export_captions_srt"))
 def export_captions_srt(path: str) -> str:
     """Export the current captions as an SRT subtitle file.
 
@@ -4016,7 +4421,7 @@ def export_captions_srt(path: str) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("export_captions_txt"))
 def export_captions_txt(path: str) -> str:
     """Export the current captions as plain text.
 
@@ -4029,7 +4434,7 @@ def export_captions_txt(path: str) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("set_caption_words"))
 def set_caption_words(words: str) -> str:
     """Manually set caption words with timing (bypasses transcription).
 
@@ -4057,7 +4462,7 @@ def set_caption_words(words: str) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("generate_native_captions"))
 def generate_native_captions(grouping: str = "word", language: str = "en",
                               max_words: int = 1, max_seconds: float = 3.0,
                               format: str = "ITT") -> str:
@@ -4100,7 +4505,7 @@ def generate_native_captions(grouping: str = "word", language: str = "en",
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("verify_native_captions"))
 def verify_native_captions() -> str:
     """Verify native captions on the current timeline.
 
@@ -4117,7 +4522,7 @@ def verify_native_captions() -> str:
 # ── Lua Scripting ────────────────────────────────────────────────────────────
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("lua_execute"))
 def lua_execute(code: str) -> str:
     """Execute Lua code in SpliceKit's embedded Lua 5.4 VM running inside FCP.
 
@@ -4146,7 +4551,7 @@ def lua_execute(code: str) -> str:
     return "\n".join(parts) if parts else "ok"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("lua_execute_file"))
 def lua_execute_file(path: str) -> str:
     """Execute a Lua script file in SpliceKit's VM.
 
@@ -4169,7 +4574,7 @@ def lua_execute_file(path: str) -> str:
     return "\n".join(parts) if parts else "ok"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("lua_reset"))
 def lua_reset() -> str:
     """Reset the Lua VM. All state (variables, loaded modules) is cleared and the sk module is re-registered."""
     r = bridge.call("lua.reset")
@@ -4178,7 +4583,7 @@ def lua_reset() -> str:
     return "Lua VM reset"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("lua_watch"))
 def lua_watch(action: str = "list", path: str = "") -> str:
     """Manage Lua file watching for live coding.
 
@@ -4196,7 +4601,7 @@ def lua_watch(action: str = "list", path: str = "") -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("lua_state"))
 def lua_state() -> str:
     """Get Lua VM state: memory usage, user-defined globals, watched paths, scripts directory."""
     r = bridge.call("lua.getState")

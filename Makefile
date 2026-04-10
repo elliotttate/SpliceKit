@@ -46,22 +46,25 @@ all: $(OUTPUT)
 
 tools: $(SILENCE_DETECTOR)
 
-$(SILENCE_DETECTOR): tools/silence-detector.swift
+$(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/lua: | $(BUILD_DIR)
+	@mkdir -p $(BUILD_DIR)/lua
+
+$(SILENCE_DETECTOR): tools/silence-detector.swift | $(BUILD_DIR)
 	swiftc -O -suppress-warnings -o $(SILENCE_DETECTOR) tools/silence-detector.swift
 	@echo "Built: $(SILENCE_DETECTOR)"
 
 # Lua static library — compiled as C (no -fobjc-arc)
-$(BUILD_DIR)/lua/%.o: $(LUA_DIR)/%.c
-	@mkdir -p $(BUILD_DIR)/lua
+$(BUILD_DIR)/lua/%.o: $(LUA_DIR)/%.c | $(BUILD_DIR)/lua
 	$(CC) $(ARCHS) $(MIN_VERSION) -DLUA_USE_MACOSX -O2 -Wall -c $< -o $@
 
-$(LUA_LIB): $(LUA_OBJS)
+$(LUA_LIB): $(LUA_OBJS) | $(BUILD_DIR)
 	libtool -static -o $@ $^
 	@echo "Built: $(LUA_LIB)"
 
-$(OUTPUT): $(SOURCES) Sources/SpliceKit.h $(LUA_LIB)
-	@mkdir -p $(BUILD_DIR)
+$(OUTPUT): $(SOURCES) Sources/SpliceKit.h $(LUA_LIB) | $(BUILD_DIR)
 	$(CC) $(ARCHS) $(MIN_VERSION) $(FRAMEWORKS) $(OBJC_FLAGS) $(LINKER_FLAGS) \
 		$(INSTALL_NAME) -I Sources -I $(LUA_DIR) \
 		$(SOURCES) $(LUA_LIB) -o $(OUTPUT)
