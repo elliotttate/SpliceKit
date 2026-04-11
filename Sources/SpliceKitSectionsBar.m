@@ -671,36 +671,61 @@ typedef NS_ENUM(NSInteger, SBDragMode) {
     SpliceKitSection *leftNeighbor = (dragIdx > 0) ? _sections[dragIdx - 1] : nil;
     SpliceKitSection *rightNeighbor = (dragIdx + 1 < _sections.count) ? _sections[dragIdx + 1] : nil;
 
+    BOOL cmdHeld = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
+
     if (_dragMode == SBDragModeEdgeRight) {
-        // Dragging the right edge of _dragSection.
-        // This is a shared boundary: _dragSection.endTime == rightNeighbor.startTime.
-        // Moving it RIGHT: _dragSection grows, rightNeighbor shrinks.
-        // Moving it LEFT: _dragSection shrinks, rightNeighbor grows.
-        // Clamp so neither section goes below minDur.
         double clampedTime = newTime;
         clampedTime = MAX(clampedTime, _dragSection.startTime + minDur);
-        if (rightNeighbor) {
-            clampedTime = MIN(clampedTime, rightNeighbor.endTime - minDur);
-        }
-        _dragSection.endTime = clampedTime;
-        if (rightNeighbor) {
-            rightNeighbor.startTime = clampedTime;
+
+        if (cmdHeld) {
+            // Command+drag: push ALL sections to the right, preserving their durations.
+            // The dragged section grows/shrinks, everything after shifts.
+            double delta = clampedTime - _dragSection.endTime;
+            _dragSection.endTime = clampedTime;
+            for (NSUInteger i = dragIdx + 1; i < _sections.count; i++) {
+                double dur = _sections[i].endTime - _sections[i].startTime;
+                _sections[i].startTime += delta;
+                _sections[i].endTime = _sections[i].startTime + dur;
+            }
+        } else {
+            // Normal drag: resize shared boundary (neighbor shrinks/grows).
+            if (rightNeighbor) {
+                clampedTime = MIN(clampedTime, rightNeighbor.endTime - minDur);
+            }
+            _dragSection.endTime = clampedTime;
+            if (rightNeighbor) {
+                rightNeighbor.startTime = clampedTime;
+            }
         }
 
     } else if (_dragMode == SBDragModeEdgeLeft) {
-        // Dragging the left edge of _dragSection.
-        // This is a shared boundary: leftNeighbor.endTime == _dragSection.startTime.
-        // Moving it LEFT: _dragSection grows, leftNeighbor shrinks.
-        // Moving it RIGHT: _dragSection shrinks, leftNeighbor grows.
         double clampedTime = newTime;
         clampedTime = MIN(clampedTime, _dragSection.endTime - minDur);
-        if (leftNeighbor) {
-            clampedTime = MAX(clampedTime, leftNeighbor.startTime + minDur);
-        }
         if (clampedTime < 0) clampedTime = 0;
-        _dragSection.startTime = clampedTime;
-        if (leftNeighbor) {
-            leftNeighbor.endTime = clampedTime;
+
+        if (cmdHeld) {
+            // Command+drag: push ALL sections to the left, preserving their durations.
+            double delta = clampedTime - _dragSection.startTime;
+            _dragSection.startTime = clampedTime;
+            for (NSInteger i = (NSInteger)dragIdx - 1; i >= 0; i--) {
+                double dur = _sections[i].endTime - _sections[i].startTime;
+                _sections[i].endTime += delta;
+                _sections[i].startTime = _sections[i].endTime - dur;
+                if (_sections[i].startTime < 0) {
+                    _sections[i].startTime = 0;
+                    _sections[i].endTime = dur;
+                }
+            }
+        } else {
+            // Normal drag: resize shared boundary.
+            if (leftNeighbor) {
+                clampedTime = MAX(clampedTime, leftNeighbor.startTime + minDur);
+            }
+            if (clampedTime < 0) clampedTime = 0;
+            _dragSection.startTime = clampedTime;
+            if (leftNeighbor) {
+                leftNeighbor.endTime = clampedTime;
+            }
         }
 
     }
