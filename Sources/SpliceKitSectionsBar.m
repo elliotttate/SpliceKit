@@ -335,10 +335,15 @@ typedef NS_ENUM(NSInteger, SBDragMode) {
             CGContextRestoreGState(cgCtx);
         }
 
-        // Label
+        // Label (clipped to section bounds so text never overflows)
         if (width > 20) {
             CGFloat textY = (bounds.size.height - 13) / 2;
-            [sec.label drawAtPoint:NSMakePoint(x1 + 6, textY) withAttributes:labelAttrs];
+            NSRect textRect = NSMakeRect(x1 + 6, textY, width - 12, 14);
+            NSMutableDictionary *clippedAttrs = [labelAttrs mutableCopy];
+            NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
+            ps.lineBreakMode = NSLineBreakByTruncatingTail;
+            clippedAttrs[NSParagraphStyleAttributeName] = ps;
+            [sec.label drawInRect:textRect withAttributes:clippedAttrs];
         }
 
         // Draw edge drag handles (thin bright lines at section edges)
@@ -947,7 +952,9 @@ typedef NS_ENUM(NSInteger, SBDragMode) {
         NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
         input.stringValue = self->_clickedSection.label;
         alert.accessoryView = input;
+        [alert layout];
         [alert.window makeFirstResponder:input];
+        [input selectText:nil];
         if ([alert runModal] == NSAlertFirstButtonReturn) {
             NSString *newName = input.stringValue;
             if (newName.length > 0) {
@@ -971,36 +978,19 @@ typedef NS_ENUM(NSInteger, SBDragMode) {
 }
 
 - (void)addSectionAtClick:(NSMenuItem *)sender {
-    double clickTime = [sender.representedObject doubleValue];
-    if (clickTime < 0) clickTime = 0;
+    // New sections always snap to the end of the last existing section
+    // (or start at 0 if no sections exist). Default duration is 10 seconds.
+    double snapStart = 0;
+    double snapEnd = 10.0;
 
-    // Magnetic snap: if click is near the end of an existing section, snap to it
-    double snapStart = clickTime;
-    double snapEnd = clickTime + 10.0;
-
-    // Sort existing sections by start time for proper snapping
-    NSArray *sorted = [_sections sortedArrayUsingComparator:^NSComparisonResult(SpliceKitSection *a, SpliceKitSection *b) {
-        return a.startTime < b.startTime ? NSOrderedAscending : NSOrderedDescending;
-    }];
-
-    // Snap start to the nearest preceding section's end (magnetic join)
-    for (SpliceKitSection *existing in sorted) {
-        if (existing.endTime <= clickTime + 0.5 && existing.endTime >= clickTime - 0.5) {
-            snapStart = existing.endTime;  // Snap start to previous section's end
-            break;
-        }
+    if (_sections.count > 0) {
+        // Sort and find the end of the last section
+        [_sections sortUsingComparator:^NSComparisonResult(SpliceKitSection *a, SpliceKitSection *b) {
+            return a.startTime < b.startTime ? NSOrderedAscending : NSOrderedDescending;
+        }];
+        snapStart = _sections.lastObject.endTime;
+        snapEnd = snapStart + 10.0;
     }
-
-    // Snap end to the nearest following section's start
-    for (SpliceKitSection *existing in sorted) {
-        if (existing.startTime > snapStart + 0.1) {
-            snapEnd = existing.startTime;  // Snap end to next section's start
-            break;
-        }
-    }
-
-    // If no following section, default to +10 seconds
-    if (snapEnd <= snapStart) snapEnd = snapStart + 10.0;
 
     dispatch_async(dispatch_get_main_queue(), ^{
         NSAlert *alert = [[NSAlert alloc] init];
@@ -1012,7 +1002,9 @@ typedef NS_ENUM(NSInteger, SBDragMode) {
         NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
         input.stringValue = @"New Section";
         alert.accessoryView = input;
+        [alert layout];
         [alert.window makeFirstResponder:input];
+        [input selectText:nil];
         if ([alert runModal] == NSAlertFirstButtonReturn) {
             NSString *name = input.stringValue;
             if (name.length == 0) name = @"Section";
