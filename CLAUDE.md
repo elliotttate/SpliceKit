@@ -30,7 +30,9 @@ rather than simulating the keyboard shortcut.
 2. open_project("My Project")         -- open a project by name
 3. get_timeline_clips()               -- see timeline contents
 4. timeline_action("blade")           -- edit
-5. verify_action("after blade")       -- confirm
+5. verify_action("after blade")       -- confirm state changed
+6. capture_timeline()                 -- visually verify the timeline
+7. capture_viewer()                   -- visually verify the viewer/canvas
 ```
 
 ## CRITICAL: Must Know Before Editing
@@ -380,14 +382,31 @@ get_selected_clips()                 # get only selected clips in timeline
 seek_to_time(3.5)                    # jump to 3.5 seconds instantly (faster than stepping)
 ```
 
-## Viewer Control
+## Screenshots & Visual Verification
+
+Use `capture_viewer()` and `capture_timeline()` to take screenshots of FCP without
+bringing it to the foreground. These capture GPU/Metal content directly — no `screencapture`
+needed. The resulting PNGs can be read by Claude to visually verify edits.
+
+**When to use:**
+- After applying effects, color corrections, titles, or captions → `capture_viewer()`
+- After blade cuts, rearranging clips, adding markers, or any timeline edit → `capture_timeline()`
+- When debugging layout issues (clip positions, gaps, transitions) → `capture_timeline()`
+- When verifying text rendering (font, size, position) → `capture_viewer()`
+
+```
+capture_viewer()                     # screenshot viewer to /tmp/splicekit_viewer.png
+capture_viewer(path="/tmp/check.png") # screenshot to custom path
+capture_timeline()                   # screenshot timeline to /tmp/splicekit_timeline.png
+capture_timeline(path="/tmp/tl.png") # screenshot to custom path
+```
+
+## Viewer Zoom
 ```
 get_viewer_zoom()                    # current zoom level (0.0=Fit, 1.0=100%, 2.0=200%)
 set_viewer_zoom(0.0)                 # fit to window
 set_viewer_zoom(1.0)                 # 100%
 set_viewer_zoom(2.0)                 # 200% — any float value accepted
-capture_viewer()                     # screenshot viewer to /tmp/splicekit_viewer.png
-capture_viewer(path="/tmp/check.png") # screenshot to custom path
 ```
 
 ## Export FCPXML (No Dialog)

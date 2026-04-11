@@ -1035,6 +1035,253 @@ static int sk_index(lua_State *L) {
 }
 
 // ============================================================================
+#pragma mark - Plugin Registration from Lua
+// ============================================================================
+
+// Track Lua function refs for registered plugin methods so we can clean up
+static NSMutableDictionary<NSString *, NSNumber *> *sLuaPluginRefs = nil;
+
+// sk.register("methodName", handler_function, optional_metadata_table)
+// Registers a JSON-RPC method backed by a Lua function.
+// If _PLUGIN_ID is set, the method is namespaced as "pluginId.methodName".
+static int sk_register_method(lua_State *L) {
+    const char *name = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+
+    // Read optional metadata table (arg 3)
+    NSDictionary *metadata = nil;
+    if (lua_istable(L, 3)) {
+        metadata = SpliceKitLua_toNSDictionary(L, 3);
+    }
+
+    // Determine fully-qualified method name using _PLUGIN_ID if set
+    lua_getglobal(L, "_PLUGIN_ID");
+    NSString *pluginId = nil;
+    if (lua_isstring(L, -1)) {
+        pluginId = @(lua_tostring(L, -1));
+    }
+    lua_pop(L, 1);
+
+    NSString *fullMethod;
+    if (pluginId && pluginId.length > 0) {
+        fullMethod = [NSString stringWithFormat:@"%@.%s", pluginId, name];
+    } else {
+        fullMethod = @(name);
+    }
+
+    // Store the Lua function as a registry reference
+    lua_pushvalue(L, 2);
+    int funcRef = luaL_ref(L, LUA_REGISTRYINDEX);
+
+    // Track the ref for cleanup
+    if (!sLuaPluginRefs) sLuaPluginRefs = [NSMutableDictionary dictionary];
+    // If re-registering, release old ref
+    NSNumber *oldRef = sLuaPluginRefs[fullMethod];
+    if (oldRef) {
+        luaL_unref(L, LUA_REGISTRYINDEX, [oldRef intValue]);
+    }
+    sLuaPluginRefs[fullMethod] = @(funcRef);
+
+    // Capture what we need for the handler block
+    NSString *capturedMethod = [fullMethod copy];
+    int capturedRef = funcRef;
+
+    // Create a handler block that marshals NSDictionary → Lua table → NSDictionary
+    SpliceKitMethodHandler handler = ^NSDictionary *(NSDictionary *params) {
+        __block NSDictionary *result = nil;
+        dispatch_sync(sLuaQueue, ^{
+            lua_State *Ls = sLuaState;
+            if (!Ls) {
+                result = @{@"error": @"Lua VM not initialized"};
+                return;
+            }
+
+            // Push the stored function
+            lua_rawgeti(Ls, LUA_REGISTRYINDEX, capturedRef);
+            if (!lua_isfunction(Ls, -1)) {
+                lua_pop(Ls, 1);
+                result = @{@"error": [NSString stringWithFormat:
+                    @"Plugin method '%@' handler is no longer valid", capturedMethod]};
+                return;
+            }
+
+            // Push params as Lua table
+            SpliceKitLua_pushValue(Ls, params ?: @{});
+
+            // Install timeout hook
+            sExecutionStartTime = [NSDate date];
+            lua_sethook(Ls, SpliceKitLua_timeoutHook,
+                        LUA_MASKCOUNT, 100000);
+
+            // Call the function
+            int status = lua_pcall(Ls, 1, 1, 0);
+
+            // Clear timeout hook
+            lua_sethook(Ls, NULL, 0, 0);
+            sExecutionStartTime = nil;
+
+            if (status != LUA_OK) {
+                const char *err = lua_tostring(Ls, -1);
+                result = @{@"error": @(err ?: "unknown Lua error")};
+                lua_pop(Ls, 1);
+                return;
+            }
+
+            // Convert return value to NSDictionary
+            if (lua_istable(Ls, -1)) {
+                result = SpliceKitLua_toNSDictionary(Ls, -1) ?: @{};
+            } else if (lua_isstring(Ls, -1)) {
+                result = @{@"result": @(lua_tostring(Ls, -1))};
+            } else if (lua_isnumber(Ls, -1)) {
+                result = @{@"result": @(lua_tonumber(Ls, -1))};
+            } else if (lua_isboolean(Ls, -1)) {
+                result = @{@"result": @(lua_toboolean(Ls, -1))};
+            } else if (lua_isnil(Ls, -1)) {
+                result = @{@"status": @"ok"};
+            } else {
+                result = @{@"status": @"ok"};
+            }
+            lua_pop(Ls, 1);
+        });
+        return result;
+    };
+
+    // Enrich metadata with plugin info
+    NSMutableDictionary *enrichedMeta = [NSMutableDictionary dictionary];
+    if (metadata) [enrichedMeta addEntriesFromDictionary:metadata];
+    if (pluginId) enrichedMeta[@"pluginId"] = pluginId;
+    enrichedMeta[@"shortName"] = @(name);
+
+    SpliceKit_registerPluginMethod(fullMethod, handler, enrichedMeta);
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// sk.unregister("methodName")
+// Removes a previously registered plugin method.
+static int sk_unregister_method(lua_State *L) {
+    const char *name = luaL_checkstring(L, 1);
+
+    // Determine fully-qualified name
+    lua_getglobal(L, "_PLUGIN_ID");
+    NSString *pluginId = nil;
+    if (lua_isstring(L, -1)) {
+        pluginId = @(lua_tostring(L, -1));
+    }
+    lua_pop(L, 1);
+
+    NSString *fullMethod;
+    if (pluginId && pluginId.length > 0) {
+        fullMethod = [NSString stringWithFormat:@"%@.%s", pluginId, name];
+    } else {
+        fullMethod = @(name);
+    }
+
+    // Release Lua function ref
+    NSNumber *ref = sLuaPluginRefs[fullMethod];
+    if (ref) {
+        luaL_unref(L, LUA_REGISTRYINDEX, [ref intValue]);
+        [sLuaPluginRefs removeObjectForKey:fullMethod];
+    }
+
+    SpliceKit_unregisterPluginMethod(fullMethod);
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// sk.plugin_data_path() — returns writable data directory for the current plugin
+static int sk_plugin_data_path(lua_State *L) {
+    lua_getglobal(L, "_PLUGIN_ID");
+    NSString *pluginId = nil;
+    if (lua_isstring(L, -1)) {
+        pluginId = @(lua_tostring(L, -1));
+    }
+    lua_pop(L, 1);
+
+    if (!pluginId || pluginId.length == 0) {
+        // Fallback to generic plugin data directory
+        NSString *appSupport = [NSSearchPathForDirectoriesInDomains(
+            NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *dataPath = [appSupport stringByAppendingPathComponent:@"SpliceKit/plugins/_default/data"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:dataPath
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+        lua_pushstring(L, [dataPath UTF8String]);
+        return 1;
+    }
+
+    NSString *appSupport = [NSSearchPathForDirectoriesInDomains(
+        NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+    NSString *dataPath = [appSupport stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"SpliceKit/plugins/%@/data", pluginId]];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dataPath
+                              withIntermediateDirectories:YES attributes:nil error:nil];
+    lua_pushstring(L, [dataPath UTF8String]);
+    return 1;
+}
+
+// sk.get_config("key") — read a plugin-scoped NSUserDefaults value
+static int sk_get_config(lua_State *L) {
+    const char *key = luaL_checkstring(L, 1);
+
+    lua_getglobal(L, "_PLUGIN_ID");
+    NSString *pluginId = nil;
+    if (lua_isstring(L, -1)) {
+        pluginId = @(lua_tostring(L, -1));
+    }
+    lua_pop(L, 1);
+
+    NSString *fullKey;
+    if (pluginId && pluginId.length > 0) {
+        fullKey = [NSString stringWithFormat:@"SpliceKitPlugin.%@.%s", pluginId, key];
+    } else {
+        fullKey = [NSString stringWithFormat:@"SpliceKitPlugin.%s", key];
+    }
+
+    id value = [[NSUserDefaults standardUserDefaults] objectForKey:fullKey];
+    if (value) {
+        SpliceKitLua_pushValue(L, value);
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+// sk.set_config("key", value) — write a plugin-scoped NSUserDefaults value
+static int sk_set_config(lua_State *L) {
+    const char *key = luaL_checkstring(L, 1);
+
+    lua_getglobal(L, "_PLUGIN_ID");
+    NSString *pluginId = nil;
+    if (lua_isstring(L, -1)) {
+        pluginId = @(lua_tostring(L, -1));
+    }
+    lua_pop(L, 1);
+
+    NSString *fullKey;
+    if (pluginId && pluginId.length > 0) {
+        fullKey = [NSString stringWithFormat:@"SpliceKitPlugin.%@.%s", pluginId, key];
+    } else {
+        fullKey = [NSString stringWithFormat:@"SpliceKitPlugin.%s", key];
+    }
+
+    if (lua_isnil(L, 2)) {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:fullKey];
+    } else {
+        id value = SpliceKitLua_toObjC(L, 2);
+        if (value && ![value isKindOfClass:[NSNull class]]) {
+            [[NSUserDefaults standardUserDefaults] setObject:value forKey:fullKey];
+        } else {
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:fullKey];
+        }
+    }
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// ============================================================================
 #pragma mark - sk Module Registration
 // ============================================================================
 
@@ -1078,6 +1325,13 @@ static const luaL_Reg sk_functions[] = {
     {"alert",           sk_alert},
     {"toast",           sk_toast},
     {"prompt",          sk_prompt},
+
+    // Plugin registration
+    {"register",        sk_register_method},
+    {"unregister",      sk_unregister_method},
+    {"plugin_data_path", sk_plugin_data_path},
+    {"get_config",      sk_get_config},
+    {"set_config",      sk_set_config},
 
     {NULL, NULL}
 };

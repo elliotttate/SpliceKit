@@ -77,6 +77,16 @@ void SpliceKit_releaseHandle(NSString *handleId);
 void SpliceKit_releaseAllHandles(void);
 NSDictionary *SpliceKit_listHandles(void);
 
+#pragma mark - Plugin Method Registry
+
+// Plugins (Lua or native) register JSON-RPC methods here. The dispatch
+// fallthrough in SpliceKit_handleRequest checks these before returning
+// "method not found", so plugin methods are callable identically to built-in ones.
+typedef NSDictionary *(^SpliceKitMethodHandler)(NSDictionary *params);
+void SpliceKit_registerPluginMethod(NSString *method, SpliceKitMethodHandler handler, NSDictionary *metadata);
+void SpliceKit_unregisterPluginMethod(NSString *method);
+void SpliceKit_registerPluginManifest(NSString *pluginId, NSDictionary *manifest);
+
 #pragma mark - Server
 
 // Starts the TCP listener on port 9876 and the Unix domain socket.
@@ -199,5 +209,30 @@ extern Class SpliceKit_FFPlayer;
 extern Class SpliceKit_FFActionContext;
 extern Class SpliceKit_PEAppController;            // app delegate — entry point for most things
 extern Class SpliceKit_PEDocument;
+
+#pragma mark - Timeline Module
+
+// Get the active FFAnchoredTimelineModule. Returns nil if no project is open.
+id SpliceKit_getActiveTimelineModule(void);
+
+#pragma mark - Sections Bar
+
+// Custom NSView injected into FCP's timeline showing color-coded song structure.
+NSDictionary *SpliceKit_handleSectionsShow(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsHide(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsAdd(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsRemove(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsSetColor(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsGet(NSDictionary *params);
+
+#pragma mark - Structure Blocks
+
+// Color-coded section blocks above the timeline (verse/chorus/bridge/etc.).
+// Creates a connected storyline of labeled title clips from song structure data.
+void SpliceKit_installStructureBlockContextMenu(void);
+NSDictionary *SpliceKit_handleStructureGenerateBlocks(NSDictionary *params);
+NSDictionary *SpliceKit_handleStructureGenerateCaptions(NSDictionary *params);
+NSDictionary *SpliceKit_handleStructureRemove(NSDictionary *params);
+NSDictionary *SpliceKit_handleStructureToggle(NSDictionary *params);
 
 #endif /* SpliceKit_h */

@@ -73,6 +73,8 @@ class MCPToolAnnotationTests(unittest.TestCase):
 
     def test_split_tools_are_registered(self):
         expected = {
+            "background_render_status",
+            "background_render_control",
             "mark_scene_changes",
             "blade_scene_changes",
             "history_action",
@@ -89,6 +91,8 @@ class MCPToolAnnotationTests(unittest.TestCase):
     def test_key_annotation_profiles_match_expected_behavior(self):
         checks = {
             "detect_scene_changes": {"readOnlyHint": True, "destructiveHint": False},
+            "background_render_status": {"readOnlyHint": True, "destructiveHint": False},
+            "background_render_control": {"readOnlyHint": False, "destructiveHint": False},
             "mark_scene_changes": {"readOnlyHint": False, "destructiveHint": False},
             "blade_scene_changes": {"readOnlyHint": False, "destructiveHint": True},
             "timeline_action": {"readOnlyHint": False, "destructiveHint": True},
@@ -122,6 +126,26 @@ class MCPToolAnnotationTests(unittest.TestCase):
             [
                 ("scene.detect", {"threshold": 0.2, "action": "markers", "sampleInterval": 0.25}),
                 ("scene.detect", {"threshold": 0.5, "action": "blade", "sampleInterval": 0.1}),
+            ],
+        )
+
+    def test_background_render_wrappers_forward_expected_bridge_calls(self):
+        calls = []
+
+        def fake_call(method, **params):
+            calls.append((method, params))
+            return {"method": method, "params": params}
+
+        self.module.bridge.call = fake_call
+
+        self.module.background_render_status()
+        self.module.background_render_control("hold_off", 2.5)
+
+        self.assertEqual(
+            calls,
+            [
+                ("backgroundRender.status", {}),
+                ("backgroundRender.control", {"action": "hold_off", "seconds": 2.5}),
             ],
         )
 
@@ -188,6 +212,10 @@ class MCPToolAnnotationTests(unittest.TestCase):
     def test_history_actions_are_rejected_by_non_destructive_split(self):
         result = self.module.timeline_edit_action("undo")
         self.assertIn("history_action()", result)
+
+    def test_background_render_control_rejects_invalid_inputs(self):
+        self.assertIn("action must be", self.module.background_render_control("pause", 1.0))
+        self.assertIn("seconds must be > 0", self.module.background_render_control("hold_off", 0))
 
 
 if __name__ == "__main__":

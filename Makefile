@@ -17,8 +17,11 @@ SOURCES = Sources/SpliceKit.m \
           Sources/SpliceKitCaptionPanel.m \
           Sources/SpliceKitCommandPalette.m \
           Sources/SpliceKitDebugUI.m \
+          Sources/SpliceKitStructureBlocks.m \
+          Sources/SpliceKitSectionsBar.m \
           Sources/SpliceKitLua.m \
-          Sources/SpliceKitLuaPanel.m
+          Sources/SpliceKitLuaPanel.m \
+          Sources/SpliceKitPlugins.m
 
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)/SpliceKit
@@ -37,6 +40,7 @@ FW_DIR = $(MODDED_APP)/Contents/Frameworks/SpliceKit.framework
 ENTITLEMENTS = entitlements.plist
 
 SILENCE_DETECTOR = $(BUILD_DIR)/silence-detector
+STRUCTURE_ANALYZER = $(BUILD_DIR)/structure-analyzer
 TOOLS_DIR = $(HOME)/Applications/SpliceKit/tools
 PARAKEET_PKG_DIR = patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber
 PARAKEET_RELEASE_BIN = $(PARAKEET_PKG_DIR)/.build/release/parakeet-transcriber
@@ -46,7 +50,7 @@ PARAKEET_DEBUG_BIN = $(PARAKEET_PKG_DIR)/.build/debug/parakeet-transcriber
 
 all: $(OUTPUT)
 
-tools: $(SILENCE_DETECTOR)
+tools: $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER)
 
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
@@ -57,6 +61,10 @@ $(BUILD_DIR)/lua: | $(BUILD_DIR)
 $(SILENCE_DETECTOR): tools/silence-detector.swift | $(BUILD_DIR)
 	swiftc -O -suppress-warnings -o $(SILENCE_DETECTOR) tools/silence-detector.swift
 	@echo "Built: $(SILENCE_DETECTOR)"
+
+$(STRUCTURE_ANALYZER): tools/structure-analyzer.swift | $(BUILD_DIR)
+	swiftc -O -suppress-warnings -o $(STRUCTURE_ANALYZER) tools/structure-analyzer.swift
+	@echo "Built: $(STRUCTURE_ANALYZER)"
 
 # Lua static library — compiled as C (no -fobjc-arc)
 $(BUILD_DIR)/lua/%.o: $(LUA_DIR)/%.c | $(BUILD_DIR)/lua
@@ -76,7 +84,7 @@ $(OUTPUT): $(SOURCES) Sources/SpliceKit.h $(LUA_LIB) | $(BUILD_DIR)
 clean:
 	rm -rf $(BUILD_DIR)
 
-deploy: $(OUTPUT) $(SILENCE_DETECTOR)
+deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER)
 	@echo "=== Deploying SpliceKit to modded FCP ==="
 	@mkdir -p "$(FW_DIR)/Versions/A/Resources"
 	cp $(OUTPUT) "$(FW_DIR)/Versions/A/SpliceKit"
@@ -93,6 +101,7 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 	@# Deploy tools
 	@mkdir -p "$(TOOLS_DIR)"
 	@cp $(SILENCE_DETECTOR) "$(TOOLS_DIR)/silence-detector" 2>/dev/null || true
+	@cp $(STRUCTURE_ANALYZER) "$(TOOLS_DIR)/structure-analyzer" 2>/dev/null || true
 	@if [ -f "$(PARAKEET_RELEASE_BIN)" ]; then \
 		cp "$(PARAKEET_RELEASE_BIN)" "$(TOOLS_DIR)/parakeet-transcriber"; \
 		cp "$(PARAKEET_RELEASE_BIN)" "$(FW_DIR)/Versions/A/Resources/parakeet-transcriber"; \
@@ -100,6 +109,8 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 		cp "$(PARAKEET_DEBUG_BIN)" "$(TOOLS_DIR)/parakeet-transcriber"; \
 		cp "$(PARAKEET_DEBUG_BIN)" "$(FW_DIR)/Versions/A/Resources/parakeet-transcriber"; \
 	fi
+	@# Create plugins directory
+	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/plugins"
 	@# Copy Lua example scripts
 	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/examples"
 	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/auto"

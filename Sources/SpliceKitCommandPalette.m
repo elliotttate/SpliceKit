@@ -4808,6 +4808,27 @@ static NSString *SpliceKit_tailLogFile(NSString *path, NSUInteger maxBytes) {
               @"path": @{@"type": @"string", @"description": @"Output path (default /tmp/splicekit_viewer.png)"}
           }});
 
+    addTool(@"capture_timeline",
+        @"Take a screenshot of the FCP timeline.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"path": @{@"type": @"string", @"description": @"Output path (default /tmp/splicekit_timeline.png)"}
+          }});
+
+    addTool(@"background_render_status",
+        @"Get live background-render state including low-overhead mode, queue concurrency, and relevant defaults.",
+        @{@"type": @"object", @"properties": @{}});
+
+    addTool(@"background_render_control",
+        @"Temporarily reduce background-render impact while editing. "
+        @"Use action='hold_off' to delay background-render auto-start, or action='low_overhead' to enter FCP's internal low-overhead mode.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"action": @{@"type": @"string", @"description": @"hold_off or low_overhead"},
+              @"seconds": @{@"type": @"number", @"description": @"Duration in seconds"}
+          },
+          @"required": @[@"action", @"seconds"]});
+
     // Batch actions
     addTool(@"batch_timeline_actions",
         @"Execute multiple timeline/playback actions in sequence. Each action: {type:'timeline'|'playback'|'seek', action:'name', repeat:N, seconds:N}.",
@@ -4915,6 +4936,9 @@ static NSDictionary *SpliceKit_gemmaToolBridgeMap(void) {
             @"detect_scene_changes":     @"scene.detect",
             @"toggle_panel":             @"view.toggle",
             @"capture_viewer":           @"viewer.capture",
+            @"capture_timeline":         @"timeline.capture",
+            @"background_render_status": @"backgroundRender.status",
+            @"background_render_control": @"backgroundRender.control",
             @"batch_timeline_actions":   @"timeline.batchActions",
             @"blade_at_times":           @"timeline.bladeAtTimes",
             @"select_clip_in_lane":      @"timeline.selectClipInLane",

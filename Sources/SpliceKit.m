@@ -10,6 +10,7 @@
 
 #import "SpliceKit.h"
 #import "SpliceKitLua.h"
+#import "SpliceKitPlugins.h"
 #import "SpliceKitCommandPalette.h"
 #import "SpliceKitDebugUI.h"
 #import <AppKit/AppKit.h>
@@ -1203,6 +1204,9 @@ static void SpliceKit_appDidLaunch(void) {
     SpliceKit_installDebugSettingsPanel();
     SpliceKit_installDebugMenuBar();
 
+    // Install right-click context menu for structure block color changes
+    SpliceKit_installStructureBlockContextMenu();
+
     // Start the control server on a background thread
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         SpliceKit_startControlServer();
@@ -1210,6 +1214,9 @@ static void SpliceKit_appDidLaunch(void) {
 
     // Initialize Lua scripting VM
     SpliceKitLua_initialize();
+
+    // Load plugins from ~/Library/Application Support/SpliceKit/plugins/
+    SpliceKitPlugins_loadAll();
 }
 
 #pragma mark - Crash Prevention & Startup Fixes

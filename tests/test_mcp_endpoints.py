@@ -359,6 +359,13 @@ def test_options():
     ok("get", rpc("options.get"))
 
 
+def test_background_render():
+    print("\n[backgroundRender.*]")
+    ok("status", rpc("backgroundRender.status"),
+       lambda r: "available" in str(_res(r)) or "taskQueue" in str(_res(r)))
+    skip("control", "would transiently modify background render scheduling")
+
+
 def test_flexmusic():
     print("\n[flexmusic.*]")
     skip("all", "needs FlexMusic setup")

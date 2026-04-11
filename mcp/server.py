@@ -31,6 +31,15 @@ All operations are fully programmatic - no AppleScript, no UI automation.
 3. get_timeline_clips() -- see what's in the timeline (items, handles, durations)
 4. Perform actions using timeline_action() and playback_action()
 5. verify_action() -- confirm the edit took effect by comparing state snapshots
+6. capture_timeline() -- screenshot the timeline to visually verify clip layout
+7. capture_viewer() -- screenshot the viewer to visually verify canvas output
+
+## Visual Verification
+Use capture_viewer() and capture_timeline() to take PNG screenshots of FCP.
+These capture GPU/Metal content directly — FCP does not need to be in the foreground.
+- After effects, color, titles, captions → capture_viewer() to check the canvas
+- After blade cuts, markers, rearrangement → capture_timeline() to check layout
+Read the saved PNG to visually confirm the result.
 
 ## IMPORTANT: Opening a Project
 Use open_project(name, event) to find and load a project by name:
@@ -171,6 +180,8 @@ DESTRUCTIVE_LOCAL_WRITE = {
 
 READ_ONLY_TOOLS = {
     "bridge_status",
+    "background_render_status",
+    "dual_timeline_status",
     "get_timeline_clips",
     "get_selected_clips",
     "verify_action",
@@ -203,6 +214,9 @@ READ_ONLY_TOOLS = {
     "get_bridge_options",
     "detect_scene_changes",
     "detect_beats",
+    "analyze_song_structure",
+    "toggle_structure_blocks",
+    "get_sections",
     "flexmusic_list_songs",
     "flexmusic_get_song",
     "flexmusic_get_timing",
@@ -222,6 +236,9 @@ READ_ONLY_TOOLS = {
     "verify_native_captions",
     "list_handles",
     "inspect_handle",
+    "plugin_list",
+    "plugin_list_methods",
+    "reload_plugin_tools",
 }
 
 DESTRUCTIVE_TOOLS = {
@@ -271,6 +288,11 @@ DESTRUCTIVE_TOOLS = {
     "export_captions_txt",
     "generate_native_captions",
     "blade_scene_changes",
+    "beat_sync_blade",
+    "song_structure_blocks",
+    "song_structure_sections",
+    "remove_structure_blocks",
+    "hide_sections",
     "ai_command_gemma",
     "deploy_and_restart",
     "lua_execute",
@@ -297,6 +319,8 @@ IDEMPOTENT_LOCAL_WRITE_TOOLS = {
 
 CUSTOM_TOOL_TITLES = {
     "bridge_status": "Bridge Status",
+    "background_render_status": "Background Render Status",
+    "background_render_control": "Background Render Control",
     "get_timeline_clips": "Get Timeline Clips",
     "get_selected_clips": "Get Selected Clips",
     "set_timeline_range": "Set Timeline Range",
@@ -318,6 +342,7 @@ CUSTOM_TOOL_TITLES = {
     "open_project": "Open Project",
     "select_clip_in_lane": "Select Clip In Lane",
     "capture_viewer": "Capture Viewer",
+    "capture_timeline": "Capture Timeline",
     "export_xml": "Export FCPXML",
     "is_library_updating": "Check Library Updating",
     "search_methods": "Search Methods",
@@ -350,6 +375,14 @@ CUSTOM_TOOL_TITLES = {
     "set_bridge_option": "Set Bridge Option",
     "set_bridge_option_value": "Set Bridge Option Value",
     "detect_beats": "Detect Beats",
+    "analyze_song_structure": "Analyze Song Structure",
+    "beat_sync_blade": "Beat Sync Blade",
+    "song_structure_blocks": "Song Structure Blocks",
+    "song_structure_sections": "Song Structure Sections",
+    "toggle_structure_blocks": "Toggle Structure Blocks",
+    "remove_structure_blocks": "Remove Structure Blocks",
+    "get_sections": "Get Sections",
+    "hide_sections": "Hide Sections",
     "flexmusic_list_songs": "List FlexMusic Songs",
     "flexmusic_get_song": "Get FlexMusic Song",
     "flexmusic_get_timing": "Get FlexMusic Timing",
@@ -626,6 +659,50 @@ def bridge_status() -> str:
     r = bridge.call("system.version")
     if _err(r):
         return f"SpliceKit NOT connected: {r.get('error', r)}"  # special error message for status
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("background_render_status"))
+def background_render_status() -> str:
+    """Inspect Final Cut Pro's live background-render state.
+
+    Returns queue and manager state pulled from the running process, including:
+    - Whether background render is currently in low-overhead mode
+    - The current Background Render run-group queue concurrency
+    - Auto-start delay and related background-render defaults
+    - Active GPU/render preference defaults used for background render
+
+    Use this before and after background_render_control() to see whether FCP
+    accepted the requested throttle window.
+    """
+    r = bridge.call("backgroundRender.status")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("background_render_control"))
+def background_render_control(action: str, seconds: float) -> str:
+    """Temporarily reduce background-render impact while editing.
+
+    Args:
+        action: One of:
+          - "hold_off": Delay background-render auto-start for `seconds`
+          - "low_overhead": Enter FCP's internal low-overhead mode for `seconds`
+        seconds: Duration in seconds. Must be > 0.
+
+    This tool intentionally exposes only short-lived, reversible throttles.
+    It does not change persistent preferences or attempt CPU affinity control.
+    """
+    normalized = action.strip().lower()
+    if normalized not in {"hold_off", "low_overhead"}:
+        return "Error: action must be 'hold_off' or 'low_overhead'."
+    if seconds <= 0:
+        return "Error: seconds must be > 0."
+
+    r = bridge.call("backgroundRender.control", action=normalized, seconds=seconds)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
     return _fmt(r)
 
 
@@ -2645,13 +2722,13 @@ def open_project(name: str, event: str = "") -> str:
 # Floating secondary timeline window backed by a second
 # PEEditorContainerModule. Commands route to the focused pane.
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("dual_timeline_status"))
 def dual_timeline_status() -> str:
     """Inspect the primary/secondary timeline panes and current focused pane."""
     return _call_or_error("dualTimeline.status")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("dual_timeline_open"))
 def dual_timeline_open(source: str = "primary", focus: bool = False) -> str:
     """Open a floating secondary timeline window with a sequence loaded.
 
@@ -2665,7 +2742,7 @@ def dual_timeline_open(source: str = "primary", focus: bool = False) -> str:
     return _call_or_error("dualTimeline.open", **params)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("dual_timeline_sync_root"))
 def dual_timeline_sync_root(source: str = "primary", focus: bool = False) -> str:
     """Clone the source pane's current root into the secondary timeline.
 
@@ -2676,7 +2753,7 @@ def dual_timeline_sync_root(source: str = "primary", focus: bool = False) -> str
     return _call_or_error("dualTimeline.syncRoot", **params)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("dual_timeline_open_selected_in_secondary"))
 def dual_timeline_open_selected_in_secondary(source: str = "primary", focus: bool = True) -> str:
     """Open the selected compound clip / multicam item in the secondary timeline.
 
@@ -2687,7 +2764,7 @@ def dual_timeline_open_selected_in_secondary(source: str = "primary", focus: boo
     return _call_or_error("dualTimeline.openSelectedInSecondary", **params)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("dual_timeline_focus"))
 def dual_timeline_focus(pane: str) -> str:
     """Focus a specific timeline pane so subsequent commands target it.
 
@@ -2697,7 +2774,7 @@ def dual_timeline_focus(pane: str) -> str:
     return _call_or_error("dualTimeline.focus", pane=pane)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("dual_timeline_close"))
 def dual_timeline_close(focus_primary: bool = True) -> str:
     """Close the floating secondary timeline window.
 
@@ -2707,7 +2784,7 @@ def dual_timeline_close(focus_primary: bool = True) -> str:
     return _call_or_error("dualTimeline.close", focusPrimary=focus_primary)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("dual_timeline_toggle_panel"))
 def dual_timeline_toggle_panel(panel: str, pane: str = "secondary") -> str:
     """Toggle a container-local panel on a specific timeline pane.
 
@@ -2759,18 +2836,22 @@ def select_clip_in_lane(lane: int = 1) -> str:
 
 @mcp.tool(annotations=_tool_annotations("capture_viewer"))
 def capture_viewer(path: str = "/tmp/splicekit_viewer.png") -> str:
-    """Capture the FCP viewer contents as a PNG image.
+    """Capture the FCP viewer/canvas as a PNG screenshot.
 
-    Takes a screenshot of just the viewer/canvas area (not the whole screen),
-    so you can verify text rendering, effects, color correction, etc. without
-    relying on manual screenshots or having other windows in the way.
+    Screenshots the viewer area only (cropped from the FCP window, not the
+    whole screen). Captures GPU/Metal content directly — FCP does not need
+    to be in the foreground.
+
+    Use after: applying effects, color correction, titles, captions, or
+    any change visible in the canvas. Read the resulting PNG to visually
+    verify text rendering, font/size, position, color, and compositing.
 
     Args:
         path: Output file path for the PNG image.
               Default: /tmp/splicekit_viewer.png
 
     Returns the file path, image dimensions, and file size.
-    The saved PNG can be read by Claude to visually verify timeline output.
+    The saved PNG can be read by Claude to visually verify viewer output.
     """
     r = bridge.call("viewer.capture", path=path)
     if _err(r):
@@ -2778,6 +2859,40 @@ def capture_viewer(path: str = "/tmp/splicekit_viewer.png") -> str:
 
     if r.get("status") == "ok":
         return (f"Viewer captured: {r.get('path')}\n"
+                f"Size: {r.get('width')}x{r.get('height')} ({r.get('bytes', 0)} bytes)")
+    return _fmt(r)
+
+
+# ============================================================
+# Capture Timeline Screenshot
+# ============================================================
+
+@mcp.tool(annotations=_tool_annotations("capture_timeline"))
+def capture_timeline(path: str = "/tmp/splicekit_timeline.png") -> str:
+    """Capture the FCP timeline as a PNG screenshot.
+
+    Screenshots the timeline area only (cropped from the FCP window, not the
+    whole screen). Captures GPU/Metal content directly — FCP does not need
+    to be in the foreground.
+
+    Use after: blade cuts, clip rearrangement, adding/removing markers,
+    transitions, trim edits, or any structural timeline change. Read the
+    resulting PNG to visually verify clip layout, edit points, gaps,
+    markers, transitions, and overall timeline structure.
+
+    Args:
+        path: Output file path for the PNG image.
+              Default: /tmp/splicekit_timeline.png
+
+    Returns the file path, image dimensions, and file size.
+    The saved PNG can be read by Claude to visually verify timeline state.
+    """
+    r = bridge.call("timeline.capture", path=path)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    if r.get("status") == "ok":
+        return (f"Timeline captured: {r.get('path')}\n"
                 f"Size: {r.get('width')}x{r.get('height')} ({r.get('bytes', 0)} bytes)")
     return _fmt(r)
 
@@ -3192,6 +3307,446 @@ def detect_beats(file_path: str, sensitivity: float = 0.5, min_bpm: float = 60.0
         return "Error: beat-detector timed out"
     except Exception as e:
         return f"Error: {e}"
+
+
+# ============================================================
+# Song Structure Analysis
+# ============================================================
+# Extends beat detection with song structure labeling (verse,
+# chorus, bridge, intro, outro) using energy contour + spectral
+# features. Also returns drop points and per-bar energy.
+
+def _find_structure_analyzer():
+    """Find the structure-analyzer binary."""
+    import os
+    tool_paths = [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "build", "structure-analyzer"),
+        os.path.expanduser("~/Applications/SpliceKit/tools/structure-analyzer"),
+        os.path.expanduser("~/Library/Application Support/SpliceKit/tools/structure-analyzer"),
+        "/usr/local/bin/structure-analyzer",
+    ]
+    for p in tool_paths:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def _run_structure_analyzer(file_path: str, sensitivity: float = 0.5,
+                             min_bpm: float = 60.0, max_bpm: float = 200.0) -> dict:
+    """Run structure-analyzer and return parsed JSON dict (or dict with 'error' key)."""
+    import subprocess
+    tool = _find_structure_analyzer()
+    if not tool:
+        return {"error": "structure-analyzer tool not found. Build with: swiftc -O -o build/structure-analyzer tools/structure-analyzer.swift"}
+    try:
+        result = subprocess.run(
+            [tool, file_path, str(sensitivity), str(min_bpm), str(max_bpm)],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            return {"error": f"structure-analyzer failed: {result.stderr}"}
+        return json.loads(result.stdout)
+    except subprocess.TimeoutExpired:
+        return {"error": "structure-analyzer timed out"}
+    except json.JSONDecodeError as e:
+        return {"error": f"structure-analyzer returned invalid JSON: {e}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(annotations=_tool_annotations("analyze_song_structure"))
+def analyze_song_structure(file_path: str, sensitivity: float = 0.5,
+                           min_bpm: float = 60.0, max_bpm: float = 200.0) -> str:
+    """Analyze a song's structure — detect verse, chorus, bridge, intro, outro sections.
+
+    Goes beyond basic beat detection: segments the song by energy + spectral
+    features, groups similar sections (repeated verses/choruses), detects
+    "drop" points (sudden energy spikes), and returns per-bar energy contour.
+
+    Args:
+        file_path: Path to audio file (MP3, WAV, M4A, AAC, AIFF, etc.)
+        sensitivity: Beat detection sensitivity 0.0-1.0 (default 0.5).
+        min_bpm: Minimum expected BPM (default 60).
+        max_bpm: Maximum expected BPM (default 200).
+
+    Returns labeled song structure, beats, bars, BPM, drops, and energy contour.
+    """
+    import os
+    data = _run_structure_analyzer(file_path, sensitivity, min_bpm, max_bpm)
+    if "error" in data:
+        return f"Error: {data['error']}"
+
+    lines = [
+        f"Song Structure Analysis: {os.path.basename(file_path)}",
+        f"Duration: {data['duration']:.1f}s  BPM: {data['bpm']}  Bars: {data['barCount']}  Beats: {data['beatCount']}",
+        "",
+        "Structure:",
+    ]
+    for s in data.get("structure", []):
+        lines.append(f"  {s['label']:15s}  {s['start']:7.1f}s - {s['end']:7.1f}s  "
+                     f"({s['bars']:2d} bars, energy={s['energy']:.2f}, {s['duration']:.1f}s)")
+
+    drops = data.get("drops", [])
+    if drops:
+        lines.append(f"\nDrops ({len(drops)}): {', '.join(f'{d:.1f}s' for d in drops)}")
+
+    lines.append(f"\nBeat interval: {data.get('beatInterval', 0):.4f}s")
+    return "\n".join(lines)
+
+
+@mcp.tool(annotations=_tool_annotations("beat_sync_blade"))
+def beat_sync_blade(file_path: str, cut_on: str = "bar",
+                    sensitivity: float = 0.5, min_bpm: float = 60.0,
+                    max_bpm: float = 200.0,
+                    range_start: float = -1, range_end: float = -1,
+                    min_clip_duration: float = 0,
+                    offset_frames: int = 0,
+                    dry_run: bool = False) -> str:
+    """Analyze a song's beats and blade the timeline at musical boundaries.
+
+    Combines beat/structure analysis with blade_at_times in a single call.
+    Detects beats in the audio file, then cuts the FCP timeline at the
+    selected musical level (every beat, bar, section, etc.).
+
+    Args:
+        file_path: Path to audio file to analyze for beat timing.
+        cut_on: What to cut on. Options:
+            "beat"     — every beat (fast cuts, ~0.5s at 120 BPM)
+            "bar"      — every bar/measure (natural pacing, ~2s at 120 BPM)
+            "section"  — at structural section boundaries (verse/chorus/bridge)
+            "downbeat" — only on beat 1 of each bar (same as "bar")
+            "drop"     — only at detected drop points (dramatic energy spikes)
+            "half_bar" — every 2 beats
+        sensitivity: Beat detection sensitivity 0.0-1.0 (default 0.5).
+        min_bpm: Minimum expected BPM (default 60).
+        max_bpm: Maximum expected BPM (default 200).
+        range_start: Only blade after this time in seconds (-1 = from start).
+        range_end: Only blade before this time in seconds (-1 = to end).
+        min_clip_duration: Skip cuts that would create clips shorter than this (seconds).
+                           Prevents flash frames at fast tempos.
+        offset_frames: Shift all cuts by N frames. Negative = cut before the beat
+                       (anticipation feel), positive = cut after (laid-back feel).
+                       Typical: -2 for music video anticipation.
+        dry_run: If True, return the cut plan without actually blading.
+
+    Returns summary of cuts applied (or planned if dry_run).
+    """
+    import os
+    # Run structure analysis (includes beats, bars, structure, drops)
+    data = _run_structure_analyzer(file_path, sensitivity, min_bpm, max_bpm)
+    if "error" in data:
+        return f"Error: {data['error']}"
+
+    bpm = data.get("bpm", 120)
+    beat_interval = data.get("beatInterval", 0.5)
+
+    # Select timestamps based on cut_on mode
+    if cut_on == "beat":
+        times = data.get("beats", [])
+        level_desc = "beat"
+    elif cut_on in ("bar", "downbeat"):
+        times = data.get("bars", [])
+        level_desc = "bar"
+    elif cut_on == "half_bar":
+        # Every 2 beats
+        beats = data.get("beats", [])
+        times = [beats[i] for i in range(0, len(beats), 2)]
+        level_desc = "half-bar (every 2 beats)"
+    elif cut_on == "section":
+        # Use structural section boundaries
+        structure = data.get("structure", [])
+        times = [s["start"] for s in structure]
+        level_desc = "section boundary"
+    elif cut_on == "drop":
+        times = data.get("drops", [])
+        level_desc = "drop"
+    else:
+        return f"Error: unknown cut_on value '{cut_on}'. Use: beat, bar, section, downbeat, drop, half_bar"
+
+    if not times:
+        return f"Error: no {level_desc} timestamps found in audio analysis"
+
+    # Apply time range filter
+    if range_start >= 0:
+        times = [t for t in times if t >= range_start]
+    if range_end >= 0:
+        times = [t for t in times if t <= range_end]
+
+    # Apply frame offset (convert frames to seconds using common frame rates)
+    if offset_frames != 0:
+        # Estimate frame rate from beat interval: use 24fps as default
+        # (FCP projects are typically 23.976, 24, 25, 29.97, or 30 fps)
+        frame_duration = 1.0 / 24.0  # ~0.0417s per frame
+        offset_seconds = offset_frames * frame_duration
+        times = [t + offset_seconds for t in times]
+        # Remove any that went negative
+        times = [t for t in times if t > 0]
+
+    # Apply minimum clip duration filter
+    if min_clip_duration > 0 and len(times) > 1:
+        filtered = [times[0]]
+        for t in times[1:]:
+            if (t - filtered[-1]) >= min_clip_duration:
+                filtered.append(t)
+        times = filtered
+
+    # Skip the first timestamp if it's at 0.0 (nothing to blade there)
+    times = [t for t in times if t > 0.05]
+
+    if not times:
+        return "No cut points remain after filtering"
+
+    # Build summary
+    structure = data.get("structure", [])
+    struct_summary = ""
+    if structure:
+        labels = [s["label"] for s in structure]
+        struct_summary = f"\nSong structure: {' → '.join(labels)}"
+
+    header = (
+        f"Beat Sync Blade: {os.path.basename(file_path)}\n"
+        f"BPM: {bpm}  Cut on: {level_desc}  Cuts: {len(times)}{struct_summary}\n"
+    )
+
+    if dry_run:
+        lines = [header + "DRY RUN — no cuts applied\n"]
+        lines.append("Planned cuts:")
+        prev = 0.0
+        for i, t in enumerate(times):
+            clip_dur = t - prev
+            lines.append(f"  {i+1:3d}. {t:7.2f}s  (clip: {clip_dur:.2f}s)")
+            prev = t
+        # Final clip to end
+        duration = data.get("duration", 0)
+        if duration > 0 and times:
+            lines.append(f"  {len(times)+1:3d}. {duration:7.2f}s  (clip: {duration - times[-1]:.2f}s)  [end]")
+        lines.append(f"\nShortest clip: {min(times[i] - (times[i-1] if i > 0 else 0) for i in range(len(times))):.2f}s")
+        return "\n".join(lines)
+
+    # Execute the blade
+    r = bridge.call("timeline.bladeAtTimes", times=times)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    applied = r.get("applied", 0)
+    total = r.get("count", len(times))
+    lines = [header + f"Applied {applied}/{total} cuts"]
+
+    failures = [c for c in r.get("cuts", []) if not c.get("success")]
+    if failures:
+        lines.append(f"\nFailed cuts ({len(failures)}):")
+        for c in failures[:10]:
+            lines.append(f"  {c['time']:.2f}s: {c.get('error', '?')}")
+
+    return "\n".join(lines)
+
+
+# ============================================================
+# Song Structure Blocks (Color-Coded Timeline Sections)
+# ============================================================
+# Places song structure labels in FCP's native caption lane — the
+# thin dedicated area above the timeline clips. Uses FCPXML <caption>
+# elements with a custom role so they appear in their own lane.
+
+def _structure_caption_role():
+    """Role string for structure block captions. Uses SRT format with a
+    'structure' language so they get their own caption lane."""
+    return "SRT.structure"
+
+
+@mcp.tool(annotations=_tool_annotations("song_structure_blocks"))
+def song_structure_blocks(file_path: str, sensitivity: float = 0.5,
+                          min_bpm: float = 60.0, max_bpm: float = 200.0) -> str:
+    """Analyze a song and place section labels in FCP's native caption lane.
+
+    Creates native FCP caption objects showing the song structure (intro, verse,
+    chorus, bridge, outro) in the thin dedicated caption area above the timeline.
+    Each section appears as a labeled block in the caption lane.
+
+    Args:
+        file_path: Path to audio file to analyze for song structure.
+        sensitivity: Beat detection sensitivity 0.0-1.0 (default 0.5).
+        min_bpm: Minimum expected BPM (default 60).
+        max_bpm: Maximum expected BPM (default 200).
+
+    Returns summary of structure blocks placed in the caption lane.
+    """
+    import os
+    # Run structure analysis
+    data = _run_structure_analyzer(file_path, sensitivity, min_bpm, max_bpm)
+    if "error" in data:
+        return f"Error: {data['error']}"
+
+    structure = data.get("structure", [])
+    if not structure:
+        return "Error: no song structure detected"
+
+    # Get timeline properties for rational time arithmetic
+    pos = bridge.call("playback.getPosition")
+    if _err(pos):
+        return f"Error: {pos.get('error', pos)}"
+    fd = pos.get("frameDuration", {})
+    fd_num = fd.get("value", 100)
+    fd_den = fd.get("timescale", 2400)
+
+    def dur_rational(seconds):
+        frames = round(seconds * fd_den / fd_num)
+        return f"{frames * fd_num}/{fd_den}s"
+
+    # Compute total duration (end of last section + 1s padding)
+    total_dur = max(s["end"] for s in structure) + 1.0
+    total_dur_str = dur_rational(total_dur)
+    caption_role = _structure_caption_role()
+
+    # Build FCPXML with <caption> elements inside a gap
+    # These appear in FCP's native caption lane
+    caption_xml = ""
+    for s in structure:
+        label = s["label"].upper()
+        offset_str = dur_rational(s["start"])
+        dur_str = dur_rational(s["duration"])
+        caption_xml += (
+            f'                            <caption lane="1" offset="{offset_str}" '
+            f'name="{label}" duration="{dur_str}" role="{caption_role}">\n'
+            f'                                <text>{label}</text>\n'
+            f'                            </caption>\n'
+        )
+
+    xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+
+<fcpxml version="1.11">
+    <resources>
+        <format id="r1" frameDuration="{fd_num}/{fd_den}s" width="1920" height="1080"/>
+    </resources>
+    <library>
+        <event name="SpliceKit Structure">
+            <project name="SpliceKit Structure Blocks">
+                <sequence format="r1" duration="{total_dur_str}" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
+                    <spine>
+                        <gap name="placeholder" duration="{total_dur_str}" start="0s">
+{caption_xml}                        </gap>
+                    </spine>
+                </sequence>
+            </project>
+        </event>
+    </library>
+</fcpxml>'''
+
+    # Use the ObjC bridge to create native captions in the caption lane.
+    # This does: FCPXML import → load temp project → selectAll → copy → switch back → paste
+    r = bridge.call("structure.generateCaptions", sections=structure)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    caption_count = r.get("captionCount", 0)
+    lines = [
+        f"Structure Blocks: {os.path.basename(file_path)}",
+        f"BPM: {data.get('bpm', '?')}  Sections: {len(structure)}  Captions placed: {caption_count}",
+        f"Placed in caption lane (same area as subtitles)",
+        "",
+    ]
+    for s in structure:
+        lines.append(f"  {s['label'].upper():15s}  {s['start']:7.1f}s - {s['end']:7.1f}s  ({s['duration']:.1f}s)")
+
+    lines.append(f"\nToggle visibility: View > Timeline Index > Captions tab")
+    return "\n".join(lines)
+
+
+@mcp.tool(annotations=_tool_annotations("toggle_structure_blocks"))
+def toggle_structure_blocks() -> str:
+    """Toggle visibility of song structure blocks on the timeline.
+
+    If structure blocks exist, removes them. If they don't exist,
+    returns an error (use song_structure_blocks to create them first).
+    """
+    r = bridge.call("structure.toggle")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    removed = r.get("removed", 0)
+    if removed > 0:
+        return f"Removed {removed} structure block storyline(s)"
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("remove_structure_blocks"))
+def remove_structure_blocks() -> str:
+    """Remove all song structure blocks from the timeline."""
+    r = bridge.call("structure.remove")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    removed = r.get("removed", 0)
+    return f"Removed {removed} structure block storyline(s)"
+
+
+# ============================================================
+# Sections Bar (Custom Timeline View)
+# ============================================================
+# A dedicated color-coded bar injected into FCP's timeline showing
+# song structure sections. Each section has its own color and can be
+# modified via right-click context menu or these MCP tools.
+
+@mcp.tool(annotations=_tool_annotations("song_structure_sections"))
+def song_structure_sections(file_path: str, sensitivity: float = 0.5,
+                             min_bpm: float = 60.0, max_bpm: float = 200.0) -> str:
+    """Analyze a song and display color-coded sections in a dedicated bar above the timeline.
+
+    Creates a thin, color-coded bar above the FCP timeline showing the song
+    structure (intro, verse, chorus, bridge, outro). Each section type gets
+    its own color. Right-click any section to change its color, rename it,
+    or remove it. Right-click empty space to add new sections.
+
+    The sections bar is a custom view — independent from captions, roles,
+    or any other FCP system. Sections persist per-project.
+
+    Args:
+        file_path: Path to audio file to analyze.
+        sensitivity: Beat detection sensitivity 0.0-1.0 (default 0.5).
+        min_bpm: Minimum expected BPM (default 60).
+        max_bpm: Maximum expected BPM (default 200).
+
+    Returns summary of sections placed in the bar.
+    """
+    import os
+    data = _run_structure_analyzer(file_path, sensitivity, min_bpm, max_bpm)
+    if "error" in data:
+        return f"Error: {data['error']}"
+
+    structure = data.get("structure", [])
+    if not structure:
+        return "Error: no song structure detected"
+
+    r = bridge.call("sections.show", sections=structure)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    lines = [
+        f"Sections Bar: {os.path.basename(file_path)}",
+        f"BPM: {data.get('bpm', '?')}  Sections: {r.get('sectionCount', len(structure))}",
+        "",
+    ]
+    for s in structure:
+        lines.append(f"  {s['label']:15s}  {s['start']:7.1f}s - {s['end']:7.1f}s  ({s['duration']:.1f}s)")
+    lines.append(f"\nRight-click the sections bar to change colors, rename, add, or remove sections.")
+    return "\n".join(lines)
+
+
+@mcp.tool(annotations=_tool_annotations("get_sections"))
+def get_sections() -> str:
+    """Get the current sections displayed in the timeline sections bar."""
+    r = bridge.call("sections.get")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("hide_sections"))
+def hide_sections() -> str:
+    """Hide the sections bar from the timeline."""
+    r = bridge.call("sections.hide")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return "Sections bar hidden"
 
 
 # ============================================================
@@ -4699,6 +5254,91 @@ def lua_state() -> str:
     if _err(r):
         return f"Error: {r.get('error', r)}"
     return _fmt(r)
+
+
+# ============================================================
+# Plugin System
+# ============================================================
+# Plugins can register JSON-RPC methods that become available as
+# MCP tools automatically. The plugin.listMethods endpoint returns
+# all registered plugin methods with metadata.
+
+
+@mcp.tool(annotations=_tool_annotations("plugin_list"))
+def plugin_list() -> str:
+    """List all loaded SpliceKit plugins with their manifests."""
+    return _call_or_error("plugin.list")
+
+
+@mcp.tool(annotations=_tool_annotations("plugin_list_methods"))
+def plugin_list_methods() -> str:
+    """List all registered plugin methods with descriptions and parameter schemas."""
+    return _call_or_error("plugin.listMethods")
+
+
+def _register_plugin_tools():
+    """Query SpliceKit for registered plugin methods and create MCP tools dynamically.
+
+    Called at module load time. If FCP isn't running yet, this silently skips —
+    plugin methods can still be called through the raw_call tool. Use
+    reload_plugin_tools() to refresh after FCP launches or plugins change.
+    """
+    try:
+        r = bridge.call("plugin.listMethods")
+        if _err(r) or "methods" not in r:
+            return 0
+        count = 0
+        for m in r["methods"]:
+            method_name = m.get("name")
+            if not method_name:
+                continue
+
+            # Build a safe tool name: com.example.plugin.greet -> com_example_plugin_greet
+            tool_name = "plugin_" + method_name.replace(".", "_")
+            description = m.get("description", f"Plugin method: {method_name}")
+            plugin_name = m.get("pluginId", "")
+            short_name = m.get("shortName", method_name)
+            read_only = m.get("readOnly", False)
+
+            # Create a closure that captures the method name
+            def make_handler(mn):
+                def handler(params: str = "{}") -> str:
+                    try:
+                        p = json.loads(params)
+                    except json.JSONDecodeError as e:
+                        return f"Invalid JSON params: {e}"
+                    r = bridge.call(mn, **p)
+                    if _err(r):
+                        return f"Error: {r.get('error', r)}"
+                    return _fmt(r)
+                handler.__name__ = tool_name
+                handler.__doc__ = description
+                return handler
+
+            annotations = dict(READ_ONLY if read_only else LOCAL_WRITE)
+            title = f"{plugin_name}: {short_name}" if plugin_name else short_name
+            annotations["title"] = title
+            mcp.tool(annotations=annotations)(make_handler(method_name))
+            count += 1
+        return count
+    except Exception:
+        return 0  # FCP not running yet — no plugin tools to register
+
+
+# Register plugin tools at startup (best-effort)
+_plugin_tool_count = _register_plugin_tools()
+
+
+@mcp.tool(annotations=_tool_annotations("reload_plugin_tools"))
+def reload_plugin_tools() -> str:
+    """Reload plugin tools from SpliceKit.
+
+    Call this after FCP launches or after installing new plugins to make their
+    methods available as MCP tools. Note: tools registered in a previous call
+    remain available — this adds any newly registered plugin methods.
+    """
+    count = _register_plugin_tools()
+    return json.dumps({"registered": count, "status": "ok"})
 
 
 # MCP servers communicate over stdio -- the AI tool framework handles the transport
