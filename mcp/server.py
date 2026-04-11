@@ -727,6 +727,55 @@ def import_fcpxml(xml: str, internal: bool = True) -> str:
 
 
 @mcp.tool()
+def import_url(url: str, mode: str = "import_only", target_event: str = "",
+               title: str = "", wait_until_complete: bool = True) -> str:
+    """Download a remote media URL, import it into Final Cut Pro, and optionally
+    place it into the active timeline.
+
+    Args:
+        url: Direct media URL (.mp4, .mov, .m4v, .webm) or a supported provider URL
+            like YouTube or Vimeo.
+        mode: "import_only", "insert_at_playhead", or "append_to_timeline".
+        target_event: Optional event name override.
+        title: Optional clip title override.
+        wait_until_complete: If False, returns immediately with a job_id that can
+            be polled via import_url_status().
+
+    Notes:
+        Provider URLs rely on yt-dlp + ffmpeg being available to the modded app.
+    """
+    params = {"url": url, "mode": mode}
+    if target_event:
+        params["target_event"] = target_event
+    if title:
+        params["title"] = title
+
+    method = "urlImport.import" if wait_until_complete else "urlImport.start"
+    r = bridge.call(method, **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def import_url_status(job_id: str) -> str:
+    """Check the current status of a URL import job."""
+    r = bridge.call("urlImport.status", job_id=job_id)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
+def cancel_import_url(job_id: str) -> str:
+    """Cancel an in-flight URL import job."""
+    r = bridge.call("urlImport.cancel", job_id=job_id)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool()
 def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "SpliceKit Project",
                     frame_rate: str = "24", width: int = 1920, height: int = 1080,
                     items: str = "[]") -> str:

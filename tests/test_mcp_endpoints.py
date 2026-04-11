@@ -222,6 +222,15 @@ def test_fcpxml():
     expect_error("pasteImport (no xml)", rpc("fcpxml.pasteImport", {}), "xml")
 
 
+def test_url_import():
+    print("\n[urlImport.*]")
+    expect_error("import (no url)", rpc("urlImport.import", {}), "url")
+    expect_error("import (bad url)", rpc("urlImport.import", {"url": "not-a-url"}), "Invalid URL")
+    expect_error("status (no job_id)", rpc("urlImport.status", {}), "job_id")
+    expect_error("status (unknown job)", rpc("urlImport.status", {"job_id": "missing-job"}), "Unknown")
+    expect_error("cancel (no job_id)", rpc("urlImport.cancel", {}), "job_id")
+
+
 def test_inspector():
     print("\n[inspector.*]")
     r = rpc("inspector.get")
@@ -573,6 +582,7 @@ TEST_GROUPS = {
     "effects": test_effects,
     "transitions": test_transitions,
     "fcpxml": test_fcpxml,
+    "url_import": test_url_import,
     "inspector": test_inspector,
     "menu": test_menu,
     "tool": test_tool,

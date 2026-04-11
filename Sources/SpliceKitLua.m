@@ -441,6 +441,62 @@ static int sk_selected(lua_State *L) {
     return 1;
 }
 
+// --- URL Import ---
+
+static int sk_import_url(lua_State *L) {
+    const char *url = luaL_checkstring(L, 1);
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithObject:@(url) forKey:@"url"];
+    if (lua_istable(L, 2)) {
+        NSDictionary *options = SpliceKitLua_toNSDictionary(L, 2);
+        if (options) [params addEntriesFromDictionary:options];
+    }
+    NSDictionary *response = SpliceKit_handleRequest(@{
+        @"method": @"urlImport.import",
+        @"params": params
+    });
+    id result = response[@"result"];
+    SpliceKitLua_pushValue(L, result ?: response);
+    return 1;
+}
+
+static int sk_import_url_start(lua_State *L) {
+    const char *url = luaL_checkstring(L, 1);
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithObject:@(url) forKey:@"url"];
+    if (lua_istable(L, 2)) {
+        NSDictionary *options = SpliceKitLua_toNSDictionary(L, 2);
+        if (options) [params addEntriesFromDictionary:options];
+    }
+    NSDictionary *response = SpliceKit_handleRequest(@{
+        @"method": @"urlImport.start",
+        @"params": params
+    });
+    id result = response[@"result"];
+    SpliceKitLua_pushValue(L, result ?: response);
+    return 1;
+}
+
+static int sk_import_url_status(lua_State *L) {
+    const char *jobID = luaL_checkstring(L, 1);
+    NSDictionary *response = SpliceKit_handleRequest(@{
+        @"method": @"urlImport.status",
+        @"params": @{@"job_id": @(jobID)}
+    });
+    id result = response[@"result"];
+    SpliceKitLua_pushValue(L, result ?: response);
+    return 1;
+}
+
+static int sk_import_url_cancel(lua_State *L) {
+    const char *jobID = luaL_checkstring(L, 1);
+    NSDictionary *response = SpliceKit_handleRequest(@{
+        @"method": @"urlImport.cancel",
+        @"params": @{@"job_id": @(jobID)}
+    });
+    id result = response[@"result"];
+    SpliceKitLua_pushValue(L, result ?: response);
+    return 1;
+}
+
 // --- Generic RPC Passthrough ---
 
 // sk.rpc("method.name", {param = value}) → calls any RPC method
@@ -1057,6 +1113,10 @@ static const luaL_Reg sk_functions[] = {
     {"clips",           sk_clips},
     {"position",        sk_position},
     {"selected",        sk_selected},
+    {"import_url",      sk_import_url},
+    {"import_url_start", sk_import_url_start},
+    {"import_url_status", sk_import_url_status},
+    {"import_url_cancel", sk_import_url_cancel},
 
     // Generic access
     {"timeline",        sk_timeline_action},

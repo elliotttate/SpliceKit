@@ -2,7 +2,8 @@ CC = clang
 ARCHS = -arch arm64 -arch x86_64
 MIN_VERSION = -mmacosx-version-min=14.0
 FRAMEWORKS = -framework Foundation -framework AppKit -framework AVFoundation -framework CoreServices
-OBJC_FLAGS = -fobjc-arc -fmodules
+MODULE_CACHE_DIR = $(BUILD_DIR)/ModuleCache
+OBJC_FLAGS = -fobjc-arc -fmodules -fmodules-cache-path=$(abspath $(MODULE_CACHE_DIR))
 LINKER_FLAGS = -undefined dynamic_lookup -dynamiclib
 INSTALL_NAME = -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit
 
@@ -10,6 +11,7 @@ SOURCES = Sources/SpliceKit.m \
           Sources/SpliceKitRuntime.m \
           Sources/SpliceKitSwizzle.m \
           Sources/SpliceKitServer.m \
+          Sources/SpliceKitURLImport.m \
           Sources/SpliceKitLogPanel.m \
           Sources/SpliceKitTranscriptPanel.m \
           Sources/SpliceKitCaptionPanel.m \
@@ -37,11 +39,28 @@ ENTITLEMENTS = entitlements.plist
 SILENCE_DETECTOR = $(BUILD_DIR)/silence-detector
 TOOLS_DIR = $(HOME)/Applications/SpliceKit/tools
 
-.PHONY: all clean deploy launch tools
+.PHONY: all clean deploy launch tools url-import-tools
 
 all: $(OUTPUT)
 
 tools: $(SILENCE_DETECTOR)
+
+url-import-tools:
+	@mkdir -p "$(TOOLS_DIR)"
+	@YTDLP_PATH="$$(command -v yt-dlp || true)"; \
+	if [ -n "$$YTDLP_PATH" ]; then \
+		ln -sf "$$YTDLP_PATH" "$(TOOLS_DIR)/yt-dlp"; \
+		echo "Linked yt-dlp -> $$YTDLP_PATH"; \
+	else \
+		echo "yt-dlp not found in PATH. Install with: brew install yt-dlp"; \
+	fi
+	@FFMPEG_PATH="$$(command -v ffmpeg || true)"; \
+	if [ -n "$$FFMPEG_PATH" ]; then \
+		ln -sf "$$FFMPEG_PATH" "$(TOOLS_DIR)/ffmpeg"; \
+		echo "Linked ffmpeg -> $$FFMPEG_PATH"; \
+	else \
+		echo "ffmpeg not found in PATH. Install with: brew install ffmpeg"; \
+	fi
 
 $(SILENCE_DETECTOR): tools/silence-detector.swift
 	@mkdir -p $(BUILD_DIR)
@@ -84,6 +103,7 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 	@/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'SpliceKit uses speech recognition to transcribe timeline audio for text-based editing.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
 	@# Deploy tools
 	@mkdir -p "$(TOOLS_DIR)"
+	@$(MAKE) url-import-tools
 	@cp $(SILENCE_DETECTOR) "$(TOOLS_DIR)/silence-detector" 2>/dev/null || true
 	@test -f tools/parakeet-transcriber/.build/release/parakeet-transcriber && \
 		cp tools/parakeet-transcriber/.build/release/parakeet-transcriber "$(TOOLS_DIR)/parakeet-transcriber" || true
