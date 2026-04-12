@@ -2,7 +2,8 @@ CC = clang
 ARCHS = -arch arm64 -arch x86_64
 MIN_VERSION = -mmacosx-version-min=14.0
 FRAMEWORKS = -framework Foundation -framework AppKit -framework AVFoundation -framework CoreServices
-OBJC_FLAGS = -fobjc-arc -fmodules
+MODULE_CACHE_DIR = $(BUILD_DIR)/ModuleCache
+OBJC_FLAGS = -fobjc-arc -fmodules -fmodules-cache-path=$(abspath $(MODULE_CACHE_DIR))
 LINKER_FLAGS = -undefined dynamic_lookup -dynamiclib
 INSTALL_NAME = -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit
 
@@ -12,6 +13,7 @@ SOURCES = Sources/SpliceKit.m \
           Sources/SpliceKitRuntime.m \
           Sources/SpliceKitSwizzle.m \
           Sources/SpliceKitServer.m \
+          Sources/SpliceKitURLImport.m \
           Sources/SpliceKitLogPanel.m \
           Sources/SpliceKitTranscriptPanel.m \
           Sources/SpliceKitCaptionPanel.m \
@@ -46,11 +48,28 @@ PARAKEET_PKG_DIR = patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakee
 PARAKEET_RELEASE_BIN = $(PARAKEET_PKG_DIR)/.build/release/parakeet-transcriber
 PARAKEET_DEBUG_BIN = $(PARAKEET_PKG_DIR)/.build/debug/parakeet-transcriber
 
-.PHONY: all clean deploy launch tools
+.PHONY: all clean deploy launch tools url-import-tools
 
 all: $(OUTPUT)
 
 tools: $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER)
+
+url-import-tools:
+	@mkdir -p "$(TOOLS_DIR)"
+	@YTDLP_PATH="$$(command -v yt-dlp || true)"; \
+	if [ -n "$$YTDLP_PATH" ]; then \
+		ln -sf "$$YTDLP_PATH" "$(TOOLS_DIR)/yt-dlp"; \
+		echo "Linked yt-dlp -> $$YTDLP_PATH"; \
+	else \
+		echo "yt-dlp not found in PATH. Install with: brew install yt-dlp"; \
+	fi
+	@FFMPEG_PATH="$$(command -v ffmpeg || true)"; \
+	if [ -n "$$FFMPEG_PATH" ]; then \
+		ln -sf "$$FFMPEG_PATH" "$(TOOLS_DIR)/ffmpeg"; \
+		echo "Linked ffmpeg -> $$FFMPEG_PATH"; \
+	else \
+		echo "ffmpeg not found in PATH. Install with: brew install ffmpeg"; \
+	fi
 
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
@@ -100,6 +119,7 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER)
 	@/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'SpliceKit uses speech recognition to transcribe timeline audio for text-based editing.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
 	@# Deploy tools
 	@mkdir -p "$(TOOLS_DIR)"
+	@$(MAKE) url-import-tools
 	@cp $(SILENCE_DETECTOR) "$(TOOLS_DIR)/silence-detector" 2>/dev/null || true
 	@cp $(STRUCTURE_ANALYZER) "$(TOOLS_DIR)/structure-analyzer" 2>/dev/null || true
 	@if [ -f "$(PARAKEET_RELEASE_BIN)" ]; then \

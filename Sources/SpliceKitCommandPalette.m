@@ -14,6 +14,7 @@
 
 #import "SpliceKitCommandPalette.h"
 #import "SpliceKit.h"
+#import "SpliceKitURLImport.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -589,6 +590,8 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"New Project", @"newProject", @"timeline", SpliceKitCommandCategoryExport, @"Project", @"Cmd+N", @"Create a new project in the current event", @[@"new timeline"]);
     add(@"New Event", @"newEvent", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Create a new event in the library", @[]);
     add(@"Import Media", @"importMedia", @"timeline", SpliceKitCommandCategoryExport, @"Project", @"Cmd+I", @"Open the import media dialog", @[@"add files", @"ingest"]);
+    add(@"Import URL to Library", @"import_only", @"url_import_prompt", SpliceKitCommandCategoryExport, @"Project", nil, @"Download a remote video URL and import it into the current library/event", @[@"import from url", @"download url", @"web video", @"remote media", @"youtube url", @"vimeo url"]);
+    add(@"Import URL to Timeline", @"insert_at_playhead", @"url_import_prompt", SpliceKitCommandCategoryExport, @"Project", nil, @"Download a remote video URL, import it, and place it in the active timeline", @[@"add url to timeline", @"download and insert", @"append url"]);
     add(@"Show Project Properties", @"showProjectProperties", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"View resolution, frame rate, and codec settings", @[@"settings", @"format"]);
     add(@"Consolidate Library Media", @"consolidateMedia", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Copy external media into the library", @[@"collect", @"gather"]);
 
@@ -1616,6 +1619,9 @@ static NSString *FCPStripStopWords(NSString *query) {
         SpliceKit_setDefaultSpatialConformType(next);
         result = @{@"action": action, @"status": @"ok",
                    @"defaultSpatialConformType": next};
+    } else if ([type isEqualToString:@"url_import_prompt"]) {
+        [self showURLImportPromptWithDefaultMode:action];
+        result = @{@"action": action, @"status": @"started"};
     } else if ([type isEqualToString:@"dual_timeline"]) {
         if ([action isEqualToString:@"open"]) {
             result = SpliceKit_dualTimelineOpen(@{});
@@ -1642,6 +1648,9 @@ static NSString *FCPStripStopWords(NSString *query) {
         } else {
             result = @{@"error": [NSString stringWithFormat:@"Unknown dual timeline action: %@", action]};
         }
+    } else if ([type isEqualToString:@"url_import_prompt"]) {
+        [self showURLImportPromptWithDefaultMode:action];
+        result = @{@"action": action, @"status": @"started"};
     }
 
     if (!result) {
@@ -1668,7 +1677,7 @@ static NSString *FCPStripStopWords(NSString *query) {
 }
 
 - (NSPanel *)_createProcessingHUD:(NSString *)message {
-    NSPanel *hud = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 280, 80)
+    NSPanel *hud = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 520, 118)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskFullSizeContentView)
         backing:NSBackingStoreBuffered defer:NO];
     hud.title = @"";
@@ -1689,26 +1698,309 @@ static NSString *FCPStripStopWords(NSString *query) {
     bg.layer.masksToBounds = YES;
     [hud.contentView addSubview:bg];
 
-    NSProgressIndicator *spinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(20, 28, 24, 24)];
+    NSProgressIndicator *spinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(20, 58, 24, 24)];
     spinner.style = NSProgressIndicatorStyleSpinning;
     spinner.controlSize = NSControlSizeRegular;
     [spinner startAnimation:nil];
     [bg addSubview:spinner];
 
-    NSTextField *label = [NSTextField labelWithString:message];
-    label.frame = NSMakeRect(52, 28, 210, 24);
+    NSTextField *label = [NSTextField wrappingLabelWithString:message ?: @"Working..."];
+    label.frame = NSMakeRect(52, 42, 446, 40);
     label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
     label.textColor = [NSColor labelColor];
+    label.maximumNumberOfLines = 2;
+    label.lineBreakMode = NSLineBreakByWordWrapping;
     [bg addSubview:label];
+    objc_setAssociatedObject(hud, "processingLabel", label, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     [hud makeKeyAndOrderFront:nil];
     return hud;
+}
+
+- (void)updateProcessingHUD:(NSPanel *)hud message:(NSString *)message {
+    if (!hud) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSTextField *label = objc_getAssociatedObject(hud, "processingLabel");
+        if (label) {
+            label.stringValue = message ?: @"Working...";
+            [label sizeToFit];
+            NSRect frame = label.frame;
+            frame.origin.x = 52;
+            frame.origin.y = 42;
+            frame.size.width = 446;
+            frame.size.height = MIN(MAX(frame.size.height, 20), 40);
+            label.frame = frame;
+        }
+    });
+}
+
+- (void)attachURLImportCancelButtonToHUD:(NSPanel *)hud jobID:(NSString *)jobID {
+    if (!hud || jobID.length == 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (objc_getAssociatedObject(hud, "urlImportCancelButton")) return;
+
+        NSVisualEffectView *bg = hud.contentView.subviews.firstObject;
+        if (![bg isKindOfClass:[NSVisualEffectView class]]) return;
+
+        objc_setAssociatedObject(hud, "urlImportJobID", jobID, OBJC_ASSOCIATION_COPY_NONATOMIC);
+
+        NSButton *cancelButton = [NSButton buttonWithTitle:@"Cancel Import"
+                                                    target:self
+                                                    action:@selector(handleURLImportCancelButton:)];
+        cancelButton.frame = NSMakeRect(388, 14, 112, 30);
+        cancelButton.bezelStyle = NSBezelStyleRounded;
+        [bg addSubview:cancelButton];
+        objc_setAssociatedObject(hud, "urlImportCancelButton", cancelButton, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    });
+}
+
+- (void)handleURLImportCancelButton:(NSButton *)sender {
+    NSPanel *hud = (NSPanel *)sender.window;
+    NSString *jobID = objc_getAssociatedObject(hud, "urlImportJobID");
+    if (jobID.length == 0) return;
+
+    NSDictionary *cancelResult = SpliceKitURLImport_cancel(@{@"job_id": jobID});
+    sender.enabled = NO;
+    NSString *message = [cancelResult[@"state"] isEqualToString:@"cancelled"]
+        ? @"Cancelling URL import..."
+        : @"Cancel request sent...";
+    [self updateProcessingHUD:hud message:message];
 }
 
 - (void)dismissProcessingHUD:(NSPanel *)hud {
     if (!hud) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         [hud close];
+    });
+}
+
+- (void)showSimpleAlertWithTitle:(NSString *)title message:(NSString *)message {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = title ?: @"SpliceKit";
+        alert.informativeText = message ?: @"";
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+    });
+}
+
+- (NSString *)selectedURLImportModeForToggle:(NSButton *)timelineToggle
+                                       popup:(NSPopUpButton *)popup {
+    if (timelineToggle.state != NSControlStateValueOn) {
+        return @"import_only";
+    }
+    switch (popup.indexOfSelectedItem) {
+        case 1: return @"insert_at_timeline_start";
+        case 2: return @"append_to_timeline";
+        default: return @"insert_at_playhead";
+    }
+}
+
+- (void)syncURLImportTimelineControls:(NSButton *)timelineToggle {
+    NSTextField *label = objc_getAssociatedObject(timelineToggle, "urlImportTimelineLabel");
+    NSPopUpButton *popup = objc_getAssociatedObject(timelineToggle, "urlImportTimelinePopup");
+    BOOL enabled = (timelineToggle.state == NSControlStateValueOn);
+    popup.enabled = enabled;
+    label.enabled = enabled;
+    label.textColor = enabled ? [NSColor labelColor] : [NSColor secondaryLabelColor];
+}
+
+- (void)handleURLImportTimelineToggle:(NSButton *)sender {
+    [self syncURLImportTimelineControls:sender];
+}
+
+- (void)showURLImportPromptWithDefaultMode:(NSString *)defaultMode {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        BOOL defaultsToTimeline = ![defaultMode isEqualToString:@"import_only"];
+        NSString *promptTitle = defaultsToTimeline
+            ? @"Import URL to Timeline"
+            : @"Import URL to Library";
+        NSString *primaryButtonTitle = defaultsToTimeline
+            ? @"Add to Timeline"
+            : @"Import to Library";
+        NSString *failureTitle = defaultsToTimeline
+            ? @"Import URL to Timeline Failed"
+            : @"Import URL to Library Failed";
+        NSString *emptyMessage = defaultsToTimeline
+            ? @"Paste a video URL to add to the timeline."
+            : @"Paste a video URL to import into the library.";
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = promptTitle;
+        alert.informativeText = defaultsToTimeline
+            ? @"Paste a YouTube, Vimeo, or direct media URL. SpliceKit will download it, import it into Final Cut Pro, then place it in the active timeline using the selected placement."
+            : @"Paste a YouTube, Vimeo, or direct media URL. SpliceKit will download it, convert it if needed, and import it into Final Cut Pro.";
+        [alert addButtonWithTitle:primaryButtonTitle];
+        [alert addButtonWithTitle:@"Cancel"];
+
+        NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 184)];
+
+        NSTextField *urlLabel = [NSTextField labelWithString:@"URL"];
+        urlLabel.frame = NSMakeRect(0, 160, 80, 20);
+        [accessory addSubview:urlLabel];
+
+        NSScrollView *urlScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 108, 420, 48)];
+        urlScroll.hasVerticalScroller = YES;
+        urlScroll.hasHorizontalScroller = NO;
+        urlScroll.borderType = NSBezelBorder;
+        urlScroll.autohidesScrollers = YES;
+
+        NSTextView *urlField = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 420, 48)];
+        urlField.minSize = NSMakeSize(0, 48);
+        urlField.maxSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
+        urlField.verticallyResizable = YES;
+        urlField.horizontallyResizable = NO;
+        urlField.automaticQuoteSubstitutionEnabled = NO;
+        urlField.automaticDashSubstitutionEnabled = NO;
+        urlField.automaticTextReplacementEnabled = NO;
+        urlField.font = [NSFont systemFontOfSize:13];
+        urlField.string = @"";
+        urlScroll.documentView = urlField;
+        [accessory addSubview:urlScroll];
+
+        NSTextField *urlHint = [NSTextField labelWithString:@"Paste a full YouTube, Vimeo, or direct video URL"];
+        urlHint.frame = NSMakeRect(2, 90, 320, 14);
+        urlHint.font = [NSFont systemFontOfSize:11];
+        urlHint.textColor = [NSColor secondaryLabelColor];
+        [accessory addSubview:urlHint];
+
+        NSButton *timelineToggle = [[NSButton alloc] initWithFrame:NSMakeRect(0, 62, 260, 20)];
+        [timelineToggle setButtonType:NSButtonTypeSwitch];
+        timelineToggle.title = defaultsToTimeline
+            ? @"Place in active timeline"
+            : @"Also place in active timeline";
+        timelineToggle.target = self;
+        timelineToggle.action = @selector(handleURLImportTimelineToggle:);
+        timelineToggle.state = defaultsToTimeline
+            ? NSControlStateValueOn
+            : NSControlStateValueOff;
+        [accessory addSubview:timelineToggle];
+
+        NSTextField *placementLabel = [NSTextField labelWithString:@"Timeline Placement"];
+        placementLabel.frame = NSMakeRect(0, 34, 140, 20);
+        [accessory addSubview:placementLabel];
+
+        NSPopUpButton *modePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 8, 188, 26) pullsDown:NO];
+        [modePopup addItemsWithTitles:@[@"At Current Playhead", @"At Timeline Start", @"Append to Timeline End"]];
+        if ([defaultMode isEqualToString:@"append_to_timeline"]) {
+            [modePopup selectItemAtIndex:2];
+        } else if ([defaultMode isEqualToString:@"insert_at_timeline_start"]) {
+            [modePopup selectItemAtIndex:1];
+        } else {
+            [modePopup selectItemAtIndex:0];
+        }
+        [accessory addSubview:modePopup];
+        objc_setAssociatedObject(timelineToggle, "urlImportTimelineLabel", placementLabel, OBJC_ASSOCIATION_ASSIGN);
+        objc_setAssociatedObject(timelineToggle, "urlImportTimelinePopup", modePopup, OBJC_ASSOCIATION_ASSIGN);
+        [self syncURLImportTimelineControls:timelineToggle];
+
+        NSTextField *titleLabel = [NSTextField labelWithString:@"Title Override"];
+        titleLabel.frame = NSMakeRect(198, 34, 100, 20);
+        [accessory addSubview:titleLabel];
+
+        NSTextField *titleField = [[NSTextField alloc] initWithFrame:NSMakeRect(198, 8, 222, 24)];
+        titleField.placeholderString = @"Optional clip name";
+        [accessory addSubview:titleField];
+
+        alert.accessoryView = accessory;
+
+        NSInteger response = [alert runModal];
+        if (response != NSAlertFirstButtonReturn) return;
+
+        NSString *url = [urlField.string stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (url.length == 0) {
+            [self showSimpleAlertWithTitle:promptTitle message:emptyMessage];
+            return;
+        }
+
+        NSMutableDictionary *params = [NSMutableDictionary dictionary];
+        params[@"url"] = url;
+        params[@"mode"] = [self selectedURLImportModeForToggle:timelineToggle popup:modePopup];
+        NSString *title = [titleField.stringValue stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (title.length > 0) params[@"title"] = title;
+
+        NSPanel *hud = [self showProcessingHUD:(defaultsToTimeline
+            ? @"Starting timeline URL import..."
+            : @"Starting library URL import...")];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *start = SpliceKitURLImport_start(params);
+            if (start[@"error"]) {
+                [self dismissProcessingHUD:hud];
+                [self showSimpleAlertWithTitle:failureTitle message:start[@"error"]];
+                return;
+            }
+
+            NSString *jobID = start[@"job_id"];
+            if (jobID.length == 0) {
+                [self dismissProcessingHUD:hud];
+                [self showSimpleAlertWithTitle:failureTitle
+                                       message:@"The URL import job did not return a valid job ID."];
+                return;
+            }
+            [self attachURLImportCancelButtonToHUD:hud jobID:jobID];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __block dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                    dispatch_get_main_queue());
+                dispatch_source_set_timer(timer,
+                    dispatch_time(DISPATCH_TIME_NOW, 0),
+                    (uint64_t)(0.35 * NSEC_PER_SEC),
+                    (uint64_t)(0.05 * NSEC_PER_SEC));
+
+                dispatch_source_set_event_handler(timer, ^{
+                    NSDictionary *status = SpliceKitURLImport_status(@{@"job_id": jobID});
+                    NSString *state = status[@"state"] ?: @"";
+                    NSString *message = status[@"message"] ?: @"Working...";
+                    double progress = [status[@"progress"] doubleValue];
+                    NSString *hudMessage = message;
+                    if (progress > 0.0 && progress < 1.0) {
+                        hudMessage = [NSString stringWithFormat:@"%@ %.0f%%", message, progress * 100.0];
+                    }
+                    [self updateProcessingHUD:hud message:hudMessage];
+
+                    BOOL finished = [state isEqualToString:@"completed"] ||
+                                    [state isEqualToString:@"failed"] ||
+                                    [state isEqualToString:@"cancelled"];
+                    if (!finished) return;
+
+                    dispatch_source_cancel(timer);
+                    timer = nil;
+                    [self dismissProcessingHUD:hud];
+
+                    BOOL completed = [state isEqualToString:@"completed"];
+                    NSString *statusError = [status[@"error"] isKindOfClass:[NSString class]]
+                        ? status[@"error"] : @"";
+                    BOOL hasWarning = completed && statusError.length > 0;
+
+                    if (completed && !hasWarning) {
+                        SpliceKit_log(@"[URLImport] %@", status[@"message"] ?: @"URL import finished.");
+                        return;
+                    }
+
+                    NSMutableString *summary = [NSMutableString stringWithString:
+                        status[@"message"] ?: @"URL import finished."];
+                    NSString *targetEvent = status[@"target_event"];
+                    NSString *finalPath = [status[@"normalized_path"] length] > 0
+                        ? status[@"normalized_path"] : status[@"download_path"];
+                    if (targetEvent.length > 0) {
+                        [summary appendFormat:@"\n\nEvent: %@", targetEvent];
+                    }
+                    if (finalPath.length > 0 && !completed) {
+                        [summary appendFormat:@"\nPath: %@", finalPath];
+                    }
+                    if (statusError.length > 0) {
+                        [summary appendFormat:@"\n\nDetail: %@", statusError];
+                    }
+
+                    NSString *titleText = completed ? @"URL Imported With Warning" : @"Import From URL Failed";
+                    [self showSimpleAlertWithTitle:titleText message:summary];
+                });
+
+                dispatch_resume(timer);
+            });
+        });
     });
 }
 
@@ -4804,6 +5096,17 @@ static NSString *SpliceKit_tailLogFile(NSString *path, NSUInteger maxBytes) {
           },
           @"required": @[@"xml"]});
 
+    addTool(@"import_url",
+        @"Download a remote media URL, import it into Final Cut Pro, and optionally place it in the timeline.",
+        @{@"type": @"object",
+          @"properties": @{
+              @"url": @{@"type": @"string", @"description": @"Direct media URL or a supported provider URL"},
+              @"mode": @{@"type": @"string", @"description": @"import_only, insert_at_playhead, or append_to_timeline"},
+              @"title": @{@"type": @"string", @"description": @"Optional clip title override"},
+              @"target_event": @{@"type": @"string", @"description": @"Optional event name override"}
+          },
+          @"required": @[@"url"]});
+
     addTool(@"export_xml",
         @"Export current project as FCPXML to a file path.",
         @{@"type": @"object",
@@ -4961,6 +5264,7 @@ static NSDictionary *SpliceKit_gemmaToolBridgeMap(void) {
             @"generate_captions":        @"captions.generate",
             @"generate_fcpxml":          @"fcpxml.generate",
             @"import_fcpxml":            @"fcpxml.import",
+            @"import_url":               @"urlImport.import",
             @"export_xml":               @"fcpxml.export",
             @"detect_scene_changes":     @"scene.detect",
             @"toggle_panel":             @"view.toggle",
@@ -5411,6 +5715,11 @@ static NSString * const kGemmaSystemPrompt =
         "}\n"
         "@Generable struct FxArgs { var name: EffectName }\n"
         "@Generable struct MenuArgs { @Guide(description: \"Menu path\") var path: [String] }\n"
+        "@Generable struct ImportArgs {\n"
+        "    @Guide(description: \"A direct .mp4/.mov/.m4v/.webm URL, or a supported provider URL\") var url: String\n"
+        "    @Guide(description: \"import_only, insert_at_playhead, insert_at_timeline_start, or append_to_timeline\") var mode: String?\n"
+        "    @Guide(description: \"Optional clip title override\") var title: String?\n"
+        "}\n"
         "\n"
         "struct Act: Tool {\n"
         "    let name = \"edit\"\n"
@@ -5455,11 +5764,20 @@ static NSString * const kGemmaSystemPrompt =
         "    let description = \"Execute menu command by path. Only if edit tool doesn't have the action.\"\n"
         "    func call(arguments: MenuArgs) async throws -> String { bridge(\"menu.execute\", [\"menuPath\": arguments.path]) }\n"
         "}\n"
+        "struct ImportURL: Tool {\n"
+        "    let name = \"import_url\"\n"
+        "    let description = \"Download a remote media URL, import it into Final Cut Pro, and optionally place it into the timeline\"\n"
+        "    func call(arguments: ImportArgs) async throws -> String {\n"
+        "        var params: [String: Any] = [\"url\": arguments.url, \"mode\": arguments.mode ?? \"import_only\"]\n"
+        "        if let title = arguments.title, !title.isEmpty { params[\"title\"] = title }\n"
+        "        return bridge(\"urlImport.import\", params)\n"
+        "    }\n"
+        "}\n"
         "\n"
         "Task {\n"
         "    do {\n"
-        "        let s = LanguageModelSession(tools: [Act(), Seek(), Clips(), Repeat(), Fx(), Menu()],\n"
-        "            instructions: \"You control Final Cut Pro via tools. %@ cut/split means blade NOT delete. For repeating actions at intervals use repeat_action. Always prefer edit tool over menu. Summarize what you did.\")\n"
+        "        let s = LanguageModelSession(tools: [Act(), Seek(), Clips(), Repeat(), Fx(), Menu(), ImportURL()],\n"
+        "            instructions: \"You control Final Cut Pro via tools. %@ cut/split means blade NOT delete. For repeating actions at intervals use repeat_action. Always prefer edit tool over menu. If the request includes a media URL, use import_url. Summarize what you did.\")\n"
         "        let r = try await s.respond(to: \"%@\")\n"
         "        print(r.content ?? \"Done.\")\n"
         "    } catch LanguageModelSession.GenerationError.exceededContextWindowSize {\n"
