@@ -48,6 +48,29 @@ err()   { echo -e "${RED}[X]${NC} $*"; }
 info()  { echo -e "${BLUE}[i]${NC} $*"; }
 step()  { echo -e "\n${CYAN}${BOLD}=== $* ===${NC}"; }
 
+detect_sign_identity() {
+    /usr/bin/security find-identity -v -p codesigning 2>/dev/null | \
+        awk '
+            /"Apple Development:/ { print $2; exit }
+            /"Developer ID Application:/ && developer == "" { developer = $2 }
+            /[0-9]+\) [0-9A-F]+ "/ && first == "" { first = $2 }
+            END {
+                if (developer != "") print developer;
+                else if (first != "") print first;
+            }'
+}
+
+sign_modded_app() {
+    local identity="$1"
+
+    if ! codesign --force --sign "$identity" "$MODDED_APP/Contents/Frameworks/SpliceKit.framework"; then
+        return 1
+    fi
+    if ! codesign --force --sign "$identity" --entitlements "$ENTITLEMENTS" "$MODDED_APP"; then
+        return 1
+    fi
+}
+
 # ============================================================
 # Help
 # ============================================================
@@ -340,8 +363,6 @@ cat > "$ENTITLEMENTS" << 'ENT'
 <plist version="1.0">
 <dict>
     <key>com.apple.security.cs-disable-library-validation</key><true/>
-    <key>com.apple.security.cs-allow-dyld-environment-variables</key><true/>
-    <key>com.apple.security.get-task-allow</key><true/>
 </dict>
 </plist>
 ENT
@@ -349,13 +370,25 @@ ENT
 # Only sign the SpliceKit framework (ours) and the main app bundle.
 # Apple's own frameworks must keep their original signatures or internal
 # integrity checks (e.g. ProAppSupport +[PCApp isiMovie]) abort on launch.
-info "Signing SpliceKit framework..."
-codesign --force --sign - "$MODDED_APP/Contents/Frameworks/SpliceKit.framework" 2>/dev/null || true
+SIGN_IDENTITY="$(detect_sign_identity || true)"
+if [[ -n "$SIGN_IDENTITY" ]]; then
+    info "Using signing identity: $SIGN_IDENTITY"
+else
+    SIGN_IDENTITY="-"
+    info "No local codesigning identity found; falling back to ad-hoc signing (higher risk of macOS launch/security blocks)"
+fi
 
-# Sign main app with entitlements (disables library validation so our
-# ad-hoc-signed SpliceKit.framework loads alongside Apple-signed frameworks)
 info "Signing main application..."
-codesign --force --sign - --entitlements "$ENTITLEMENTS" "$MODDED_APP" 2>/dev/null
+if ! sign_modded_app "$SIGN_IDENTITY"; then
+    if [[ "$SIGN_IDENTITY" == "-" ]]; then
+        err "Signing failed"
+        exit 1
+    fi
+
+    warn "Developer signing failed; retrying with ad-hoc signature (higher risk of macOS launch/security blocks)"
+    sign_modded_app "-"
+    SIGN_IDENTITY="-"
+fi
 
 # Verify
 VERIFY_OUT=$(codesign --verify --verbose "$MODDED_APP" 2>&1)

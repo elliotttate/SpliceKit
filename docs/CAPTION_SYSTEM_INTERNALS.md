@@ -2600,11 +2600,11 @@ improvement. Phase 6 (pasteboard import) is the linchpin — without it, phases
 ---
 ---
 
-# Part III: mCaptions Reverse Engineering & Replication Plan
+# Part III: legacy caption extension Reverse Engineering & Replication Plan
 
-## 24. mCaptions Architecture (from Decompilation)
+## 24. legacy caption extension Architecture (from Decompilation)
 
-mCaptions is a commercial FCP Workflow Extension that generates
+legacy caption extension is a commercial FCP Workflow Extension that generates
 word-by-word highlighted captions. Its decompiled binaries reveal a three-tier
 architecture that we can replicate — with advantages — using SpliceKit's
 in-process approach.
@@ -2615,17 +2615,17 @@ in-process approach.
 ┌──────────────────────────────────────────────────────────────┐
 │ Final Cut Pro (Host Application)                              │
 │                                                              │
-│  Loads mCaptions.appex as a Workflow Extension               │
+│  Loads legacy-caption-extension.appex as a Workflow Extension               │
 │  Provides ProExtensionHostProtocol for FCP ↔ Extension IPC  │
 │  Receives FCPXML via Flexo pasteboard on caption apply       │
 └───────────────────────┬──────────────────────────────────────┘
                         │ ProExtension APIs
                         ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ mCaptions Workflow Extension (.appex)                         │
+│ legacy caption extension Workflow Extension (.appex)                         │
 │                                                              │
 │  UI Layer:                                                    │
-│  • mCaptionsExtensionViewController (NIB-based UI)          │
+│  • legacy caption extension view controller (NIB-based UI)          │
 │  • TranscriptionViewController, PreviewViewModel             │
 │  • LanguageViewModel, MoreOptionsViewModel                   │
 │  • TemplatesViewModel, OutputViewModel, DialogsViewModel     │
@@ -2647,10 +2647,10 @@ in-process approach.
 │  • TranscriptionRepository — persistence (JSON)              │
 │  • Sentry — crash/error reporting                            │
 └───────────────────────┬──────────────────────────────────────┘
-                        │ XPC (mCaptionsDaemon)
+                        │ XPC (legacy caption helper daemon)
                         ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ mCaptionsDaemon (Background LaunchAgent)                     │
+│ legacy caption helper daemon (Background LaunchAgent)                     │
 │                                                              │
 │  24 ObjC classes, 263 methods, 64 properties, 6 protocols   │
 │  (Decompilation failed — analysis from IDA metadata only)    │
@@ -2674,8 +2674,8 @@ String evidence:
   "WhisperRunning"              ← Whisper engine state
   "MissingModel"                ← ML model download state
   "GPU model not supported. Processing on CPU."  ← GPU/CPU fallback
-  "mCaptionsAI"                 ← Product name references AI
-  "mCaptionsAIAnalysisEnded"    ← Analysis completion notification
+  "legacy caption AI"                 ← Product name references AI
+  "legacy caption analysis ended"    ← Analysis completion notification
 ```
 
 No HTTP API endpoints, no API keys, no cloud URLs found in any binary. All
@@ -2686,22 +2686,22 @@ Parakeet-based approach.
 
 ```
 String evidence:
-  "/Motion Templates.localized/Titles.localized/mCaptions"  ← template path
+  "/Motion Templates.localized/Titles.localized/legacy caption extension"  ← template path
   "Font %@ used by the selected template is unavailable"     ← font validation
-  "You don't have any templates in the mCaptions directory"  ← template presence check
-  "DesignStudio:mCaptions"                                    ← design studio branding
+  "You don't have any templates in the legacy caption extension directory"  ← template presence check
+  "template catalog:legacy caption extension"                                    ← design studio branding
   "com.apple.motionapp"                                       ← Motion.app integration
 ```
 
-mCaptions ships **custom Motion Templates** (`.moti` files) installed to
-`~/Movies/Motion Templates.localized/Titles.localized/mCaptions/`. These
+legacy caption extension ships **custom Motion Templates** (`.moti` files) installed to
+`~/Movies/Motion Templates.localized/Titles.localized/legacy caption extension/`. These
 templates contain the visual styling, animations, background boxes, and
 highlight effects. The daemon fills in text content and word timing, then
 generates FCPXML referencing these templates.
 
 **This is the key architectural difference from SpliceKit.** SpliceKit uses
 the built-in Basic Title and constructs styling via `<text-style-def>` in the
-FCPXML. mCaptions uses pre-designed Motion templates with published parameters,
+FCPXML. legacy caption extension uses pre-designed Motion templates with published parameters,
 which gives them:
 - Smooth bezier-curve entrance/exit animations (designed in Motion)
 - True rounded-rectangle background boxes (Motion shape layer)
@@ -2715,7 +2715,7 @@ String evidence:
   "com.apple.flexo.proFFPasteboardUTI"  ← FCP's internal pasteboard type
 ```
 
-mCaptions writes generated FCPXML to NSPasteboard using FCP's Flexo UTI type,
+legacy caption extension writes generated FCPXML to NSPasteboard using FCP's Flexo UTI type,
 then FCP reads it and inserts the caption clips. SpliceKit already has this
 capability via `SpliceKit_handlePasteboardImportXML()`.
 
@@ -2727,7 +2727,7 @@ States: Importing → ImportingFinished
         AudioFilesExtracting → AudioFilesExtractingFinished
 ```
 
-mCaptions has a well-defined state machine for tracking the import/transcribe
+legacy caption extension has a well-defined state machine for tracking the import/transcribe
 pipeline. SpliceKit's simpler status enum (`Idle/Transcribing/Ready/Generating/Error`)
 covers the same ground.
 
@@ -2737,7 +2737,7 @@ covers the same ground.
 "Imported captions don't contain word-by-word timestamps, timings will be approximated."
 ```
 
-When mCaptions imports SRT files (which have segment-level timing but not
+When legacy caption extension imports SRT files (which have segment-level timing but not
 per-word timing), it approximates word timestamps. This is likely done by
 distributing the segment duration proportionally across words by character count.
 SpliceKit doesn't need this because Parakeet provides native word-level timing.
@@ -2748,17 +2748,17 @@ SpliceKit doesn't need this because Parakeet provides native word-level timing.
 "FPS missmatch\n (timeline %@ vs %@ selected)"
 ```
 
-mCaptions validates that the timeline frame rate matches the export settings.
+legacy caption extension validates that the timeline frame rate matches the export settings.
 SpliceKit detects timeline properties automatically via `detectTimelineProperties()`,
 so this validation is inherent.
 
 **7. XPC daemon with launchd lifecycle**
 
 ```
-Service: mCaptionsDaemon
-Plist:   mCaptionsDaemon-Launchd.plist
-Helper:  mCaptionsLauncher.app
-Kill:    mCaptionsTerminator.app
+Service: legacy caption helper daemon
+Plist:   legacy caption helper daemon-Launchd.plist
+Helper:  legacy caption launcher.app
+Kill:    legacy caption terminator.app
 
 Lifecycle: LauncherRunner.initializeDaemonResources
          → LauncherRunner.loadDaemonWithError:
@@ -2768,7 +2768,7 @@ Lifecycle: LauncherRunner.initializeDaemonResources
          → [On failure] LauncherRunner.relaunchDaemon:message:error:
 ```
 
-mCaptions uses a separate daemon process because Workflow Extensions run
+legacy caption extension uses a separate daemon process because Workflow Extensions run
 out-of-process from FCP and have limited capabilities. The daemon handles
 heavy GPU compute (Whisper) and FCPXML generation.
 
@@ -2782,14 +2782,14 @@ on FCP's own objects. This is a significant architectural advantage.
 "ProjectWidth", "ProjectHeight"
 ```
 
-mCaptions stores video dimensions for proper caption positioning. SpliceKit
+legacy caption extension stores video dimensions for proper caption positioning. SpliceKit
 reads these directly from the active timeline via `renderSize`.
 
 ---
 
-## 25. Comparison: mCaptions vs. SpliceKit Caption System
+## 25. Comparison: legacy caption extension vs. SpliceKit Caption System
 
-| Aspect | mCaptions | SpliceKit (Current) | SpliceKit (Planned) |
+| Aspect | legacy caption extension | SpliceKit (Current) | SpliceKit (Planned) |
 |--------|-----------|-------------------|-------------------|
 | **Architecture** | Out-of-process Workflow Extension + XPC daemon | In-process dylib (direct FCP access) | Same |
 | **Transcription** | Whisper (GPU + CPU fallback) | Parakeet TDT 0.6B (GPU via FluidAudio) | Same |
@@ -2803,7 +2803,7 @@ reads these directly from the active timeline via `renderSize`.
 | **Export** | SRT, FCP Captions, FCPXML | SRT, TXT, FCPXML | Same |
 | **Language support** | Multi-language via Whisper | 25 languages via Parakeet v3 | Same |
 | **Speaker diarization** | Unknown (daemon code not decompiled) | Parakeet + FluidAudio OfflineDiarizer | Same |
-| **Template system** | DesignStudio catalog, font validation | 12 built-in presets, custom via API | Motion Templates (Phase 7) |
+| **Template system** | template catalog catalog, font validation | 12 built-in presets, custom via API | Motion Templates (Phase 7) |
 | **Error reporting** | Sentry integration | SpliceKit_log() | Same |
 
 ### SpliceKit's inherent advantages
@@ -2812,7 +2812,7 @@ reads these directly from the active timeline via `renderSize`.
    serialization overhead, no daemon lifecycle management, no connection health checks.
 
 2. **Automatic timeline detection** — Frame rate, resolution, and sequence properties
-   are read directly from the active `FFAnchoredTimelineModule`. mCaptions must
+   are read directly from the active `FFAnchoredTimelineModule`. legacy caption extension must
    receive these as parameters from the Workflow Extension host.
 
 3. **Instant import** — The pasteboard FCPXML import function
@@ -2823,22 +2823,22 @@ reads these directly from the active timeline via `renderSize`.
    access for transcription and can call FCP's APIs synchronously.
 
 5. **Real-time timeline access** — SpliceKit can read clip positions, playhead time,
-   and selected clips in real time. mCaptions only gets information when the
+   and selected clips in real time. legacy caption extension only gets information when the
    Workflow Extension is opened and must go through ProExtension protocol methods.
 
-### mCaptions' advantages to replicate
+### legacy caption extension' advantages to replicate
 
 1. **Motion Templates** — Pre-designed visual templates with smooth animations,
    background boxes, and per-character effects that FCPXML alone can't express.
 
-2. **Template marketplace** — DesignStudio integration for users to browse and
+2. **Template marketplace** — template catalog integration for users to browse and
    install new caption styles.
 
 3. **Font validation** — Checks that fonts used by templates are installed.
 
 ---
 
-## 26. Replication Plan: Building an mCaptions-Equivalent System
+## 26. Replication Plan: Building an legacy caption extension-Equivalent System
 
 ### What to build
 
@@ -3042,9 +3042,9 @@ NSDictionary *importResult = SpliceKit_handlePasteboardImportXML(@{@"xml": xml})
 }
 ```
 
-#### Font validation (from mCaptions)
+#### Font validation (from legacy caption extension)
 
-mCaptions validates that fonts used by templates are installed:
+legacy caption extension validates that fonts used by templates are installed:
 
 ```objc
 - (BOOL)validateFontAvailability:(NSString *)fontName {
@@ -3087,7 +3087,7 @@ when templates are installed.
 ## 27. Architecture Comparison: How SpliceKit Wins
 
 ```
-mCaptions Architecture:
+legacy caption extension Architecture:
 ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌─────────┐
 │  FCP    │◄──►│ Extension│◄──►│  Daemon  │    │ Motion  │
 │  Host   │ProEx│   UI    │ XPC│ Whisper  │    │Templates│
@@ -3123,7 +3123,7 @@ SpliceKit Architecture:
 - Daemon process launch, health monitoring, and restart logic
 - ProExtension protocol negotiation
 - Workflow Extension sandbox restrictions
-- The need for mCaptionsLauncher, mCaptionsTerminator helper apps
+- The need for legacy caption launcher, legacy caption terminator helper apps
 - State synchronization between 3 separate processes
 
 **SpliceKit adds:**
@@ -3137,7 +3137,7 @@ SpliceKit Architecture:
 
 ## 28. Implementation Roadmap
 
-Combining the social media caption plan (Part II) with the mCaptions replication
+Combining the social media caption plan (Part II) with the legacy caption extension replication
 plan (Part III):
 
 ```
@@ -3158,10 +3158,10 @@ Phase D: Template Management    ← 2 days    (scanner, font validation, UI)
 
 **Critical path:** Phase 1 → Phase 6 → Phase 2 → Phase 3 → Phase A → Phase B → Phase E
 
-The early phases (1, 6, 2, 3) produce an mCaptions-equivalent result using
+The early phases (1, 6, 2, 3) produce an legacy caption extension-equivalent result using
 only FCPXML clip layering — no Motion Templates needed. The later phases
 (A, B, E) add Motion Template support for premium visual quality that matches
-or exceeds mCaptions.
+or exceeds legacy caption extension.
 
 ---
 

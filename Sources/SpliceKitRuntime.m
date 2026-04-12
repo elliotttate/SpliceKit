@@ -10,6 +10,7 @@
 //
 
 #import "SpliceKit.h"
+#import <AppKit/AppKit.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 
@@ -92,6 +93,143 @@ void SpliceKit_executeOnMainThread(dispatch_block_t block) {
 
 void SpliceKit_executeOnMainThreadAsync(dispatch_block_t block) {
     dispatch_async(dispatch_get_main_queue(), block);
+}
+
+#pragma mark - Sequence State Persistence
+
+static NSString *SpliceKit_persistenceString(id value) {
+    if (!value) return @"";
+    if ([value isKindOfClass:[NSString class]]) return value;
+    return [value description] ?: @"";
+}
+
+static id SpliceKit_objectForSelector(id target, NSString *selectorName) {
+    if (!target || selectorName.length == 0) return nil;
+    SEL selector = NSSelectorFromString(selectorName);
+    if (![target respondsToSelector:selector]) return nil;
+    @try {
+        return ((id (*)(id, SEL))objc_msgSend)(target, selector);
+    } @catch (NSException *e) {
+        SpliceKit_log(@"[State] %@ threw on %@: %@", NSStringFromClass([target class]), selectorName, e.reason);
+        return nil;
+    }
+}
+
+static NSString *SpliceKit_stringForSelector(id target, NSString *selectorName) {
+    return SpliceKit_persistenceString(SpliceKit_objectForSelector(target, selectorName));
+}
+
+static uint64_t SpliceKit_fnv1aHash(NSString *string) {
+    NSData *data = [string dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    const uint8_t *bytes = data.bytes;
+    uint64_t hash = 1469598103934665603ULL;
+    for (NSUInteger i = 0; i < data.length; i++) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static NSString *SpliceKit_sequenceStateDirectory(void) {
+    NSString *base = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/SpliceKit/sequence-state"];
+    NSError *error = nil;
+    [[NSFileManager defaultManager] createDirectoryAtPath:base
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:&error];
+    if (error) {
+        SpliceKit_log(@"[State] Failed to create sequence-state directory %@: %@",
+                      base, error.localizedDescription);
+    }
+    return base;
+}
+
+NSDictionary *SpliceKit_sequenceIdentity(id sequence) {
+    if (!sequence) return nil;
+
+    __block NSDictionary *identity = nil;
+    SpliceKit_executeOnMainThread(^{
+        NSString *sequenceName = SpliceKit_stringForSelector(sequence, @"displayName");
+        if (sequenceName.length == 0) sequenceName = @"Untitled Sequence";
+
+        id event = SpliceKit_objectForSelector(sequence, @"containerEvent");
+        if (!event) event = SpliceKit_objectForSelector(sequence, @"event");
+        NSString *eventName = SpliceKit_stringForSelector(event, @"displayName");
+
+        id app = [NSApplication sharedApplication];
+        id delegate = [app delegate];
+        id library = SpliceKit_objectForSelector(delegate, @"targetLibrary");
+        NSString *libraryName = SpliceKit_stringForSelector(library, @"displayName");
+        NSString *mediaIdentifier = SpliceKit_stringForSelector(sequence, @"mediaIdentifier");
+
+        NSMutableArray<NSString *> *parts = [NSMutableArray array];
+        if (libraryName.length > 0) [parts addObject:[NSString stringWithFormat:@"lib=%@", libraryName]];
+        if (eventName.length > 0) [parts addObject:[NSString stringWithFormat:@"event=%@", eventName]];
+        [parts addObject:[NSString stringWithFormat:@"sequence=%@", sequenceName]];
+        NSString *rawKey = [parts componentsJoinedByString:@"|"];
+        NSString *cacheKey = [NSString stringWithFormat:@"%016llx", SpliceKit_fnv1aHash(rawKey)];
+
+        identity = @{
+            @"cacheKey": cacheKey,
+            @"rawKey": rawKey,
+            @"libraryName": libraryName ?: @"",
+            @"eventName": eventName ?: @"",
+            @"sequenceName": sequenceName ?: @"",
+            @"mediaIdentifier": mediaIdentifier ?: @"",
+        };
+    });
+
+    return identity;
+}
+
+static NSString *SpliceKit_sequenceStatePath(id sequence) {
+    NSDictionary *identity = SpliceKit_sequenceIdentity(sequence);
+    NSString *cacheKey = identity[@"cacheKey"];
+    if (cacheKey.length == 0) return nil;
+    return [[SpliceKit_sequenceStateDirectory() stringByAppendingPathComponent:cacheKey]
+        stringByAppendingPathExtension:@"json"];
+}
+
+NSDictionary *SpliceKit_loadSequenceState(id sequence) {
+    NSString *path = SpliceKit_sequenceStatePath(sequence);
+    if (path.length == 0) return nil;
+
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data) return nil;
+
+    NSError *error = nil;
+    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+    if (![json isKindOfClass:[NSDictionary class]]) {
+        if (error) {
+            SpliceKit_log(@"[State] Failed to parse %@: %@", path, error.localizedDescription);
+        }
+        return nil;
+    }
+    return json;
+}
+
+BOOL SpliceKit_saveSequenceState(id sequence, NSDictionary *state, NSError **error) {
+    NSString *path = SpliceKit_sequenceStatePath(sequence);
+    NSDictionary *identity = SpliceKit_sequenceIdentity(sequence);
+    if (path.length == 0 || !identity) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"SpliceKitSequenceState"
+                                         code:1
+                                     userInfo:@{NSLocalizedDescriptionKey: @"Could not resolve a sequence identity"}];
+        }
+        return NO;
+    }
+
+    NSMutableDictionary *root = [state mutableCopy] ?: [NSMutableDictionary dictionary];
+    root[@"schemaVersion"] = @1;
+    root[@"savedAt"] = @([[NSDate date] timeIntervalSince1970]);
+    root[@"sequenceIdentity"] = identity;
+
+    NSData *data = [NSJSONSerialization dataWithJSONObject:root
+                                                   options:NSJSONWritingPrettyPrinted
+                                                     error:error];
+    if (!data) return NO;
+    return [data writeToFile:path options:NSDataWritingAtomic error:error];
 }
 
 #pragma mark - Class Discovery

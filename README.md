@@ -163,8 +163,9 @@ insert_dylib --inplace --all-yes \
     "@rpath/SpliceKit.framework/Versions/A/SpliceKit" \
     ~/Applications/SpliceKit/"Final Cut Pro.app"/Contents/MacOS/"Final Cut Pro"
 
-# Re-sign with custom entitlements (no sandbox, library validation disabled)
-codesign --force --sign - --entitlements entitlements.plist \
+# Re-sign with a local codesigning identity when available, otherwise ad-hoc
+SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development:/ { print $2; exit } /"Developer ID Application:/ && developer == "" { developer = $2 } /[0-9]+\) [0-9A-F]+ "/ && first == "" { first = $2 } END { if (developer != "") print developer; else if (first != "") print first }')"
+codesign --force --sign "${SIGN_IDENTITY:--}" --entitlements entitlements.plist \
     ~/Applications/SpliceKit/"Final Cut Pro.app"
 ```
 
@@ -204,17 +205,47 @@ echo '{"jsonrpc":"2.0","method":"system.version","id":1}' | nc 127.0.0.1 9876
 
 ### MCP Server
 
-Add to your `.mcp.json`:
+First, create a Python virtual environment for the MCP server and install the `mcp` package:
+
+```bash
+python3 -m venv ~/.venvs/splicekit-mcp
+~/.venvs/splicekit-mcp/bin/python -m pip install --upgrade pip mcp
+```
+
+Use the virtual environment's Python as the MCP `command`.
+
+#### From a repository checkout
+
+If you cloned this repository locally, point MCP at the repo copy of `mcp/server.py`:
+
 ```json
 {
   "mcpServers": {
     "splicekit": {
-      "command": "python3",
-      "args": ["/path/to/SpliceKit/mcp/server.py"]
+      "command": "/Users/yourname/.venvs/splicekit-mcp/bin/python",
+      "args": ["/absolute/path/to/SpliceKit/mcp/server.py"]
     }
   }
 }
 ```
+
+#### From the packaged installer
+
+If you installed SpliceKit using the packaged app, point MCP at the server script inside the installed SpliceKit app bundle:
+
+```json
+{
+  "mcpServers": {
+    "splicekit": {
+      "command": "/Users/yourname/.venvs/splicekit-mcp/bin/python",
+      "args": ["/Applications/SpliceKit.app/Contents/Resources/mcp/server.py"]
+    }
+  }
+}
+```
+
+Notes:
+- The MCP server connects to the SpliceKit bridge running inside Final Cut Pro on `127.0.0.1:9876`, so the modded Final Cut Pro must be running.
 
 ## JSON-RPC API
 

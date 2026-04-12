@@ -24,6 +24,7 @@ title: SpliceKit Documentation
 ## Technical Deep Dives
 
 - [FCP Pasteboard & Media Linking](FCP_PASTEBOARD_MEDIA_LINKING.md) — How to restore clips to the FCP timeline with volume/attributes preserved, bypassing the offline media problem
+- [Beat Detection Internals Guide](BEAT_DETECTION_INTERNALS.md) — How FCP's built-in beat grid is validated, why A/V clips fail, how timing metadata is written, and when to use SpliceKit's external `detect_beats()` tool instead
 
 ## Reports
 

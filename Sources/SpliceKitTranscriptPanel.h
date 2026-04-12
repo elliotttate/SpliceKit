@@ -69,6 +69,7 @@ typedef NS_ENUM(NSInteger, SpliceKitTranscriptEngine) {
 
 // State
 - (NSDictionary *)getState;
+- (void)restorePersistedStateForCurrentSequenceIfNeeded;
 @property (nonatomic, readonly) SpliceKitTranscriptStatus status;
 @property (nonatomic, readonly) NSArray<SpliceKitTranscriptWord *> *words;
 @property (nonatomic, readonly) NSArray<SpliceKitTranscriptSilence *> *silences;

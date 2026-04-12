@@ -10,9 +10,11 @@
 
 #import "SpliceKit.h"
 #import "SpliceKitLua.h"
+#import "SpliceKitPlugins.h"
 #import "SpliceKitCommandPalette.h"
 #import "SpliceKitDebugUI.h"
 #import <AppKit/AppKit.h>
+#import <time.h>
 
 #pragma mark - Logging
 //
@@ -24,6 +26,18 @@
 static NSString *sLogPath = nil;
 static NSFileHandle *sLogHandle = nil;
 static dispatch_queue_t sLogQueue = nil;
+
+static NSString *SpliceKit_logTimestamp(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    struct tm localTime;
+    localtime_r(&ts.tv_sec, &localTime);
+
+    char buffer[32];
+    strftime(buffer, sizeof(buffer), "%H:%M:%S", &localTime);
+    return [NSString stringWithFormat:@"%s.%03ld", buffer, ts.tv_nsec / 1000000L];
+}
 
 static void SpliceKit_initLogging(void) {
     sLogQueue = dispatch_queue_create("com.splicekit.log", DISPATCH_QUEUE_SERIAL);
@@ -62,9 +76,7 @@ void SpliceKit_log(NSString *format, ...) {
 
     // Append to log file on a serial queue so we don't block the caller
     if (sLogHandle && sLogQueue) {
-        NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
-                                                            dateStyle:NSDateFormatterNoStyle
-                                                            timeStyle:NSDateFormatterMediumStyle];
+        NSString *timestamp = SpliceKit_logTimestamp();
         NSString *line = [NSString stringWithFormat:@"[%@] [SpliceKit] %@%@\n",
                           timestamp, threadLabel, message];
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
@@ -179,6 +191,8 @@ static void SpliceKit_checkCompatibility(void) {
 @interface SpliceKitMenuController : NSObject <NSMenuDelegate>
 + (instancetype)shared;
 - (void)toggleTranscriptPanel:(id)sender;
+- (void)toggleCaptionPanel:(id)sender;
+- (void)toggleSections:(id)sender;
 - (void)toggleCommandPalette:(id)sender;
 - (void)toggleLuaPanel:(id)sender;
 - (void)runLuaScript:(id)sender;
@@ -192,6 +206,17 @@ static void SpliceKit_checkCompatibility(void) {
 - (void)setDefaultConformFit:(id)sender;
 - (void)setDefaultConformFill:(id)sender;
 - (void)setDefaultConformNone:(id)sender;
+- (void)openSecondaryTimeline:(id)sender;
+- (void)syncSecondaryTimelineRoot:(id)sender;
+- (void)openSelectedInSecondaryTimeline:(id)sender;
+- (void)focusPrimaryTimeline:(id)sender;
+- (void)focusSecondaryTimeline:(id)sender;
+- (void)closeSecondaryTimeline:(id)sender;
+- (void)toggleSecondaryBrowser:(id)sender;
+- (void)toggleSecondaryTimelineIndex:(id)sender;
+- (void)toggleSecondaryAudioMeters:(id)sender;
+- (void)toggleSecondaryEffectsBrowser:(id)sender;
+- (void)toggleSecondaryTransitionsBrowser:(id)sender;
 @property (nonatomic, weak) NSButton *toolbarButton;
 @property (nonatomic, weak) NSButton *paletteToolbarButton;
 @property (nonatomic, strong) NSMenu *luaScriptsMenu;
@@ -224,6 +249,21 @@ static void SpliceKit_checkCompatibility(void) {
     [self updateToolbarButtonState:nowVisible];
 }
 
+- (void)toggleCaptionPanel:(id)sender {
+    Class panelClass = objc_getClass("SpliceKitCaptionPanel");
+    if (!panelClass) {
+        SpliceKit_log(@"SpliceKitCaptionPanel class not found");
+        return;
+    }
+    id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
+    BOOL visible = ((BOOL (*)(id, SEL))objc_msgSend)(panel, @selector(isVisible));
+    if (visible) {
+        ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
+    } else {
+        ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
+    }
+}
+
 - (void)toggleCommandPalette:(id)sender {
     [[SpliceKitCommandPalette sharedPalette] togglePalette];
 }
@@ -241,6 +281,26 @@ static void SpliceKit_checkCompatibility(void) {
     } else {
         ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
     }
+}
+
+- (void)toggleSections:(id)sender {
+    // Toggle the sections bar. If it's visible, hide it. If hidden, show it
+    // (loading saved sections from the current project if available).
+    NSDictionary *state = SpliceKit_handleSectionsGet(@{});
+    BOOL installed = [state[@"installed"] boolValue];
+    if (installed) {
+        SpliceKit_handleSectionsHide(@{});
+    } else {
+        SpliceKit_handleSectionsShow(@{});
+    }
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+    if (menuItem.action == @selector(toggleSections:)) {
+        NSDictionary *state = SpliceKit_handleSectionsGet(@{});
+        menuItem.state = [state[@"installed"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+    }
+    return YES;
 }
 
 #pragma mark - Lua Scripts Menu
@@ -506,6 +566,85 @@ static NSArray<NSNumber *> *SpliceKit_parseLadderString(NSString *str) {
     [self _updateConformMenuFromSender:sender];
 }
 
+- (void)openSecondaryTimeline:(id)sender {
+    NSDictionary *result = SpliceKit_dualTimelineOpen(@{});
+    if (result[@"error"]) {
+        SpliceKit_log(@"[DualTimeline] Open failed: %@", result[@"error"]);
+        NSBeep();
+    }
+}
+
+- (void)syncSecondaryTimelineRoot:(id)sender {
+    NSDictionary *result = SpliceKit_dualTimelineSyncRoot(@{});
+    if (result[@"error"]) {
+        SpliceKit_log(@"[DualTimeline] Sync root failed: %@", result[@"error"]);
+        NSBeep();
+    }
+}
+
+- (void)openSelectedInSecondaryTimeline:(id)sender {
+    NSDictionary *result = SpliceKit_dualTimelineOpenSelectedInSecondary(@{});
+    if (result[@"error"]) {
+        SpliceKit_log(@"[DualTimeline] Open selected failed: %@", result[@"error"]);
+        NSBeep();
+    }
+}
+
+- (void)focusPrimaryTimeline:(id)sender {
+    NSDictionary *result = SpliceKit_dualTimelineFocus(@{@"pane": @"primary"});
+    if (result[@"error"]) {
+        SpliceKit_log(@"[DualTimeline] Focus primary failed: %@", result[@"error"]);
+        NSBeep();
+    }
+}
+
+- (void)focusSecondaryTimeline:(id)sender {
+    NSDictionary *result = SpliceKit_dualTimelineFocus(@{@"pane": @"secondary"});
+    if (result[@"error"]) {
+        SpliceKit_log(@"[DualTimeline] Focus secondary failed: %@", result[@"error"]);
+        NSBeep();
+    }
+}
+
+- (void)closeSecondaryTimeline:(id)sender {
+    NSDictionary *result = SpliceKit_dualTimelineClose(@{});
+    if (result[@"error"]) {
+        SpliceKit_log(@"[DualTimeline] Close failed: %@", result[@"error"]);
+        NSBeep();
+    }
+}
+
+- (void)_toggleSecondaryPanelNamed:(NSString *)panel {
+    NSDictionary *result = SpliceKit_dualTimelineTogglePanel(@{
+        @"pane": @"secondary",
+        @"panel": panel ?: @"",
+    });
+    if (result[@"error"]) {
+        SpliceKit_log(@"[DualTimeline] Toggle %@ failed: %@", panel ?: @"panel", result[@"error"]);
+        NSBeep();
+    }
+}
+
+- (void)toggleSecondaryBrowser:(id)sender {
+    [self _toggleSecondaryPanelNamed:@"browser"];
+}
+
+- (void)toggleSecondaryTimelineIndex:(id)sender {
+    [self _toggleSecondaryPanelNamed:@"timelineIndex"];
+}
+
+- (void)toggleSecondaryAudioMeters:(id)sender {
+    [self _toggleSecondaryPanelNamed:@"audioMeters"];
+}
+
+- (void)toggleSecondaryEffectsBrowser:(id)sender {
+    [self _toggleSecondaryPanelNamed:@"effectsBrowser"];
+}
+
+- (void)toggleSecondaryTransitionsBrowser:(id)sender {
+    [self _toggleSecondaryPanelNamed:@"transitionsBrowser"];
+}
+
 - (void)_updateConformMenuFromSender:(id)sender {
     if (![sender isKindOfClass:[NSMenuItem class]]) return;
     NSMenu *menu = [(NSMenuItem *)sender menu];
@@ -556,6 +695,14 @@ static void SpliceKit_installMenu(void) {
     transcriptItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:transcriptItem];
 
+    NSMenuItem *captionItem = [[NSMenuItem alloc]
+        initWithTitle:@"Social Captions"
+               action:@selector(toggleCaptionPanel:)
+        keyEquivalent:@"c"];
+    captionItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
+    captionItem.target = [SpliceKitMenuController shared];
+    [bridgeMenu addItem:captionItem];
+
     NSMenuItem *paletteItem = [[NSMenuItem alloc]
         initWithTitle:@"Command Palette"
                action:@selector(toggleCommandPalette:)
@@ -572,6 +719,14 @@ static void SpliceKit_installMenu(void) {
     luaItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:luaItem];
 
+    NSMenuItem *sectionsItem = [[NSMenuItem alloc]
+        initWithTitle:@"Sections"
+               action:@selector(toggleSections:)
+        keyEquivalent:@"s"];
+    sectionsItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
+    sectionsItem.target = [SpliceKitMenuController shared];
+    [bridgeMenu addItem:sectionsItem];
+
     // --- Lua Scripts submenu (dynamically populated) ---
     NSMenu *luaScriptsMenu = [[NSMenu alloc] initWithTitle:@"Lua Scripts"];
     luaScriptsMenu.delegate = [SpliceKitMenuController shared];
@@ -584,11 +739,113 @@ static void SpliceKit_installMenu(void) {
     luaScriptsMenuItem.submenu = luaScriptsMenu;
     [bridgeMenu addItem:luaScriptsMenuItem];
 
+    // --- Dual Timeline submenu ---
+    [bridgeMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenu *dualTimelineMenu = [[NSMenu alloc] initWithTitle:@"Dual Timeline"];
+    SpliceKitMenuController *mc = [SpliceKitMenuController shared];
+
+    NSMenuItem *openSecondaryItem = [[NSMenuItem alloc]
+        initWithTitle:@"Open Secondary Timeline"
+               action:@selector(openSecondaryTimeline:)
+        keyEquivalent:@""];
+    openSecondaryItem.target = mc;
+    [dualTimelineMenu addItem:openSecondaryItem];
+
+    NSMenuItem *syncRootItem = [[NSMenuItem alloc]
+        initWithTitle:@"Clone Primary Root to Secondary"
+               action:@selector(syncSecondaryTimelineRoot:)
+        keyEquivalent:@""];
+    syncRootItem.target = mc;
+    [dualTimelineMenu addItem:syncRootItem];
+
+    NSMenuItem *openSelectedItem = [[NSMenuItem alloc]
+        initWithTitle:@"Open Selection in Secondary"
+               action:@selector(openSelectedInSecondaryTimeline:)
+        keyEquivalent:@""];
+    openSelectedItem.target = mc;
+    [dualTimelineMenu addItem:openSelectedItem];
+
+    [dualTimelineMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *focusPrimaryItem = [[NSMenuItem alloc]
+        initWithTitle:@"Focus Primary Timeline"
+               action:@selector(focusPrimaryTimeline:)
+        keyEquivalent:@""];
+    focusPrimaryItem.target = mc;
+    [dualTimelineMenu addItem:focusPrimaryItem];
+
+    NSMenuItem *focusSecondaryItem = [[NSMenuItem alloc]
+        initWithTitle:@"Focus Secondary Timeline"
+               action:@selector(focusSecondaryTimeline:)
+        keyEquivalent:@""];
+    focusSecondaryItem.target = mc;
+    [dualTimelineMenu addItem:focusSecondaryItem];
+
+    NSMenuItem *closeSecondaryItem = [[NSMenuItem alloc]
+        initWithTitle:@"Close Secondary Timeline"
+               action:@selector(closeSecondaryTimeline:)
+        keyEquivalent:@""];
+    closeSecondaryItem.target = mc;
+    [dualTimelineMenu addItem:closeSecondaryItem];
+
+    [dualTimelineMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenu *secondaryWindowMenu = [[NSMenu alloc] initWithTitle:@"Secondary Window"];
+
+    NSMenuItem *secondaryBrowserItem = [[NSMenuItem alloc]
+        initWithTitle:@"Toggle Browser"
+               action:@selector(toggleSecondaryBrowser:)
+        keyEquivalent:@""];
+    secondaryBrowserItem.target = mc;
+    [secondaryWindowMenu addItem:secondaryBrowserItem];
+
+    NSMenuItem *secondaryTimelineIndexItem = [[NSMenuItem alloc]
+        initWithTitle:@"Toggle Timeline Index"
+               action:@selector(toggleSecondaryTimelineIndex:)
+        keyEquivalent:@""];
+    secondaryTimelineIndexItem.target = mc;
+    [secondaryWindowMenu addItem:secondaryTimelineIndexItem];
+
+    NSMenuItem *secondaryAudioMetersItem = [[NSMenuItem alloc]
+        initWithTitle:@"Toggle Audio Meters"
+               action:@selector(toggleSecondaryAudioMeters:)
+        keyEquivalent:@""];
+    secondaryAudioMetersItem.target = mc;
+    [secondaryWindowMenu addItem:secondaryAudioMetersItem];
+
+    NSMenuItem *secondaryEffectsItem = [[NSMenuItem alloc]
+        initWithTitle:@"Toggle Effects Browser"
+               action:@selector(toggleSecondaryEffectsBrowser:)
+        keyEquivalent:@""];
+    secondaryEffectsItem.target = mc;
+    [secondaryWindowMenu addItem:secondaryEffectsItem];
+
+    NSMenuItem *secondaryTransitionsItem = [[NSMenuItem alloc]
+        initWithTitle:@"Toggle Transitions Browser"
+               action:@selector(toggleSecondaryTransitionsBrowser:)
+        keyEquivalent:@""];
+    secondaryTransitionsItem.target = mc;
+    [secondaryWindowMenu addItem:secondaryTransitionsItem];
+
+    NSMenuItem *secondaryWindowMenuItem = [[NSMenuItem alloc]
+        initWithTitle:@"Secondary Window"
+               action:nil
+        keyEquivalent:@""];
+    secondaryWindowMenuItem.submenu = secondaryWindowMenu;
+    [dualTimelineMenu addItem:secondaryWindowMenuItem];
+
+    NSMenuItem *dualTimelineMenuItem = [[NSMenuItem alloc]
+        initWithTitle:@"Dual Timeline"
+               action:nil
+        keyEquivalent:@""];
+    dualTimelineMenuItem.submenu = dualTimelineMenu;
+    [bridgeMenu addItem:dualTimelineMenuItem];
+
     // --- Playback Speed submenu ---
     [bridgeMenu addItem:[NSMenuItem separatorItem]];
 
     NSMenu *speedMenu = [[NSMenu alloc] initWithTitle:@"Playback Speed"];
-    SpliceKitMenuController *mc = [SpliceKitMenuController shared];
 
     NSMenuItem *lItem = [[NSMenuItem alloc]
         initWithTitle:[NSString stringWithFormat:@"L Speeds: %@",
@@ -692,7 +949,7 @@ static void SpliceKit_installMenu(void) {
         [mainMenu addItem:bridgeMenuItem];
     }
 
-    SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T Transcript, Cmd+Shift+P Palette, Ctrl+Option+L Lua REPL)");
+    SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T Transcript, Ctrl+Option+C Captions, Cmd+Shift+P Palette, Ctrl+Option+L Lua REPL)");
 }
 
 static NSString * const kSpliceKitTranscriptToolbarID = @"SpliceKitTranscriptItemID";
@@ -901,6 +1158,12 @@ static void SpliceKit_appDidLaunch(void) {
     // Run compatibility check now that all frameworks are loaded
     SpliceKit_checkCompatibility();
 
+    // Install focused editor routing before commands and menus start querying
+    // activeEditorContainer, so the secondary timeline can participate in the
+    // normal responder path.
+    SpliceKit_installDualTimeline();
+    SpliceKit_installDualTimelineCrossWindowDrag();
+
     // Count total loaded classes
     unsigned int classCount = 0;
     Class *allClasses = objc_copyClassList(&classCount);
@@ -938,6 +1201,11 @@ static void SpliceKit_appDidLaunch(void) {
         SpliceKit_installSuppressAutoImport();
     }
 
+    // Install spring-loaded blade (hold Option → blade, release → revert) if enabled
+    if (SpliceKit_isSpringLoadedBladeEnabled()) {
+        SpliceKit_installSpringLoadedBlade();
+    }
+
     // Install default spatial conform swizzle if set to non-default value
     if (![SpliceKit_getDefaultSpatialConformType() isEqualToString:@"fit"]) {
         SpliceKit_installDefaultSpatialConformType();
@@ -945,6 +1213,18 @@ static void SpliceKit_appDidLaunch(void) {
 
     // Install effect browser favorites context menu (always on)
     SpliceKit_installEffectFavoritesSwizzle();
+
+    // Restore persisted social caption text after relaunch once a real sequence is
+    // active. Automatic repair is intentionally limited to the Motion effect text
+    // field API so relaunch does not wake the heavier channel/document machinery.
+    Class captionPanelClass = objc_getClass("SpliceKitCaptionPanel");
+    if (captionPanelClass) {
+        id captionPanel = ((id (*)(id, SEL))objc_msgSend)((id)captionPanelClass, @selector(sharedPanel));
+        SEL enableAutoRestoreSel = NSSelectorFromString(@"enableAutomaticRestore");
+        if (captionPanel && [captionPanel respondsToSelector:enableAutoRestoreSel]) {
+            ((void (*)(id, SEL))objc_msgSend)(captionPanel, enableAutoRestoreSel);
+        }
+    }
 
     // Install FCPXML direct paste support (converts FCPXML on pasteboard
     // to native clipboard format so pasteAnchored: can handle it)
@@ -958,6 +1238,9 @@ static void SpliceKit_appDidLaunch(void) {
     SpliceKit_installDebugSettingsPanel();
     SpliceKit_installDebugMenuBar();
 
+    // Install right-click context menu for structure block color changes
+    SpliceKit_installStructureBlockContextMenu();
+
     // Start the control server on a background thread
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         SpliceKit_startControlServer();
@@ -965,6 +1248,9 @@ static void SpliceKit_appDidLaunch(void) {
 
     // Initialize Lua scripting VM
     SpliceKitLua_initialize();
+
+    // Load plugins from ~/Library/Application Support/SpliceKit/plugins/
+    SpliceKitPlugins_loadAll();
 }
 
 #pragma mark - Crash Prevention & Startup Fixes

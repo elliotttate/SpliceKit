@@ -50,6 +50,14 @@ void SpliceKit_executeOnMainThread(dispatch_block_t block);
 void SpliceKit_executeOnMainThreadAsync(dispatch_block_t block);
 BOOL SpliceKit_isMainThreadInRPCDispatch(void);
 
+#pragma mark - Sequence State Persistence
+
+// Persist and reload per-sequence JSON state under Application Support so
+// transcript-derived tools can survive an FCP relaunch.
+NSDictionary *SpliceKit_sequenceIdentity(id sequence);
+NSDictionary *SpliceKit_loadSequenceState(id sequence);
+BOOL SpliceKit_saveSequenceState(id sequence, NSDictionary *state, NSError **error);
+
 #pragma mark - Swizzling
 
 // Swap a method implementation and stash the original so we can put it back later.
@@ -68,6 +76,16 @@ id SpliceKit_resolveHandle(NSString *handleId);
 void SpliceKit_releaseHandle(NSString *handleId);
 void SpliceKit_releaseAllHandles(void);
 NSDictionary *SpliceKit_listHandles(void);
+
+#pragma mark - Plugin Method Registry
+
+// Plugins (Lua or native) register JSON-RPC methods here. The dispatch
+// fallthrough in SpliceKit_handleRequest checks these before returning
+// "method not found", so plugin methods are callable identically to built-in ones.
+typedef NSDictionary *(^SpliceKitMethodHandler)(NSDictionary *params);
+void SpliceKit_registerPluginMethod(NSString *method, SpliceKitMethodHandler handler, NSDictionary *metadata);
+void SpliceKit_unregisterPluginMethod(NSString *method);
+void SpliceKit_registerPluginManifest(NSString *pluginId, NSDictionary *manifest);
 
 #pragma mark - Server
 
@@ -131,6 +149,13 @@ void SpliceKit_installSuppressAutoImport(void);
 void SpliceKit_setSuppressAutoImportEnabled(BOOL enabled);
 BOOL SpliceKit_isSuppressAutoImportEnabled(void);
 
+// Spring-loaded blade — hold Option to temporarily switch to blade tool,
+// release to revert to the previous tool. Enabled by default.
+void SpliceKit_installSpringLoadedBlade(void);
+void SpliceKit_uninstallSpringLoadedBlade(void);
+void SpliceKit_setSpringLoadedBladeEnabled(BOOL enabled);
+BOOL SpliceKit_isSpringLoadedBladeEnabled(void);
+
 // Playback speed configuration — configurable J/L speed ladders
 // L ladder: speeds for each successive L press (default: 1, 2, 4, 8, 16, 32)
 // J ladder: speeds for each successive J press, stored positive, applied negative
@@ -148,6 +173,25 @@ void SpliceKit_installPlaybackSpeedSwizzle(void);
 void SpliceKit_installDefaultSpatialConformType(void);
 void SpliceKit_setDefaultSpatialConformType(NSString *value);
 NSString *SpliceKit_getDefaultSpatialConformType(void);
+
+#pragma mark - Dual Timeline
+
+// Floating secondary timeline window support. This keeps a second
+// PEEditorContainerModule alive and routes app actions to whichever timeline
+// window currently has focus.
+void SpliceKit_installDualTimeline(void);
+void SpliceKit_installDualTimelineCrossWindowDrag(void);
+NSString *SpliceKit_dualTimelineSecondaryIdentifier(void);
+id SpliceKit_dualTimelineFocusedEditorContainer(void);
+id SpliceKit_dualTimelinePrimaryEditorContainer(void);
+id SpliceKit_dualTimelineSecondaryEditorContainer(BOOL createIfNeeded);
+NSDictionary *SpliceKit_dualTimelineStatus(void);
+NSDictionary *SpliceKit_dualTimelineOpen(NSDictionary *params);
+NSDictionary *SpliceKit_dualTimelineSyncRoot(NSDictionary *params);
+NSDictionary *SpliceKit_dualTimelineOpenSelectedInSecondary(NSDictionary *params);
+NSDictionary *SpliceKit_dualTimelineFocus(NSDictionary *params);
+NSDictionary *SpliceKit_dualTimelineClose(NSDictionary *params);
+NSDictionary *SpliceKit_dualTimelineTogglePanel(NSDictionary *params);
 
 #pragma mark - Lua Scripting
 
@@ -172,5 +216,30 @@ extern Class SpliceKit_FFPlayer;
 extern Class SpliceKit_FFActionContext;
 extern Class SpliceKit_PEAppController;            // app delegate — entry point for most things
 extern Class SpliceKit_PEDocument;
+
+#pragma mark - Timeline Module
+
+// Get the active FFAnchoredTimelineModule. Returns nil if no project is open.
+id SpliceKit_getActiveTimelineModule(void);
+
+#pragma mark - Sections Bar
+
+// Custom NSView injected into FCP's timeline showing color-coded song structure.
+NSDictionary *SpliceKit_handleSectionsShow(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsHide(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsAdd(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsRemove(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsSetColor(NSDictionary *params);
+NSDictionary *SpliceKit_handleSectionsGet(NSDictionary *params);
+
+#pragma mark - Structure Blocks
+
+// Color-coded section blocks above the timeline (verse/chorus/bridge/etc.).
+// Creates a connected storyline of labeled title clips from song structure data.
+void SpliceKit_installStructureBlockContextMenu(void);
+NSDictionary *SpliceKit_handleStructureGenerateBlocks(NSDictionary *params);
+NSDictionary *SpliceKit_handleStructureGenerateCaptions(NSDictionary *params);
+NSDictionary *SpliceKit_handleStructureRemove(NSDictionary *params);
+NSDictionary *SpliceKit_handleStructureToggle(NSDictionary *params);
 
 #endif /* SpliceKit_h */

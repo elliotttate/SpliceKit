@@ -37,6 +37,8 @@ fi
 
 SOURCES=(
     "$REPO_DIR/Sources/SpliceKit.m"
+    "$REPO_DIR/Sources/SpliceKitDualTimeline.m"
+    "$REPO_DIR/Sources/SpliceKitDualTimelineDrag.m"
     "$REPO_DIR/Sources/SpliceKitRuntime.m"
     "$REPO_DIR/Sources/SpliceKitSwizzle.m"
     "$REPO_DIR/Sources/SpliceKitServer.m"

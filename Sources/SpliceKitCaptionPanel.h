@@ -157,6 +157,8 @@ extern NSNotificationName const SpliceKitCaptionDidGenerateNotification;
 
 // State
 - (NSDictionary *)getState;
+- (void)restorePersistedStateForCurrentSequenceIfNeeded;
+- (void)repairPersistedCaptionsOnCurrentSequenceIfNeeded;
 @property (nonatomic, readonly) SpliceKitCaptionStatus status;
 @property (nonatomic, readonly) NSArray<SpliceKitCaptionSegment *> *segments;
 @property (nonatomic, readonly) NSArray<SpliceKitTranscriptWord *> *words;

@@ -15,10 +15,10 @@ titles, adjustment layers) can't be selected for inspector inspection. Up-arrow
 keyboard shortcut is unreliable. Need direct selection of connected clips at the
 playhead or by name/handle.
 
-### 3. `capture_viewer()` → image
-Return the FCP viewer contents as a PNG. `screencapture` captures the whole screen
-including other apps. Need a direct viewer-only capture for visual verification of
-text rendering, position, effects.
+### 3. ~~`capture_viewer()` → image~~ ✅ Done
+`capture_viewer()` and `capture_timeline()` both implemented. Capture GPU/Metal
+content directly from the FCP window (viewer crops to FFPlayerView, timeline crops
+to TLKTimelineView). No screencapture needed, FCP doesn't need to be in foreground.
 
 ### 4. Fix `call_method_with_args` args parameter
 The MCP tool's Pydantic validation rejects `args` when passed as a JSON array

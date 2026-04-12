@@ -27,24 +27,15 @@ rather than simulating the keyboard shortcut.
 
 ```
 1. bridge_status()                    -- verify connection
-2. open_project("My Project")         -- open a project by name
-3. get_timeline_clips()               -- see timeline contents
-4. timeline_action("blade")           -- edit
-5. verify_action("after blade")       -- confirm state changed
-6. capture_timeline()                 -- visually verify the timeline
-7. capture_viewer()                   -- visually verify the viewer/canvas
+2. get_timeline_clips()               -- see timeline contents
+3. timeline_action("blade")           -- edit
+4. verify_action("after blade")       -- confirm
 ```
 
 ## CRITICAL: Must Know Before Editing
 
 ### Opening a Project
-Use `open_project()` to load a project by name:
-```python
-open_project("My Project")                   # find by name
-open_project("Edit v2", event="4-5-26")      # filter by event too
-```
-
-If you need lower-level control, you can still navigate manually:
+If `get_timeline_clips()` returns an error about "no sequence", load a project:
 ```python
 # Navigate: library -> sequences -> find one with content -> load it
 libs = call_method_with_args("FFLibraryDocument", "copyActiveLibraries", "[]", true, true)
@@ -65,15 +56,8 @@ Color correction, retiming, titles, and effects require a selected clip:
 ```
 playback_action("goToStart")              # position
 playback_action("nextFrame") x N          # navigate
-timeline_action("selectClipAtPlayhead")   # select primary storyline clip
+timeline_action("selectClipAtPlayhead")   # select
 timeline_action("addColorBoard")          # now apply
-```
-
-To select a connected clip (title, B-roll, etc.) use `select_clip_in_lane()`:
-```
-select_clip_in_lane(lane=1)               # select connected clip above primary
-select_clip_in_lane(lane=-1)              # select connected clip below
-select_clip_in_lane(lane=0)               # same as selectClipAtPlayhead
 ```
 
 ### Playhead Positioning
@@ -186,22 +170,12 @@ create_library()                     # create new library
 
 ### Blade at a specific time
 ```
-seek_to_time(3.0)         # jump to 3 seconds
-timeline_action("blade")  # cut there
+playback_action("goToStart")
+batch_timeline_actions('[{"type":"playback","action":"nextFrame","repeat":72}]')  # 3s at 24fps
+timeline_action("blade")
 ```
 
-### Multiple cuts (batch — preferred)
-```
-blade_at_times([3.0, 6.0, 9.0, 12.0, 15.0])   # cut at all times in one call
-```
-
-### Cuts at regular intervals across entire timeline
-```
-# Compute times: every 3s across a 30s timeline
-blade_at_times([3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0, 24.0, 27.0])
-```
-
-### Multiple cuts (batch_timeline_actions alternative)
+### Multiple cuts
 ```
 batch_timeline_actions('[
   {"type":"playback","action":"goToStart"},
@@ -382,26 +356,7 @@ get_selected_clips()                 # get only selected clips in timeline
 seek_to_time(3.5)                    # jump to 3.5 seconds instantly (faster than stepping)
 ```
 
-## Screenshots & Visual Verification
-
-Use `capture_viewer()` and `capture_timeline()` to take screenshots of FCP without
-bringing it to the foreground. These capture GPU/Metal content directly — no `screencapture`
-needed. The resulting PNGs can be read by Claude to visually verify edits.
-
-**When to use:**
-- After applying effects, color corrections, titles, or captions → `capture_viewer()`
-- After blade cuts, rearranging clips, adding markers, or any timeline edit → `capture_timeline()`
-- When debugging layout issues (clip positions, gaps, transitions) → `capture_timeline()`
-- When verifying text rendering (font, size, position) → `capture_viewer()`
-
-```
-capture_viewer()                     # screenshot viewer to /tmp/splicekit_viewer.png
-capture_viewer(path="/tmp/check.png") # screenshot to custom path
-capture_timeline()                   # screenshot timeline to /tmp/splicekit_timeline.png
-capture_timeline(path="/tmp/tl.png") # screenshot to custom path
-```
-
-## Viewer Zoom
+## Viewer Control
 ```
 get_viewer_zoom()                    # current zoom level (0.0=Fit, 1.0=100%, 2.0=200%)
 set_viewer_zoom(0.0)                 # fit to window
@@ -409,22 +364,7 @@ set_viewer_zoom(1.0)                 # 100%
 set_viewer_zoom(2.0)                 # 200% — any float value accepted
 ```
 
-## Export FCPXML (No Dialog)
-```
-export_xml()                                       # export to /tmp/splicekit_export.fcpxml
-export_xml(path="/tmp/my_project.fcpxml")           # export to custom path
-```
-Programmatic export — no save dialog. Returns the FCPXML file path.
-
-## Deploy & Restart FCP
-```
-deploy_and_restart()                 # build, deploy, kill FCP, relaunch, wait for bridge
-deploy_and_restart(skip_build=True)  # just restart FCP (skip make deploy)
-```
-
 ## Dialog Automation
-**Note:** The "video properties of this clip are not recognized" dialog is now
-auto-dismissed at the start of every bridge request. No manual handling needed.
 ```
 detect_dialog()                      # scan for open dialogs, see buttons/fields/checkboxes
 click_dialog_button(button="OK")     # click by title (case-insensitive, partial match)
@@ -948,34 +888,7 @@ highlight color, others get the base text color.
 and point size from the selected Motion title's CHChannelText channel. `verify_captions()`
 walks connected titles on the timeline and checks text/fontSize against the expected style.
 
-## Lua Scripting
-
-SpliceKit embeds a Lua 5.4 VM directly in FCP's process. Scripts use the `sk`
-module to control FCP with zero latency:
-
-```lua
-sk.blade()                          -- blade at playhead
-sk.seek(5.0)                        -- jump to 5 seconds
-sk.select_clip()                    -- select clip at playhead
-sk.color_board()                    -- add color correction
-local clips = sk.clips()           -- get timeline clips as Lua table
-local pos = sk.position()          -- get playhead position
-sk.rpc("effects.apply", {name = "Gaussian Blur"})  -- any RPC method
-sk.eval("NSApp.delegate.className") -- ObjC runtime bridge
-```
-
-**Entry points:**
-- REPL panel: Ctrl+Option+L (Enhancements > Lua REPL)
-- Live coding: save .lua files to `~/Library/Application Support/SpliceKit/lua/auto/`
-- JSON-RPC: `lua.execute`, `lua.executeFile`, `lua.reset`, `lua.getState`, `lua.watch`
-- MCP tools: `lua_execute`, `lua_execute_file`, `lua_reset`, `lua_watch`, `lua_state`
-
-See `docs/LUA_SDK_REFERENCE.md` for the full SDK with 25 sections, 140+ RPC methods,
-and complete cookbook examples.
-
 ## Additional Documentation
-- `docs/LUA_SDK_REFERENCE.md` — **Lua scripting SDK** (sk module, 120+ actions, ObjC bridge, live coding, cookbook)
-- `docs/LUA_SCRIPTING_GUIDE.md` — **Lua scripting tutorial** (data model, patterns, modules, persistence, pipelines, annotated examples)
 - `docs/TRANSCRIPT_EDITING_GUIDE.md` — Transcript-based editing (engines, silence removal, speakers)
 - `docs/COMMAND_PALETTE_GUIDE.md` — Command palette & Apple Intelligence
 - `docs/RUNTIME_INTROSPECTION_GUIDE.md` — ObjC runtime exploration & reverse engineering

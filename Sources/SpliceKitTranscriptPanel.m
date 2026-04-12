@@ -110,6 +110,63 @@ static NSString *SpliceKitTranscript_timecodeFromSeconds(double seconds, double 
 
 @end
 
+static NSDictionary *SpliceKitTranscript_wordToDictionary(SpliceKitTranscriptWord *word) {
+    if (!word) return @{};
+    return @{
+        @"index": @(word.wordIndex),
+        @"text": word.text ?: @"",
+        @"startTime": @(word.startTime),
+        @"duration": @(word.duration),
+        @"endTime": @(word.endTime),
+        @"confidence": @(word.confidence),
+        @"speaker": word.speaker ?: @"Unknown",
+        @"clipHandle": word.clipHandle ?: @"",
+        @"clipTimelineStart": @(word.clipTimelineStart),
+        @"sourceMediaOffset": @(word.sourceMediaOffset),
+        @"sourceMediaTime": @(word.sourceMediaTime),
+        @"sourceMediaPath": word.sourceMediaPath ?: @"",
+    };
+}
+
+static SpliceKitTranscriptWord *SpliceKitTranscript_wordFromDictionary(NSDictionary *dict) {
+    if (![dict isKindOfClass:[NSDictionary class]]) return nil;
+    SpliceKitTranscriptWord *word = [[SpliceKitTranscriptWord alloc] init];
+    word.text = dict[@"text"] ?: @"";
+    word.startTime = [dict[@"startTime"] doubleValue];
+    word.duration = [dict[@"duration"] doubleValue];
+    word.endTime = [dict[@"endTime"] doubleValue];
+    if (word.endTime <= word.startTime) word.endTime = word.startTime + word.duration;
+    word.confidence = [dict[@"confidence"] doubleValue];
+    word.wordIndex = [dict[@"index"] unsignedIntegerValue];
+    word.speaker = dict[@"speaker"] ?: @"Unknown";
+    word.clipHandle = dict[@"clipHandle"];
+    word.clipTimelineStart = [dict[@"clipTimelineStart"] doubleValue];
+    word.sourceMediaOffset = [dict[@"sourceMediaOffset"] doubleValue];
+    word.sourceMediaTime = [dict[@"sourceMediaTime"] doubleValue];
+    word.sourceMediaPath = dict[@"sourceMediaPath"];
+    return word;
+}
+
+static NSDictionary *SpliceKitTranscript_silenceToDictionary(SpliceKitTranscriptSilence *silence) {
+    if (!silence) return @{};
+    return @{
+        @"startTime": @(silence.startTime),
+        @"endTime": @(silence.endTime),
+        @"duration": @(silence.duration),
+        @"afterWordIndex": @(silence.afterWordIndex),
+    };
+}
+
+static SpliceKitTranscriptSilence *SpliceKitTranscript_silenceFromDictionary(NSDictionary *dict) {
+    if (![dict isKindOfClass:[NSDictionary class]]) return nil;
+    SpliceKitTranscriptSilence *silence = [[SpliceKitTranscriptSilence alloc] init];
+    silence.startTime = [dict[@"startTime"] doubleValue];
+    silence.endTime = [dict[@"endTime"] doubleValue];
+    silence.duration = [dict[@"duration"] doubleValue];
+    silence.afterWordIndex = [dict[@"afterWordIndex"] unsignedIntegerValue];
+    return silence;
+}
+
 #pragma mark - Forward Declarations
 
 @interface SpliceKitTranscriptPanel (TextViewCallbacks)
@@ -413,6 +470,8 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 
 // Frame rate for timecodes
 @property (nonatomic) double frameRate;
+@property (nonatomic) BOOL suppressPersistenceWrites;
+@property (nonatomic, copy) NSString *lastRestoredSequenceKey;
 @end
 
 @implementation SpliceKitTranscriptPanel
@@ -757,19 +816,30 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 #pragma mark - Panel Visibility
 
 - (void)showPanel {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self setupPanelIfNeeded];
-        [self.panel makeKeyAndOrderFront:nil];
-        if (self.status == SpliceKitTranscriptStatusReady && self.mutableWords.count > 0) {
-            [self startPlayheadTimer];
-        }
-    });
+    if (![NSThread isMainThread]) {
+        SpliceKit_executeOnMainThread(^{
+            [self showPanel];
+        });
+        return;
+    }
+
+    [self setupPanelIfNeeded];
+    [self restorePersistedStateForCurrentSequenceIfNeeded];
+    [self.panel makeKeyAndOrderFront:nil];
+    if (self.status == SpliceKitTranscriptStatusReady && self.mutableWords.count > 0) {
+        [self startPlayheadTimer];
+    }
 }
 
 - (void)hidePanel {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.panel orderOut:nil];
-    });
+    if (![NSThread isMainThread]) {
+        SpliceKit_executeOnMainThread(^{
+            [self hidePanel];
+        });
+        return;
+    }
+
+    [self.panel orderOut:nil];
 }
 
 - (BOOL)isVisible {
@@ -783,6 +853,162 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 - (void)focusSearchField {
     [self.panel makeKeyAndOrderFront:nil];
     [self.searchField becomeFirstResponder];
+}
+
+- (id)currentSequence {
+    __block id sequence = nil;
+    SpliceKit_executeOnMainThread(^{
+        id timeline = [self getActiveTimelineModule];
+        if ([timeline respondsToSelector:@selector(sequence)]) {
+            sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+        }
+    });
+    return sequence;
+}
+
+- (void)ensurePersistedStateLoaded {
+    if (self.status == SpliceKitTranscriptStatusTranscribing) return;
+    if (self.mutableWords.count > 0) return;
+    [self restorePersistedStateForCurrentSequenceIfNeeded];
+}
+
+- (NSDictionary *)transcriptPersistenceSection {
+    NSMutableArray *wordDicts = [NSMutableArray array];
+    @synchronized (self.mutableWords) {
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
+            [wordDicts addObject:SpliceKitTranscript_wordToDictionary(word)];
+        }
+    }
+
+    NSMutableArray *silenceDicts = [NSMutableArray array];
+    for (SpliceKitTranscriptSilence *silence in self.mutableSilences) {
+        [silenceDicts addObject:SpliceKitTranscript_silenceToDictionary(silence)];
+    }
+
+    NSMutableDictionary *section = [@{
+        @"status": @"ready",
+        @"frameRate": @(self.frameRate),
+        @"silenceThreshold": @(self.silenceThreshold),
+        @"speakerDetectionEnabled": @(self.speakerDetectionEnabled),
+        @"words": wordDicts,
+        @"silences": silenceDicts,
+    } mutableCopy];
+
+    NSString *engineName = (self.engine == SpliceKitTranscriptEngineFCPNative) ? @"fcpNative" :
+                           (self.engine == SpliceKitTranscriptEngineParakeet) ? @"parakeet" : @"appleSpeech";
+    section[@"engine"] = engineName;
+    if (self.engine == SpliceKitTranscriptEngineParakeet) {
+        section[@"parakeetModel"] = self.parakeetModelVersion ?: @"v3";
+    }
+    if (self.fullText.length > 0) {
+        section[@"text"] = self.fullText;
+    }
+    return section;
+}
+
+- (void)persistTranscriptStateForCurrentSequence {
+    if (self.suppressPersistenceWrites || self.mutableWords.count == 0) return;
+
+    id sequence = [self currentSequence];
+    if (!sequence) return;
+
+    NSMutableDictionary *state = [[SpliceKit_loadSequenceState(sequence) mutableCopy] ?: [NSMutableDictionary dictionary] mutableCopy];
+    state[@"transcript"] = [self transcriptPersistenceSection];
+
+    NSError *error = nil;
+    if (!SpliceKit_saveSequenceState(sequence, state, &error) && error) {
+        SpliceKit_log(@"[Transcript] Failed to persist transcript state: %@", error.localizedDescription);
+    }
+}
+
+- (void)restorePersistedStateForCurrentSequenceIfNeeded {
+    if (![NSThread isMainThread]) {
+        SpliceKit_executeOnMainThread(^{
+            [self restorePersistedStateForCurrentSequenceIfNeeded];
+        });
+        return;
+    }
+
+    id sequence = [self currentSequence];
+    if (!sequence) return;
+
+    NSDictionary *state = SpliceKit_loadSequenceState(sequence);
+    NSDictionary *transcript = [state[@"transcript"] isKindOfClass:[NSDictionary class]] ? state[@"transcript"] : nil;
+    NSArray *wordDicts = [transcript[@"words"] isKindOfClass:[NSArray class]] ? transcript[@"words"] : nil;
+    if (!transcript || wordDicts.count == 0) return;
+
+    NSString *sequenceKey = [state[@"sequenceIdentity"] isKindOfClass:[NSDictionary class]]
+        ? state[@"sequenceIdentity"][@"cacheKey"] : nil;
+    if (sequenceKey.length > 0 &&
+        [self.lastRestoredSequenceKey isEqualToString:sequenceKey] &&
+        self.mutableWords.count > 0) {
+        return;
+    }
+
+    self.suppressPersistenceWrites = YES;
+    @synchronized (self.mutableWords) {
+        [self.mutableWords removeAllObjects];
+        for (NSDictionary *wordDict in wordDicts) {
+            SpliceKitTranscriptWord *word = SpliceKitTranscript_wordFromDictionary(wordDict);
+            if (word) [self.mutableWords addObject:word];
+        }
+        [self.mutableWords sortUsingComparator:^NSComparisonResult(SpliceKitTranscriptWord *a, SpliceKitTranscriptWord *b) {
+            if (a.startTime < b.startTime) return NSOrderedAscending;
+            if (a.startTime > b.startTime) return NSOrderedDescending;
+            return NSOrderedSame;
+        }];
+        for (NSUInteger i = 0; i < self.mutableWords.count; i++) {
+            self.mutableWords[i].wordIndex = i;
+        }
+    }
+
+    [self.mutableSilences removeAllObjects];
+    NSArray *silenceDicts = [transcript[@"silences"] isKindOfClass:[NSArray class]] ? transcript[@"silences"] : nil;
+    for (NSDictionary *silenceDict in silenceDicts) {
+        SpliceKitTranscriptSilence *silence = SpliceKitTranscript_silenceFromDictionary(silenceDict);
+        if (silence) [self.mutableSilences addObject:silence];
+    }
+    if (self.mutableSilences.count == 0) {
+        [self detectSilences];
+    }
+
+    NSString *engineName = transcript[@"engine"];
+    if ([engineName isEqualToString:@"fcpNative"]) {
+        self.engine = SpliceKitTranscriptEngineFCPNative;
+    } else if ([engineName isEqualToString:@"appleSpeech"]) {
+        self.engine = SpliceKitTranscriptEngineAppleSpeech;
+    } else {
+        self.engine = SpliceKitTranscriptEngineParakeet;
+    }
+    if ([transcript[@"parakeetModel"] isKindOfClass:[NSString class]]) {
+        self.parakeetModelVersion = transcript[@"parakeetModel"];
+    }
+    if (transcript[@"frameRate"]) self.frameRate = [transcript[@"frameRate"] doubleValue];
+    if (transcript[@"silenceThreshold"]) self.silenceThreshold = [transcript[@"silenceThreshold"] doubleValue];
+    self.speakerDetectionEnabled = [transcript[@"speakerDetectionEnabled"] boolValue];
+    self.fullText = [transcript[@"text"] isKindOfClass:[NSString class]] ? transcript[@"text"] : nil;
+    self.status = SpliceKitTranscriptStatusReady;
+    self.errorMessage = nil;
+    self.lastRestoredSequenceKey = sequenceKey;
+
+    if (self.panel) {
+        [self updateSpeakerCheckboxState];
+        if (self.engine == SpliceKitTranscriptEngineAppleSpeech) {
+            [self.enginePopup selectItemWithTitle:@"Apple Speech"];
+        } else if (self.engine == SpliceKitTranscriptEngineParakeet) {
+            NSString *title = [self.parakeetModelVersion isEqualToString:@"v2"] ? @"Parakeet v2" : @"Parakeet v3";
+            [self.enginePopup selectItemWithTitle:title];
+        } else {
+            [self.enginePopup selectItemWithTitle:@"FCP Native"];
+        }
+        self.speakerDetectionCheckbox.state = self.speakerDetectionEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+        [self rebuildTextView];
+        self.deleteSilencesButton.enabled = (self.mutableSilences.count > 0);
+        [self updateStatusUI:[NSString stringWithFormat:@"%lu words, %lu pauses (restored)",
+            (unsigned long)self.mutableWords.count, (unsigned long)self.mutableSilences.count]];
+    }
+
+    self.suppressPersistenceWrites = NO;
 }
 
 #pragma mark - Button Actions
@@ -1067,6 +1293,8 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 }
 
 - (NSDictionary *)searchTranscript:(NSString *)query {
+    [self ensurePersistedStateLoaded];
+
     if (!query || query.length == 0) {
         return @{@"error": @"Query cannot be empty"};
     }
@@ -2434,6 +2662,8 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 }
 
 - (void)setSpeaker:(NSString *)speaker forWordsFrom:(NSUInteger)startIndex count:(NSUInteger)count {
+    [self ensurePersistedStateLoaded];
+
     @synchronized (self.mutableWords) {
         NSUInteger end = MIN(startIndex + count, self.mutableWords.count);
         for (NSUInteger i = startIndex; i < end; i++) {
@@ -3070,6 +3300,10 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
     [self.textView.textStorage setAttributedString:attrStr];
     self.fullText = [attrStr string];
 
+    if (!self.suppressPersistenceWrites && self.status == SpliceKitTranscriptStatusReady) {
+        [self persistTranscriptStateForCurrentSequence];
+    }
+
     self.suppressTextViewCallbacks = NO;
 
     // Re-apply search highlighting if active
@@ -3468,6 +3702,8 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 /// After the timeline edit, we remove the words from the array, re-index, and
 /// resync timestamps from FCP's actual clip positions (since blade changes durations).
 - (NSDictionary *)deleteWordsFromIndex:(NSUInteger)startIndex count:(NSUInteger)count {
+    [self ensurePersistedStateLoaded];
+
     @synchronized (self.mutableWords) {
         if (startIndex >= self.mutableWords.count) {
             return @{@"error": @"startIndex out of range"};
@@ -3525,6 +3761,8 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 }
 
 - (NSDictionary *)deleteSilencesLongerThan:(double)minDuration {
+    [self ensurePersistedStateLoaded];
+
     // Collect silences to delete (filter by minimum duration)
     NSMutableArray<SpliceKitTranscriptSilence *> *toDelete = [NSMutableArray array];
     for (SpliceKitTranscriptSilence *silence in self.mutableSilences) {
@@ -3635,6 +3873,8 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 /// The destination time is adjusted if it's after the source (since cutting
 /// the source shifts everything after it earlier by the source duration).
 - (NSDictionary *)moveWordsFromIndex:(NSUInteger)startIndex count:(NSUInteger)count toIndex:(NSUInteger)destIndex {
+    [self ensurePersistedStateLoaded];
+
     @synchronized (self.mutableWords) {
         if (startIndex >= self.mutableWords.count || destIndex > self.mutableWords.count) {
             return @{@"error": @"Index out of range"};
@@ -4100,6 +4340,8 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 }
 
 - (NSDictionary *)getState {
+    [self ensurePersistedStateLoaded];
+
     NSMutableDictionary *state = [NSMutableDictionary dictionary];
 
     switch (self.status) {

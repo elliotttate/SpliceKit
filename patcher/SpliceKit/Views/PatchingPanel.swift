@@ -5,10 +5,10 @@ struct PatchingPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Setting Up")
+            Text(model.isUpdateMode ? "Updating SpliceKit" : "Setting Up")
                 .font(.title.bold())
 
-            Text("SpliceKit is enhancing Final Cut Pro. This may take several minutes.")
+            Text(model.isUpdateMode ? "Updating SpliceKit framework and tools." : "SpliceKit is enhancing Final Cut Pro. This may take several minutes.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -47,14 +47,19 @@ struct PatchingPanel: View {
             HStack {
                 if model.errorMessage != nil {
                     Button("Back") {
-                        model.currentPanel = .welcome
+                        model.currentPanel = model.isUpdateMode ? .complete : .welcome
                         model.errorMessage = nil
+                        model.isUpdateMode = false
                     }
                 }
                 Spacer()
                 if model.errorMessage != nil {
                     Button("Retry") {
-                        model.patch()
+                        if model.isUpdateMode {
+                            model.updateSpliceKit()
+                        } else {
+                            model.patch()
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                 }

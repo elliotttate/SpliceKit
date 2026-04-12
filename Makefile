@@ -8,6 +8,8 @@ LINKER_FLAGS = -undefined dynamic_lookup -dynamiclib
 INSTALL_NAME = -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit
 
 SOURCES = Sources/SpliceKit.m \
+          Sources/SpliceKitDualTimeline.m \
+          Sources/SpliceKitDualTimelineDrag.m \
           Sources/SpliceKitRuntime.m \
           Sources/SpliceKitSwizzle.m \
           Sources/SpliceKitServer.m \
@@ -17,8 +19,11 @@ SOURCES = Sources/SpliceKit.m \
           Sources/SpliceKitCaptionPanel.m \
           Sources/SpliceKitCommandPalette.m \
           Sources/SpliceKitDebugUI.m \
+          Sources/SpliceKitStructureBlocks.m \
+          Sources/SpliceKitSectionsBar.m \
           Sources/SpliceKitLua.m \
-          Sources/SpliceKitLuaPanel.m
+          Sources/SpliceKitLuaPanel.m \
+          Sources/SpliceKitPlugins.m
 
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)/SpliceKit
@@ -37,13 +42,17 @@ FW_DIR = $(MODDED_APP)/Contents/Frameworks/SpliceKit.framework
 ENTITLEMENTS = entitlements.plist
 
 SILENCE_DETECTOR = $(BUILD_DIR)/silence-detector
+STRUCTURE_ANALYZER = $(BUILD_DIR)/structure-analyzer
 TOOLS_DIR = $(HOME)/Applications/SpliceKit/tools
+PARAKEET_PKG_DIR = patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber
+PARAKEET_RELEASE_BIN = $(PARAKEET_PKG_DIR)/.build/release/parakeet-transcriber
+PARAKEET_DEBUG_BIN = $(PARAKEET_PKG_DIR)/.build/debug/parakeet-transcriber
 
 .PHONY: all clean deploy launch tools url-import-tools
 
 all: $(OUTPUT)
 
-tools: $(SILENCE_DETECTOR)
+tools: $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER)
 
 url-import-tools:
 	@mkdir -p "$(TOOLS_DIR)"
@@ -62,22 +71,29 @@ url-import-tools:
 		echo "ffmpeg not found in PATH. Install with: brew install ffmpeg"; \
 	fi
 
-$(SILENCE_DETECTOR): tools/silence-detector.swift
+$(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/lua: | $(BUILD_DIR)
+	@mkdir -p $(BUILD_DIR)/lua
+
+$(SILENCE_DETECTOR): tools/silence-detector.swift | $(BUILD_DIR)
 	swiftc -O -suppress-warnings -o $(SILENCE_DETECTOR) tools/silence-detector.swift
 	@echo "Built: $(SILENCE_DETECTOR)"
 
+$(STRUCTURE_ANALYZER): tools/structure-analyzer.swift | $(BUILD_DIR)
+	swiftc -O -suppress-warnings -o $(STRUCTURE_ANALYZER) tools/structure-analyzer.swift
+	@echo "Built: $(STRUCTURE_ANALYZER)"
+
 # Lua static library — compiled as C (no -fobjc-arc)
-$(BUILD_DIR)/lua/%.o: $(LUA_DIR)/%.c
-	@mkdir -p $(BUILD_DIR)/lua
+$(BUILD_DIR)/lua/%.o: $(LUA_DIR)/%.c | $(BUILD_DIR)/lua
 	$(CC) $(ARCHS) $(MIN_VERSION) -DLUA_USE_MACOSX -O2 -Wall -c $< -o $@
 
-$(LUA_LIB): $(LUA_OBJS)
+$(LUA_LIB): $(LUA_OBJS) | $(BUILD_DIR)
 	libtool -static -o $@ $^
 	@echo "Built: $(LUA_LIB)"
 
-$(OUTPUT): $(SOURCES) Sources/SpliceKit.h $(LUA_LIB)
-	@mkdir -p $(BUILD_DIR)
+$(OUTPUT): $(SOURCES) Sources/SpliceKit.h $(LUA_LIB) | $(BUILD_DIR)
 	$(CC) $(ARCHS) $(MIN_VERSION) $(FRAMEWORKS) $(OBJC_FLAGS) $(LINKER_FLAGS) \
 		$(INSTALL_NAME) -I Sources -I $(LUA_DIR) \
 		$(SOURCES) $(LUA_LIB) -o $(OUTPUT)
@@ -87,7 +103,7 @@ $(OUTPUT): $(SOURCES) Sources/SpliceKit.h $(LUA_LIB)
 clean:
 	rm -rf $(BUILD_DIR)
 
-deploy: $(OUTPUT) $(SILENCE_DETECTOR)
+deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER)
 	@echo "=== Deploying SpliceKit to modded FCP ==="
 	@mkdir -p "$(FW_DIR)/Versions/A/Resources"
 	cp $(OUTPUT) "$(FW_DIR)/Versions/A/SpliceKit"
@@ -105,8 +121,16 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 	@mkdir -p "$(TOOLS_DIR)"
 	@$(MAKE) url-import-tools
 	@cp $(SILENCE_DETECTOR) "$(TOOLS_DIR)/silence-detector" 2>/dev/null || true
-	@test -f tools/parakeet-transcriber/.build/release/parakeet-transcriber && \
-		cp tools/parakeet-transcriber/.build/release/parakeet-transcriber "$(TOOLS_DIR)/parakeet-transcriber" || true
+	@cp $(STRUCTURE_ANALYZER) "$(TOOLS_DIR)/structure-analyzer" 2>/dev/null || true
+	@if [ -f "$(PARAKEET_RELEASE_BIN)" ]; then \
+		cp "$(PARAKEET_RELEASE_BIN)" "$(TOOLS_DIR)/parakeet-transcriber"; \
+		cp "$(PARAKEET_RELEASE_BIN)" "$(FW_DIR)/Versions/A/Resources/parakeet-transcriber"; \
+	elif [ -f "$(PARAKEET_DEBUG_BIN)" ]; then \
+		cp "$(PARAKEET_DEBUG_BIN)" "$(TOOLS_DIR)/parakeet-transcriber"; \
+		cp "$(PARAKEET_DEBUG_BIN)" "$(FW_DIR)/Versions/A/Resources/parakeet-transcriber"; \
+	fi
+	@# Create plugins directory
+	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/plugins"
 	@# Copy Lua example scripts
 	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/examples"
 	@mkdir -p "$(HOME)/Library/Application Support/SpliceKit/lua/auto"
@@ -115,10 +139,22 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR)
 	@cp -n scripts/lua/examples/*.lua "$(HOME)/Library/Application Support/SpliceKit/lua/examples/" 2>/dev/null || true
 	@cp -n scripts/lua/menu/*.lua "$(HOME)/Library/Application Support/SpliceKit/lua/menu/" 2>/dev/null || true
 	@cp -n scripts/lua/lib/*.lua "$(HOME)/Library/Application Support/SpliceKit/lua/lib/" 2>/dev/null || true
-	@# Sign the framework
-	codesign --force --sign - "$(FW_DIR)"
-	@# Re-sign the app
-	codesign --force --sign - --entitlements $(ENTITLEMENTS) "$(MODDED_APP)"
+	@sign_identity=$$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development:/ { print $$2; exit } /"Developer ID Application:/ && developer == "" { developer = $$2 } /[0-9]+\) [0-9A-F]+ "/ && first == "" { first = $$2 } END { if (developer != "") print developer; else if (first != "") print first }'); \
+	if [ -n "$$sign_identity" ]; then \
+		echo "Using signing identity: $$sign_identity"; \
+	else \
+		sign_identity="-"; \
+		echo "No local codesigning identity found; falling back to ad-hoc signing"; \
+	fi; \
+	if ! codesign --force --sign "$$sign_identity" "$(FW_DIR)" || \
+	   ! codesign --force --sign "$$sign_identity" --entitlements $(ENTITLEMENTS) "$(MODDED_APP)"; then \
+		if [ "$$sign_identity" = "-" ]; then \
+			exit 1; \
+		fi; \
+		echo "Developer signing failed; retrying with ad-hoc signature"; \
+		codesign --force --sign - "$(FW_DIR)"; \
+		codesign --force --sign - --entitlements $(ENTITLEMENTS) "$(MODDED_APP)"; \
+	fi
 	@codesign --verify --verbose "$(MODDED_APP)" 2>&1
 	@echo "=== Deployed successfully ==="
 
