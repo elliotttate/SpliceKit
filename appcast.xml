@@ -10,6 +10,22 @@
       <sparkle:version>3.1.10</sparkle:version>
       <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 13 Apr 2026 19:12:41 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.1.10</h2>
+        <p>Fix CloudKit crash on FCP 12.2+ with ad-hoc signing (brute-force class enumeration + WillFinishLaunching retry), disable spring-loaded blade, improved startup diagnostics (OS/FCP version, signing status, log rotation)</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.10/SpliceKit-v3.1.10.dmg"
+        sparkle:edSignature="Hqvp3ZUKsl/k8IGB9qRNzcGS6S1g26Ts8VyQBo1Jt1yxmFkN/7aCSZG7JTZWA2yn4nX4+Jbf366Jw+b/98h9CA=="
+        length="14102212"
+        type="application/octet-stream" />
+    </item>
+    <item>
+      <title>SpliceKit v3.1.10</title>
+      <sparkle:version>3.1.10</sparkle:version>
+      <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 18:37:42 +0000</pubDate>
       <description><![CDATA[
         <h2>What's New in 3.1.10</h2>

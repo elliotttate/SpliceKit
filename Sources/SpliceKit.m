@@ -52,8 +52,14 @@ static void SpliceKit_initLogging(void) {
     [[NSFileManager defaultManager] createDirectoryAtPath:logDir withIntermediateDirectories:YES attributes:nil error:nil];
     sLogPath = [logDir stringByAppendingPathComponent:@"splicekit.log"];
 
-    // Start fresh each launch so the log doesn't grow forever
-    [[NSFileManager defaultManager] createFileAtPath:sLogPath contents:nil attributes:nil];
+    // Rotate: keep the previous launch's log so crash-on-startup is diagnosable.
+    // splicekit.log -> splicekit.previous.log (overwrite), then start fresh.
+    NSString *prevPath = [logDir stringByAppendingPathComponent:@"splicekit.previous.log"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:prevPath error:nil];
+    [fm moveItemAtPath:sLogPath toPath:prevPath error:nil];
+
+    [fm createFileAtPath:sLogPath contents:nil attributes:nil];
     sLogHandle = [NSFileHandle fileHandleForWritingAtPath:sLogPath];
     [sLogHandle seekToEndOfFile];
 }
@@ -2848,6 +2854,39 @@ static void SpliceKit_init(void) {
     SpliceKit_log(@"SpliceKit v%s initializing...", SPLICEKIT_VERSION);
     SpliceKit_log(@"PID: %d", getpid());
     SpliceKit_log(@"Home: %@", NSHomeDirectory());
+
+    // Log OS + FCP version early (before any swizzles) so crash logs are diagnosable.
+    // SpliceKit_checkCompatibility logs FCP version too, but runs at didFinishLaunching
+    // which is too late if the app crashes during startup.
+    NSOperatingSystemVersion osv = [[NSProcessInfo processInfo] operatingSystemVersion];
+    SpliceKit_log(@"macOS: %ld.%ld.%ld", (long)osv.majorVersion, (long)osv.minorVersion, (long)osv.patchVersion);
+    NSDictionary *fcpInfo = [[NSBundle mainBundle] infoDictionary];
+    SpliceKit_log(@"FCP: %@ (build %@)",
+                  fcpInfo[@"CFBundleShortVersionString"] ?: @"?",
+                  fcpInfo[@"CFBundleVersion"] ?: @"?");
+
+    // Log signing status — critical for diagnosing CloudKit/entitlement crashes
+    SecStaticCodeRef staticCode = NULL;
+    OSStatus codeErr = SecStaticCodeCreateWithPath(
+        (__bridge CFURLRef)[[NSBundle mainBundle] bundleURL], kSecCSDefaultFlags, &staticCode);
+    if (codeErr == errSecSuccess && staticCode) {
+        CFDictionaryRef signingInfo = NULL;
+        OSStatus infoErr = SecCodeCopySigningInformation(
+            (SecCodeRef)staticCode, kSecCSSigningInformation, &signingInfo);
+        if (infoErr == errSecSuccess && signingInfo) {
+            NSString *teamID = ((__bridge NSDictionary *)signingInfo)[@"teamid"];
+            NSNumber *flags  = ((__bridge NSDictionary *)signingInfo)[@"flags"];
+            SpliceKit_log(@"Signing: team=%@, flags=%@",
+                          teamID ?: @"(ad-hoc)", flags ?: @"?");
+            CFRelease(signingInfo);
+        } else {
+            SpliceKit_log(@"Signing: could not read (err=%d)", (int)infoErr);
+        }
+        CFRelease(staticCode);
+    } else {
+        SpliceKit_log(@"Signing: no static code (err=%d)", (int)codeErr);
+    }
+
     SpliceKit_log(@"================================================");
 
     // These patches need to land before FCP's own init code runs
