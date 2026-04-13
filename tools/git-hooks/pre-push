@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$repo_root" ]]; then
+  echo "[scrub] Unable to locate repository root." >&2
+  exit 1
+fi
+cd "$repo_root"
+
+home_path="${HOME%/}"
+home_name="$(basename "$HOME")"
+issues=()
+
+is_image_path() {
+  case "$1" in
+    *.[Pp][Nn][Gg]|*.[Jj][Pp][Gg]|*.[Jj][Pp][Ee][Gg]|*.[Gg][Ii][Ff]|*.[Hh][Ee][Ii][Cc]|*.[Ww][Ee][Bb][Pp]|*.[Bb][Mm][Pp]|*.[Tt][Ii][Ff]|*.[Tt][Ii][Ff][Ff])
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+is_screenshot_path() {
+  case "$1" in
+    *[Ss]creenshot*|*[Ss]creen\ [Ss]hot*|*[Ss]creen[Ss]hot*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+scan_commit() {
+  local commit="$1"
+  local path
+  while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+
+    if [[ "$path" == *"$home_path"* || "$path" == *"$home_name"* ]]; then
+      issues+=("$commit: path leaks personal name or home path -> $path")
+    fi
+
+    if is_screenshot_path "$path" || is_image_path "$path"; then
+      issues+=("$commit: image/screenshot asset in push -> $path")
+    fi
+
+    if git show "$commit:$path" 2>/dev/null | LC_ALL=C grep -a -F -q "$home_path"; then
+      issues+=("$commit: content leaks home path -> $path")
+    fi
+
+    if [[ -n "$home_name" ]] && git show "$commit:$path" 2>/dev/null | LC_ALL=C grep -a -F -q "$home_name"; then
+      issues+=("$commit: content leaks personal name -> $path")
+    fi
+  done < <(git diff-tree --no-commit-id --name-only -r --diff-filter=ACMR "$commit")
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ "$local_ref" == refs/heads/* ]] || continue
+  [[ "$local_sha" =~ ^0+$ ]] && continue
+
+  base_commit=""
+  if [[ ! "$remote_sha" =~ ^0+$ ]] && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+    base_commit="$remote_sha"
+  else
+    upstream_ref="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+    if [[ -n "$upstream_ref" ]] && git cat-file -e "${upstream_ref}^{commit}" 2>/dev/null; then
+      base_commit="$(git rev-parse "$upstream_ref")"
+    fi
+  fi
+
+  if [[ -n "$base_commit" ]]; then
+    commits="$(git rev-list --reverse "$base_commit..$local_sha")"
+  else
+    commits="$(git rev-list --reverse "$local_sha")"
+  fi
+
+  while IFS= read -r commit; do
+    [[ -z "$commit" ]] && continue
+    scan_commit "$commit"
+  done <<< "$commits"
+done
+
+if (( ${#issues[@]} > 0 )); then
+  {
+    echo "[scrub] Refusing push because potentially private content was detected:"
+    for issue in "${issues[@]}"; do
+      echo "  - $issue"
+    done
+    echo
+    echo "[scrub] Remove the private path/text or move the asset out of the pushed commits, then push again."
+  } >&2
+  exit 1
+fi
+
+exit 0

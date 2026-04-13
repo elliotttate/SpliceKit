@@ -51,7 +51,7 @@ PARAKEET_PKG_DIR = patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakee
 PARAKEET_RELEASE_BIN = $(PARAKEET_PKG_DIR)/.build/release/parakeet-transcriber
 PARAKEET_DEBUG_BIN = $(PARAKEET_PKG_DIR)/.build/debug/parakeet-transcriber
 
-.PHONY: all clean deploy launch tools url-import-tools
+.PHONY: all clean deploy launch tools url-import-tools install-hooks
 
 all: $(OUTPUT)
 
@@ -73,6 +73,9 @@ url-import-tools:
 	else \
 		echo "ffmpeg not found in PATH. Install with: brew install ffmpeg"; \
 	fi
+
+install-hooks:
+	@bash tools/install_git_hooks.sh
 
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
