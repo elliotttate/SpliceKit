@@ -250,6 +250,7 @@ DESTRUCTIVE_TOOLS = {
     "call_method_with_args",
     "set_object_property",
     "import_fcpxml",
+    "import_otio",
     "batch_timeline_actions",
     "delete_transcript_words",
     "move_transcript_words",
@@ -257,6 +258,9 @@ DESTRUCTIVE_TOOLS = {
     "blade_at_times",
     "apply_effect",
     "apply_transition",
+    "apply_transition_to_all_clips",
+    "batch_apply_effect",
+    "batch_color_correct",
     "execute_command",
     "ai_command",
     "execute_menu_command",
@@ -344,6 +348,8 @@ CUSTOM_TOOL_TITLES = {
     "capture_viewer": "Capture Viewer",
     "capture_timeline": "Capture Timeline",
     "export_xml": "Export FCPXML",
+    "export_otio": "Export OpenTimelineIO",
+    "import_otio": "Import OpenTimelineIO",
     "is_library_updating": "Check Library Updating",
     "search_methods": "Search Methods",
     "raw_call": "Raw JSON-RPC Call",
@@ -374,6 +380,9 @@ CUSTOM_TOOL_TITLES = {
     "get_bridge_options": "Get Bridge Options",
     "set_bridge_option": "Set Bridge Option",
     "set_bridge_option_value": "Set Bridge Option Value",
+    "apply_transition_to_all_clips": "Apply Transition To All Clips",
+    "batch_apply_effect": "Batch Apply Effect",
+    "batch_color_correct": "Batch Color Correct",
     "detect_beats": "Detect Beats",
     "analyze_song_structure": "Analyze Song Structure",
     "beat_sync_blade": "Beat Sync Blade",
@@ -1260,8 +1269,11 @@ def import_fcpxml(xml: str, internal: bool = True) -> str:
 def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "SpliceKit Project",
                     frame_rate: str = "24", width: int = 1920, height: int = 1080,
                     items: str = "[]") -> str:
-    """Generate valid FCPXML for import. Creates a project with clips, gaps, titles,
-    transitions, and markers. Uses rational time (fractions) to avoid frame drift.
+    """Generate valid FCPXML for import using OpenTimelineIO.
+
+    Builds an OTIO Timeline from the provided items, then serializes to FCPXML
+    via the otio-fcpx-xml-adapter. Title and transition items (which OTIO doesn't
+    model natively) are injected as FCPXML-specific post-processing.
 
     items: JSON array of timeline items. Each item:
       {"type": "gap", "duration": 5.0}
@@ -1272,7 +1284,7 @@ def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "Sp
       {"type": "marker", "time": 5.0, "name": "Chapter 1", "kind": "chapter"}
       {"type": "transition", "duration": 1.0}
 
-    Returns the FCPXML string. Pass to import_fcpxml() to load into FCP.
+    Returns the FCPXML string. Pass to import_fcpxml() or import_otio() to load into FCP.
 
     Example:
       xml = generate_fcpxml(project_name="Test", items='[
@@ -1289,8 +1301,87 @@ def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "Sp
     except json.JSONDecodeError:
         item_list = []
 
-    # FCPXML uses rational time (e.g. "100/2400s") to avoid floating-point frame drift.
-    # This maps user-friendly frame rates to numerator/denominator pairs.
+    # Frame rate string → numeric fps for OTIO RationalTime
+    fps_map = {
+        "23.976": 23.98, "24": 24, "25": 25, "29.97": 29.97,
+        "30": 30, "48": 48, "50": 50, "59.94": 59.94, "60": 60,
+    }
+    fps = fps_map.get(frame_rate, 24)
+
+    # Separate spine items, markers, titles, and transitions
+    spine_items = [i for i in item_list if i.get("type") in ("gap", "title", "transition", None)]
+    markers = [i for i in item_list if i.get("type") == "marker"]
+
+    if not spine_items:
+        spine_items = [{"type": "gap", "duration": 10.0}]
+
+    # Check if we have any title or transition items (OTIO can't model these natively)
+    has_fcpxml_only_items = any(i.get("type") in ("title", "transition") for i in spine_items)
+
+    if has_fcpxml_only_items:
+        # Fall back to direct FCPXML construction for full feature support
+        return _generate_fcpxml_direct(event_name, project_name, frame_rate, width, height, spine_items, markers)
+
+    # Build OTIO Timeline from items
+    try:
+        import opentimelineio as otio
+        from opentimelineio import opentime
+    except ImportError:
+        return _generate_fcpxml_direct(event_name, project_name, frame_rate, width, height, spine_items, markers)
+
+    timeline = otio.schema.Timeline(name=project_name)
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+
+    for item in spine_items:
+        itype = item.get("type", "gap")
+        idur = item.get("duration", 5.0)
+        frames = round(idur * fps)
+
+        if itype == "gap":
+            gap = otio.schema.Gap(
+                source_range=opentime.TimeRange(
+                    start_time=opentime.RationalTime(0, fps),
+                    duration=opentime.RationalTime(frames, fps)
+                )
+            )
+            track.append(gap)
+
+    timeline.tracks.append(track)
+
+    # Add markers to the first gap/clip (OTIO attaches markers to items, not the sequence)
+    marker_color_map = {
+        "standard": otio.schema.MarkerColor.PURPLE,
+        "todo": otio.schema.MarkerColor.RED,
+        "chapter": otio.schema.MarkerColor.GREEN,
+    }
+    if markers and len(track) > 0:
+        for m in markers:
+            mt = m.get("time", 0)
+            mname = m.get("name", "Marker")
+            mkind = m.get("kind", "standard")
+            mdur = m.get("duration", 1.0 / fps)
+            marker = otio.schema.Marker(
+                name=mname,
+                marked_range=opentime.TimeRange(
+                    start_time=opentime.RationalTime(round(mt * fps), fps),
+                    duration=opentime.RationalTime(max(1, round(mdur * fps)), fps)
+                ),
+                color=marker_color_map.get(mkind, otio.schema.MarkerColor.PURPLE)
+            )
+            track[0].markers.append(marker)
+
+    # Serialize to FCPXML via the adapter
+    try:
+        xml = otio.adapters.write_to_string(timeline, "fcpx_xml")
+    except Exception as e:
+        # Fall back to direct construction on adapter failure
+        return _generate_fcpxml_direct(event_name, project_name, frame_rate, width, height, spine_items, markers)
+
+    return xml
+
+
+def _generate_fcpxml_direct(event_name, project_name, frame_rate, width, height, spine_items, markers):
+    """Direct FCPXML string construction for items that OTIO can't model (titles, transitions)."""
     fr_map = {
         "23.976": (1001, 24000), "24": (100, 2400), "25": (100, 2500),
         "29.97": (1001, 30000), "30": (100, 3000), "48": (100, 4800),
@@ -1300,22 +1391,13 @@ def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "Sp
     fd_str = f"{fd_num}/{fd_den}s"
 
     def dur_rational(seconds):
-        """Convert seconds to rational time string using the timebase."""
         frames = round(seconds * fd_den / fd_num)
         return f"{frames * fd_num}/{fd_den}s"
 
-    # Spine items go inside <spine> (the primary storyline), markers attach to the sequence
-    spine_items = [i for i in item_list if i.get("type") in ("gap", "title", "transition", None)]
-    markers = [i for i in item_list if i.get("type") == "marker"]
-
-    if not spine_items:
-        spine_items = [{"type": "gap", "duration": 10.0}]
-
-    # Build spine XML -- items must follow Apple's DTD child ordering
     spine_xml = ""
-    offset_seconds = 0.0  # running offset for placing items sequentially
+    offset_seconds = 0.0
     total_seconds = 0.0
-    ts_counter = 1        # unique ID for text-style-def elements
+    ts_counter = 1
 
     for item in spine_items:
         itype = item.get("type", "gap")
@@ -1333,7 +1415,6 @@ def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "Sp
             font_size = "63" if item.get("position") != "lower-third" else "42"
             ts_id = f"ts{ts_counter}"
             ts_counter += 1
-            # DTD order: note, adjust-*, audio, video, clip, title, caption, marker, keyword, filter-*
             spine_xml += f'''            <title name="{title_name}" offset="{off_str}" duration="{dur_str}" start="3600s">
                 <text><text-style ref="{ts_id}">{text}</text-style></text>
                 <text-style-def id="{ts_id}"><text-style font="Helvetica" fontSize="{font_size}" fontColor="1 1 1 1"/></text-style-def>
@@ -1346,7 +1427,6 @@ def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "Sp
 
     total_dur_str = dur_rational(total_seconds)
 
-    # Build markers XML (attached to the sequence)
     markers_xml = ""
     for m in markers:
         mt = m.get("time", 0)
@@ -1361,9 +1441,9 @@ def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "Sp
         else:
             markers_xml += f'            <marker start="{moff}" duration="{mdur}" value="{mname}"/>\n'
 
-    xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
-<fcpxml version="1.11">
+<fcpxml version="1.14">
     <resources>
         <format id="r1" name="FFVideoFormat{width}x{height}p{frame_rate}" frameDuration="{fd_str}" width="{width}" height="{height}"/>
     </resources>
@@ -1378,8 +1458,6 @@ def generate_fcpxml(event_name: str = "SpliceKit Event", project_name: str = "Sp
         </event>
     </library>
 </fcpxml>'''
-
-    return xml
 
 
 # ============================================================
@@ -1445,6 +1523,7 @@ def batch_timeline_actions(actions: str) -> str:
         return f"Invalid JSON: {e}"
 
     results = []
+    errors = 0
     for i, act in enumerate(action_list):
         act_type = act.get("type", "timeline")
         action_name = act.get("action", "")
@@ -1453,19 +1532,35 @@ def batch_timeline_actions(actions: str) -> str:
         if act_type == "wait":
             secs = act.get("seconds", 0.5)
             time.sleep(secs)
-            results.append(f"[{i}] wait {secs}s")
+            results.append(f"[{i}] wait {secs}s -> OK")
         elif act_type == "playback":
+            r = None
             for _ in range(repeat):
                 r = bridge.call("playback.action", action=action_name)
-            results.append(f"[{i}] playback.{action_name}" + (f" x{repeat}" if repeat > 1 else ""))
+            label = f"[{i}] playback.{action_name}" + (f" x{repeat}" if repeat > 1 else "")
+            if r and _err(r):
+                errors += 1
+                results.append(f"{label} -> FAILED: {r.get('error', '?')}")
+            else:
+                results.append(f"{label} -> OK")
         elif act_type == "timeline":
+            r = None
             for _ in range(repeat):
                 r = bridge.call("timeline.action", action=action_name)
-            results.append(f"[{i}] timeline.{action_name}" + (f" x{repeat}" if repeat > 1 else ""))
+            label = f"[{i}] timeline.{action_name}" + (f" x{repeat}" if repeat > 1 else "")
+            if r and _err(r):
+                errors += 1
+                results.append(f"{label} -> FAILED: {r.get('error', '?')}")
+            else:
+                results.append(f"{label} -> OK")
         else:
-            results.append(f"[{i}] unknown type: {act_type}")
+            errors += 1
+            results.append(f"[{i}] unknown type: {act_type} -> SKIPPED")
 
-    return f"Executed {len(action_list)} actions:\n" + "\n".join(results)
+    summary = f"Executed {len(action_list)} actions"
+    if errors:
+        summary += f" ({errors} failed)"
+    return summary + ":\n" + "\n".join(results)
 
 
 # ============================================================
@@ -2245,6 +2340,21 @@ def apply_transition(name: str = "", effectID: str = "", freeze_extend: bool = T
     return msg
 
 
+@mcp.tool(annotations=_tool_annotations("apply_transition_to_all_clips"))
+def apply_transition_to_all_clips() -> str:
+    """Apply the default transition (Cross Dissolve) between every clip on the timeline.
+
+    This selects all clips and adds the default transition at every edit point
+    in a single operation. Much faster than applying transitions one at a time.
+
+    Use list_transitions() to see which transition is currently set as default.
+    """
+    r = bridge.call("command.execute", action="addTransitionToAll", type="timeline")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
 # ============================================================
 # Command Palette
 # ============================================================
@@ -2937,6 +3047,380 @@ def export_xml(path: str = "/tmp/splicekit_export.fcpxml") -> str:
         return f"Error: {r.get('error', r)}"
     return _fmt(r)
 
+
+# ============================================================
+# OpenTimelineIO Import & Export
+# ============================================================
+# Universal timeline interchange via OpenTimelineIO. Handles all
+# OTIO-supported formats (.otio, .otioz, .otiod) AND .fcpxml via
+# the otio-fcpx-xml-adapter. Replaces import_fcpxml / export_xml
+# as the primary format tools.
+
+def _otio_prepare_for_fcp(timeline):
+    """Prepare an OTIO timeline for FCP import.
+
+    - Converts non-title GeneratorReference clips to gaps
+    - Preserves title generators (the adapter writes them as <title> elements)
+    - Returns the modified timeline (in-place)
+    """
+    import opentimelineio as otio
+    if not isinstance(timeline, otio.schema.Timeline):
+        return timeline
+    for track in timeline.tracks:
+        for i, item in enumerate(list(track)):
+            if (isinstance(item, otio.schema.Clip) and
+                    isinstance(item.media_reference, otio.schema.GeneratorReference)):
+                gen_kind = getattr(item.media_reference, "generator_kind", "")
+                if gen_kind != "Title":
+                    track[i] = otio.schema.Gap(source_range=item.source_range)
+    return timeline
+
+
+def _otio_fcpxml_clean_for_paste(fcpxml_str):
+    """Clean FCPXML for FCP's pasteboard import.
+
+    - Strips <library> wrapper (pasteboard merges into active library)
+    - Strips standalone <asset-clip> elements at event level (browser clutter)
+    """
+    lines = fcpxml_str.split("\n")
+    clean = []
+    for line in lines:
+        s = line.strip()
+        if s in ("<library>", "</library>"):
+            continue
+        if s.startswith("<asset-clip ") and s.endswith("/>"):
+            if (len(line) - len(line.lstrip())) <= 16:
+                continue
+        clean.append(line)
+    return "\n".join(clean)
+
+
+def _otio_first_timeline(result):
+    """Extract the first Timeline from an OTIO read result."""
+    import opentimelineio as otio
+    if isinstance(result, otio.schema.Timeline):
+        return result
+    if isinstance(result, otio.schema.SerializableCollection) and len(result) > 0:
+        for item in result:
+            if isinstance(item, otio.schema.Timeline):
+                return item
+        return result
+    return result
+
+def _otio_all_timelines(result):
+    """Extract all Timelines from an OTIO read result."""
+    import opentimelineio as otio
+    if isinstance(result, otio.schema.Timeline):
+        return [result]
+    if isinstance(result, otio.schema.SerializableCollection):
+        timelines = [item for item in result if isinstance(item, otio.schema.Timeline)]
+        return timelines if timelines else list(result)
+    return [result]
+
+def _otio_timeline_summary(timeline):
+    """Build a summary dict for an OTIO timeline."""
+    import opentimelineio as otio
+    info = {"name": getattr(timeline, "name", "unknown")}
+    if isinstance(timeline, otio.schema.Timeline):
+        info["tracks"] = len(timeline.tracks)
+        info["clips"] = len(list(timeline.find_clips()))
+        total_dur = timeline.duration()
+        if total_dur and total_dur.value > 0 and total_dur.rate > 0:
+            info["duration_seconds"] = round(total_dur.value / total_dur.rate, 3)
+    return info
+
+
+def _otio_detect_rate(timeline):
+    """Auto-detect frame rate from an OTIO timeline. Returns 24 as default."""
+    import opentimelineio as otio
+    raw_rate = 24
+    if isinstance(timeline, otio.schema.Timeline):
+        for clip in timeline.find_clips():
+            if clip.source_range and clip.source_range.duration.rate > 1:
+                raw_rate = clip.source_range.duration.rate
+                break
+        else:
+            dur = timeline.duration()
+            if dur and dur.rate > 1:
+                raw_rate = dur.rate
+    return _otio_normalize_rate(raw_rate)
+
+
+def _otio_normalize_rate(rate):
+    """Map common approximate frame rates to exact SMPTE values.
+
+    The FCPXML adapter returns integer rates (29 for 29.97fps) and user input
+    may use approximate values (29.97). The EDL adapter needs exact fractional
+    rates (30000/1001) for drop-frame timecode support.
+    """
+    rate_map = {
+        23: 24000 / 1001,    # 23.976
+        23.98: 24000 / 1001,
+        23.976: 24000 / 1001,
+        24: 24,
+        25: 25,
+        29: 30000 / 1001,    # 29.97 (FCPXML adapter returns 29)
+        29.97: 30000 / 1001,
+        30: 30,
+        47: 48000 / 1001,
+        47.95: 48000 / 1001,
+        48: 48,
+        50: 50,
+        59: 60000 / 1001,    # 59.94
+        59.94: 60000 / 1001,
+        60: 60,
+    }
+    # Check exact match first, then closest integer
+    if rate in rate_map:
+        return rate_map[rate]
+    rounded = round(rate)
+    if rounded in rate_map:
+        return rate_map[rounded]
+    return rate
+
+
+@mcp.tool(annotations=_tool_annotations("export_otio"))
+def export_otio(path: str = "/tmp/splicekit_export.otio", rate: float = 0) -> str:
+    """Export the current project/sequence via OpenTimelineIO.
+
+    Universal export that handles all OTIO-supported formats including FCPXML.
+    Enables timeline interchange with DaVinci Resolve, Premiere Pro, Avid Media
+    Composer, and any NLE that supports OTIO or FCPXML.
+
+    Supported output formats (determined by file extension):
+      .otio   — OpenTimelineIO native JSON (default, most compatible for NLE exchange)
+      .otioz  — OpenTimelineIO bundled with media references (zipped)
+      .otiod  — OpenTimelineIO directory bundle
+      .fcpxml — Final Cut Pro XML (uses FCP's native exporter for full fidelity,
+                then round-trips through OTIO for normalization)
+      .edl    — CMX 3600 EDL (Premiere, Resolve, Avid compatible)
+      .aaf    — Advanced Authoring Format (Avid Media Composer)
+
+    Args:
+        path: Output file path. Extension determines format.
+              Default: /tmp/splicekit_export.otio
+        rate: Frame rate for EDL export (e.g. 23.98, 24, 29.97, 30).
+              Required for .edl, ignored for other formats. If 0, auto-detected
+              from timeline.
+
+    Returns:
+        JSON with status, output path, timeline name, track/clip counts, and duration.
+    """
+    try:
+        import opentimelineio as otio
+    except ImportError:
+        return "Error: opentimelineio not installed. Run: pip install opentimelineio otio-fcpx-xml-adapter"
+
+    import tempfile, os
+
+    # For .fcpxml output, use FCP's native exporter directly for maximum fidelity
+    if path.lower().endswith(".fcpxml"):
+        r = bridge.call("fcpxml.export", path=path)
+        if _err(r):
+            return f"Error exporting FCPXML: {r.get('error', r)}"
+        # Also parse through OTIO for summary info
+        try:
+            with open(path, "r") as f:
+                fcpxml_str = f.read()
+            result = otio.adapters.read_from_string(fcpxml_str, "fcpx_xml")
+            timeline = _otio_first_timeline(result)
+            summary = _otio_timeline_summary(timeline)
+        except Exception:
+            summary = {}
+        summary.update({"status": "ok", "path": path, "bytes": os.path.getsize(path), "format": "fcpxml"})
+        return _fmt(summary)
+
+    # For OTIO formats: export FCPXML from FCP, convert via adapter, write target format
+    fcpxml_path = os.path.join(tempfile.gettempdir(), "splicekit_otio_export.fcpxml")
+    r = bridge.call("fcpxml.export", path=fcpxml_path)
+    if _err(r):
+        return f"Error exporting FCPXML: {r.get('error', r)}"
+
+    try:
+        with open(fcpxml_path, "r") as f:
+            fcpxml_str = f.read()
+        result = otio.adapters.read_from_string(fcpxml_str, "fcpx_xml")
+    except Exception as e:
+        return f"Error reading FCPXML into OTIO: {e}"
+
+    timeline = _otio_first_timeline(result)
+
+    # Format-specific write options
+    ext = path.rsplit(".", 1)[-1].lower()
+    try:
+        if ext == "edl":
+            # EDL needs a rate; auto-detect from timeline or use provided rate
+            edl_rate = _otio_normalize_rate(rate) if rate > 0 else _otio_detect_rate(timeline)
+            otio.adapters.write_to_file(timeline, path, rate=edl_rate)
+        else:
+            otio.adapters.write_to_file(timeline, path)
+    except Exception as e:
+        hint = ""
+        if ext == "aaf" and "mob" in str(e).lower():
+            hint = " (AAF requires Avid-specific metadata on clips — try .edl or .otio instead)"
+        elif ext == "otioz" and ("NotAFileOnDisk" in type(e).__name__ or "not" in str(e).lower()):
+            hint = " (.otioz bundles media files — referenced files must exist on disk)"
+        return f"Error writing {ext.upper()} file: {e}{hint}"
+
+    summary = _otio_timeline_summary(timeline)
+    summary.update({"status": "ok", "path": path, "bytes": os.path.getsize(path), "format": ext})
+
+    try:
+        os.unlink(fcpxml_path)
+    except OSError:
+        pass
+
+    return _fmt(summary)
+
+
+@mcp.tool(annotations=_tool_annotations("import_otio"))
+def import_otio(path: str = "", otio_json: str = "", rate: float = 0) -> str:
+    """Import a timeline file into FCP via OpenTimelineIO.
+
+    Universal import that handles all OTIO-supported formats including FCPXML.
+    Enables importing timelines from DaVinci Resolve, Premiere Pro, Avid Media
+    Composer, and any NLE that exports OTIO or FCPXML.
+
+    Supported input formats (determined by file extension):
+      .otio   — OpenTimelineIO native JSON (DaVinci Resolve, universal)
+      .otioz  — OpenTimelineIO bundle (zipped)
+      .otiod  — OpenTimelineIO directory bundle
+      .fcpxml — Final Cut Pro XML (sent directly to FCP's native importer
+                for full fidelity — effects, transitions, titles all preserved)
+      .edl    — CMX 3600 EDL (Premiere, Resolve, Avid)
+      .aaf    — Advanced Authoring Format (Avid Media Composer)
+
+    Args:
+        path:      Path to the file to import. Extension determines format.
+        otio_json: Alternatively, pass raw OTIO JSON string directly (uses .otio adapter).
+                   If both path and otio_json are provided, path takes priority.
+        rate:      Frame rate for EDL import (e.g. 23.98, 24, 29.97, 30).
+                   Required for .edl files with drop-frame timecodes. If 0, defaults to 24.
+
+    Returns:
+        JSON with import status, timeline name, track/clip counts.
+    """
+    try:
+        import opentimelineio as otio
+    except ImportError:
+        return "Error: opentimelineio not installed. Run: pip install opentimelineio otio-fcpx-xml-adapter"
+
+    # For .fcpxml input, send directly to FCP's native importer for full fidelity
+    if path and path.lower().endswith(".fcpxml"):
+        try:
+            with open(path, "r") as f:
+                fcpxml_str = f.read()
+        except Exception as e:
+            return f"Error reading file: {e}"
+
+        r = bridge.call("fcpxml.import", xml=fcpxml_str, internal=True)
+
+        # Also parse through OTIO for summary info
+        summary = {"format": "fcpxml"}
+        try:
+            result = otio.adapters.read_from_string(fcpxml_str, "fcpx_xml")
+            timelines = _otio_all_timelines(result)
+            summary["timelines_total"] = len(timelines)
+            summary["details"] = [_otio_timeline_summary(tl) for tl in timelines]
+        except Exception:
+            pass
+
+        if _err(r):
+            summary["status"] = "error"
+            summary["error"] = r.get("error", str(r))
+        else:
+            summary["status"] = "ok"
+        return _fmt(summary)
+
+    # For .otio files: prefer the native ObjC converter (correct transitions,
+    # titles, connected clips, exact frame-rate math) over the Python adapter.
+    ext = path.rsplit(".", 1)[-1].lower() if path else ""
+    if ext == "otio" or (not path and otio_json):
+        native_ok = False
+        try:
+            if path and ext == "otio":
+                r = bridge.call("otio.toFCPXML", path=path)
+            elif otio_json:
+                r = bridge.call("otio.toFCPXML", path="/dev/null", otio_json=otio_json)
+            else:
+                r = {"error": "no input"}
+
+            if not _err(r) and r.get("fcpxml"):
+                fcpxml_str = r["fcpxml"]
+                fcpxml_str = _otio_fcpxml_clean_for_paste(fcpxml_str)
+                ir = bridge.call("fcpxml.import", xml=fcpxml_str, internal=True)
+                # Parse through OTIO for summary
+                summary = {"format": ext or "otio_json", "converter": "native"}
+                try:
+                    parsed = otio.adapters.read_from_string(fcpxml_str, "fcpx_xml")
+                    timelines = _otio_all_timelines(parsed)
+                    summary["timelines_total"] = len(timelines)
+                    summary["details"] = [_otio_timeline_summary(tl) for tl in timelines]
+                except Exception:
+                    pass
+                if _err(ir):
+                    summary["status"] = "error"
+                    summary["error"] = ir.get("error", str(ir))
+                else:
+                    summary["status"] = "ok"
+                return _fmt(summary)
+        except Exception:
+            pass  # Fall through to Python adapter path
+
+    # Fallback: read via Python OTIO adapter, convert to FCPXML, import into FCP
+    try:
+        if path:
+            if ext == "edl":
+                edl_rate = _otio_normalize_rate(rate) if rate > 0 else 24
+                result = otio.adapters.read_from_file(path, rate=edl_rate)
+            else:
+                result = otio.adapters.read_from_file(path)
+        elif otio_json:
+            result = otio.adapters.read_from_string(otio_json, "otio_json")
+        else:
+            return "Error: provide either 'path' (file path) or 'otio_json' (raw OTIO JSON string)"
+    except Exception as e:
+        hint = ""
+        if path and path.lower().endswith(".edl") and "drop frame" in str(e).lower():
+            hint = " (try setting rate=29.97 for drop-frame EDLs)"
+        return f"Error reading file: {e}{hint}"
+
+    timelines = _otio_all_timelines(result)
+    if not timelines:
+        return "Error: no timelines found in OTIO file"
+
+    imported = []
+    for tl in timelines:
+        _otio_prepare_for_fcp(tl)
+        try:
+            fcpxml_str = otio.adapters.write_to_string(tl, "fcpx_xml")
+            fcpxml_str = _otio_fcpxml_clean_for_paste(fcpxml_str)
+        except Exception as e:
+            err_msg = f"FCPXML conversion failed: {e}"
+            if "kind" in str(e):
+                err_msg += " (nested compound clips may not convert — try flattening first)"
+            elif "start_time" in str(e) or "NoneType" in str(e):
+                err_msg += " (clip has missing source range — may need media references)"
+            imported.append({"name": getattr(tl, "name", "unknown"), "error": err_msg})
+            continue
+
+        r = bridge.call("fcpxml.import", xml=fcpxml_str, internal=True)
+        entry = _otio_timeline_summary(tl)
+        entry["converter"] = "python_adapter"
+        if _err(r):
+            entry["error"] = r.get("error", str(r))
+        else:
+            entry["status"] = "ok"
+        imported.append(entry)
+
+    summary = {
+        "status": "ok" if any(i.get("status") == "ok" for i in imported) else "error",
+        "format": path.rsplit(".", 1)[-1] if path else "otio_json",
+        "timelines_imported": len([i for i in imported if i.get("status") == "ok"]),
+        "timelines_total": len(imported),
+        "details": imported,
+    }
+    return _fmt(summary)
 
 
 # ============================================================
@@ -5351,6 +5835,593 @@ def reload_plugin_tools() -> str:
     """
     count = _register_plugin_tools()
     return json.dumps({"registered": count, "status": "ok"})
+
+
+# ============================================================
+# MCP Resources
+# ============================================================
+# Read-only contextual data that models can pre-load before
+# acting. Cheaper than tool calls — no side effects, cacheable.
+
+
+@mcp.resource("splicekit://project/info",
+              name="Project Info",
+              description="Current project name, library, event, timeline state, version, and library status",
+              mime_type="application/json")
+def resource_project_info() -> str:
+    """Return project-level context: what's loaded, library name, version, library status."""
+    r = bridge.call("system.version")
+    version_info = r if not _err(r) else {}
+
+    r2 = bridge.call("timeline.getState")
+    timeline_state = r2 if not _err(r2) else {}
+
+    r3 = bridge.call("playback.getPosition")
+    playhead = r3 if not _err(r3) else {}
+
+    r4 = bridge.call("system.callMethodWithArgs", target="FFLibraryDocument",
+                      selector="copyActiveLibraries", args=[], classMethod=True, returnHandle=True)
+    libraries = r4 if not _err(r4) else {}
+
+    r5 = bridge.call("system.callMethod", className="FFLibraryDocument",
+                      selector="isAnyLibraryUpdating", classMethod=True)
+    updating = r5 if not _err(r5) else {}
+
+    return json.dumps({
+        "splicekit": version_info,
+        "timeline": timeline_state,
+        "playhead": playhead,
+        "libraries": libraries,
+        "isLibraryUpdating": updating,
+    }, indent=2, default=str)
+
+
+@mcp.resource("splicekit://timeline/clips",
+              name="Timeline Clips",
+              description="All clips on the active timeline with handles, durations, types, and track positions",
+              mime_type="application/json")
+def resource_timeline_clips() -> str:
+    """Return the full clip list for the active timeline."""
+    r = bridge.call("timeline.getDetailedState")
+    if _err(r):
+        return json.dumps({"error": r.get("error", str(r))})
+    return json.dumps(r, indent=2, default=str)
+
+
+@mcp.resource("splicekit://timeline/markers",
+              name="Timeline Markers",
+              description="All markers in the active timeline with type, position, name, and notes",
+              mime_type="application/json")
+def resource_timeline_markers() -> str:
+    """Return all markers from the active timeline."""
+    r = bridge.call("timeline.getState")
+    if _err(r):
+        return json.dumps({"error": r.get("error", str(r))})
+    markers = r.get("markers", [])
+    return json.dumps({"markers": markers, "count": len(markers)}, indent=2, default=str)
+
+
+@mcp.resource("splicekit://effects/available",
+              name="Available Effects",
+              description="All installed video effects, generators, titles, and audio effects",
+              mime_type="application/json")
+def resource_available_effects() -> str:
+    """Return all available effects from FCP."""
+    r = bridge.call("effects.listAvailable", type="all")
+    if _err(r):
+        return json.dumps({"error": r.get("error", str(r))})
+    return json.dumps(r, indent=2, default=str)
+
+
+@mcp.resource("splicekit://transitions/available",
+              name="Available Transitions",
+              description="All installed video transitions with names, effect IDs, and categories",
+              mime_type="application/json")
+def resource_available_transitions() -> str:
+    """Return all available transitions from FCP."""
+    r = bridge.call("transitions.list")
+    if _err(r):
+        return json.dumps({"error": r.get("error", str(r))})
+    return json.dumps(r, indent=2, default=str)
+
+
+@mcp.resource("splicekit://timeline/selected-clips",
+              name="Selected Clips",
+              description="Currently selected clips in the timeline with handles, durations, and properties",
+              mime_type="application/json")
+def resource_selected_clips() -> str:
+    """Return only the currently selected clips."""
+    r = bridge.call("timeline.getDetailedState")
+    if _err(r):
+        return json.dumps({"error": r.get("error", str(r))})
+    items = [i for i in r.get("items", []) if i.get("selected")]
+    return json.dumps({"selectedCount": len(items), "items": items}, indent=2, default=str)
+
+
+@mcp.resource("splicekit://timeline/analysis",
+              name="Timeline Analysis",
+              description="Timeline statistics: clip count, duration, pacing, potential issues (flash frames, long clips)",
+              mime_type="application/json")
+def resource_timeline_analysis() -> str:
+    """Return timeline analysis: pacing stats, potential issues, structure."""
+    r = bridge.call("timeline.getDetailedState")
+    if _err(r):
+        return json.dumps({"error": r.get("error", str(r))})
+
+    items = r.get("items", [])
+    total_dur = r.get("duration", {}).get("seconds", 0)
+    playhead = r.get("playheadTime", {}).get("seconds", 0)
+
+    clips = [i for i in items if "Transition" not in i.get("class", "")]
+    transitions = [i for i in items if "Transition" in i.get("class", "")]
+    durations = [i.get("duration", {}).get("seconds", 0) for i in clips]
+
+    short_clips = [i for i in clips if i.get("duration", {}).get("seconds", 0) < 0.5]
+    long_clips = [i for i in clips if i.get("duration", {}).get("seconds", 0) > 30]
+
+    avg_dur = sum(durations) / len(durations) if durations else 0
+    min_dur = min(durations) if durations else 0
+    max_dur = max(durations) if durations else 0
+
+    pacing = "unknown"
+    if len(durations) >= 4:
+        q = len(durations) // 4
+        q1_avg = sum(durations[:q]) / q if q else 0
+        q4_avg = sum(durations[-q:]) / q if q else 0
+        if q4_avg < q1_avg * 0.7:
+            pacing = "accelerating"
+        elif q4_avg > q1_avg * 1.3:
+            pacing = "decelerating"
+        else:
+            pacing = "steady"
+
+    issues = []
+    if short_clips:
+        issues.append(f"{len(short_clips)} flash frames (< 0.5s)")
+    if long_clips:
+        issues.append(f"{len(long_clips)} long clips (> 30s)")
+
+    return json.dumps({
+        "sequenceName": r.get("sequenceName", "?"),
+        "durationSeconds": round(total_dur, 2),
+        "playheadSeconds": round(playhead, 2),
+        "clipCount": len(clips),
+        "transitionCount": len(transitions),
+        "avgClipDuration": round(avg_dur, 2),
+        "minClipDuration": round(min_dur, 2),
+        "maxClipDuration": round(max_dur, 2),
+        "pacing": pacing,
+        "issues": issues,
+    }, indent=2, default=str)
+
+
+@mcp.resource("splicekit://clips/applied-effects",
+              name="Applied Effects",
+              description="Effects currently applied to the selected clip, with names, IDs, and handles",
+              mime_type="application/json")
+def resource_applied_effects() -> str:
+    """Return effects applied to the current/selected clip."""
+    r = bridge.call("effects.getClipEffects")
+    if _err(r):
+        return json.dumps({"error": r.get("error", str(r))})
+    return json.dumps(r, indent=2, default=str)
+
+
+@mcp.resource("splicekit://browser/clips",
+              name="Browser Clips",
+              description="Clips available in the FCP browser/media library with names, durations, and handles",
+              mime_type="application/json")
+def resource_browser_clips() -> str:
+    """Return clips from the active library's browser."""
+    r = bridge.call("browser.listClips")
+    if _err(r):
+        return json.dumps({"error": r.get("error", str(r))})
+    return json.dumps(r, indent=2, default=str)
+
+
+@mcp.resource("splicekit://config/instructions",
+              name="Editing Instructions",
+              description="Operating rules, workflow guidance, and best practices for AI-driven FCP editing",
+              mime_type="text/markdown")
+def resource_instructions() -> str:
+    """Workflow guidance and operating rules for models using SpliceKit.
+
+    This teaches the model how to use SpliceKit properly regardless of
+    whether CLAUDE.md is in context.
+    """
+    return """# SpliceKit Operating Instructions
+
+## Golden Rules
+1. **NEVER use keyboard simulation or AppleScript.** All actions go through direct ObjC calls via the bridge.
+2. **Discover before editing.** Call get_timeline_clips() or read splicekit://timeline/clips before making changes.
+3. **Select before acting.** Color correction, effects, retiming, and titles require a clip to be selected first.
+4. **Verify after editing.** Use verify_action(), capture_timeline(), or capture_viewer() to confirm results.
+5. **Prefer non-destructive workflows.** Use undo via timeline_action("undo") if something goes wrong.
+
+## Standard Workflow
+1. bridge_status() — verify FCP is connected
+2. open_project("Name") — load a project
+3. get_timeline_clips() — see timeline contents
+4. Position playhead → select clip → apply action
+5. verify_action() — confirm the edit took effect
+6. capture_timeline() / capture_viewer() — visual verification
+
+## Selection Pattern
+```
+playback_action("goToStart")
+timeline_action("selectClipAtPlayhead")   # select primary storyline clip
+timeline_action("addColorBoard")          # now apply effect/correction
+```
+
+For connected clips (B-roll, titles): use select_clip_in_lane(lane=1) for above, lane=-1 for below.
+
+## Playhead Positioning
+- 1 frame = ~0.042s at 24fps, ~0.033s at 30fps
+- Use seekToTime(seconds) for precise positioning
+- Use batch_timeline_actions() for multi-step navigation + edit sequences
+- Avoid frame-stepping loops when seekToTime exists
+
+## Batch Operations
+Use batch_timeline_actions() for multi-step sequences rather than individual tool calls.
+Use apply_transition_to_all_clips() to add transitions at every edit point at once.
+Use blade_at_times() to cut at multiple timecodes in one call.
+Use add_markers_at_times() to place markers at multiple positions.
+
+## FCPXML for Complex Edits
+For creating entire projects with precise timing, gaps, titles, and markers:
+```
+xml = generate_fcpxml(items='[{"type":"gap","duration":5},{"type":"title","text":"Hello","duration":3}]')
+import_fcpxml(xml, internal=True)
+```
+
+## Timeline Data Model
+FCP uses a spine model: sequence → primaryObject (collection) → items.
+Items are FFAnchoredMediaComponent (clips), FFAnchoredTransition, etc.
+get_timeline_clips() returns handles for each item — use handles in subsequent calls.
+
+## Error Recovery
+- timeline_action("undo") to reverse the last edit
+- manage_handles(action="release_all") to clean up leaked object handles
+- bridge_status() to check if the connection is still alive
+"""
+
+
+# ============================================================
+# MCP Prompts
+# ============================================================
+# Workflow templates for common editing scenarios. Each prompt
+# provides role context, step-by-step guidance, and attaches
+# the instructions resource for operating rules.
+
+
+@mcp.prompt(name="edit_podcast",
+            description="Multi-participant podcast editing: silence removal, leveling, chapter markers")
+def prompt_edit_podcast(episode_name: str = "", participants: str = "") -> str:
+    """Guide for editing a podcast episode in FCP."""
+    return f"""You are an expert podcast editor working in Final Cut Pro via SpliceKit.
+
+Task: Edit the podcast episode{f' "{episode_name}"' if episode_name else ''}{f' with participants: {participants}' if participants else ''}.
+
+## Workflow
+1. **Setup**: Open the project and review the timeline with get_timeline_clips()
+2. **Silence removal**: Use detect_scene_changes() to find dead air, then blade_at_times() to cut silent sections
+3. **Audio leveling**: Check levels across participants — use timeline_action("adjustVolumeUp/Down") to balance
+4. **Cleanup**: Remove filler words, long pauses, and false starts by selecting and deleting clips
+5. **Chapter markers**: Add chapter markers at topic transitions using timeline_action("addChapterMarker")
+6. **Transitions**: Add cross dissolves between segments with apply_transition_to_all_clips() or individual apply_transition()
+7. **Export**: Use generate_fcpxml() to export, or share_project() for direct export
+
+## Tips
+- Use capture_timeline() frequently to verify your edits visually
+- Use batch_timeline_actions() for efficient multi-step editing
+- Silence detection threshold can be tuned with set_silence_threshold()
+"""
+
+
+@mcp.prompt(name="edit_music_video",
+            description="Beat-synced music video editing with scene detection and montage assembly")
+def prompt_edit_music_video(song_name: str = "", style: str = "bar") -> str:
+    """Guide for editing a music video synced to beats."""
+    return f"""You are an expert music video editor working in Final Cut Pro via SpliceKit.
+
+Task: Edit a music video{f' for "{song_name}"' if song_name else ''} with cuts synced to the music.
+
+## Workflow
+1. **Analyze music**: Use detect_beats() to find beat positions, then analyze_song_structure() for sections
+2. **Score clips**: Use montage_analyze_clips() to rank available footage
+3. **Plan the edit**: Use montage_plan_edit() with style="{style}" to map clips to musical segments
+4. **Assemble**: Use montage_assemble() to build the timeline, or montage_auto() for one-shot creation
+5. **Refine**: Review with capture_viewer(), adjust individual clips, add effects
+6. **Transitions**: Add transitions at cut points — apply_transition_to_all_clips() for uniform look, or individual apply_transition() for variety
+7. **Color**: Select clips and apply color correction with timeline_action("addColorBoard") or timeline_action("addColorCurves")
+
+## Beat Sync Tips
+- "beat" style cuts on every beat (fast, energetic)
+- "bar" style cuts on every measure (balanced, standard)
+- "section" style cuts on verse/chorus boundaries (cinematic, slower)
+- Use blade_at_times() to manually cut at specific beat positions
+"""
+
+
+@mcp.prompt(name="social_media_reformat",
+            description="Reformat a timeline for social media: aspect ratio, captions, pacing")
+def prompt_social_media(platform: str = "instagram", source_project: str = "") -> str:
+    """Guide for reformatting content for social media platforms."""
+    specs = {
+        "instagram": {"aspect": "9:16 (1080x1920)", "duration": "15-60s", "captions": True},
+        "tiktok": {"aspect": "9:16 (1080x1920)", "duration": "15-60s", "captions": True},
+        "youtube_shorts": {"aspect": "9:16 (1080x1920)", "duration": "up to 60s", "captions": True},
+        "youtube": {"aspect": "16:9 (1920x1080)", "duration": "any", "captions": True},
+        "twitter": {"aspect": "16:9 or 1:1", "duration": "up to 2:20", "captions": True},
+    }
+    spec = specs.get(platform, specs["instagram"])
+
+    return f"""You are a social media content editor working in Final Cut Pro via SpliceKit.
+
+Task: Reformat{f' "{source_project}"' if source_project else ' the current project'} for {platform}.
+
+## Target Specs
+- Aspect ratio: {spec['aspect']}
+- Duration: {spec['duration']}
+- Captions: {'Required for accessibility' if spec['captions'] else 'Optional'}
+
+## Workflow
+1. **Review source**: get_timeline_clips() to understand the current edit
+2. **Trim for length**: Identify the strongest {spec['duration']} segment — blade and remove excess
+3. **Add captions**: Use open_transcript() to transcribe, then generate_captions() for subtitles
+4. **Style captions**: Use set_caption_style() and set_caption_grouping() for platform-appropriate look
+5. **Pacing**: Tighten cuts — social content needs faster pacing than long-form
+6. **Visual polish**: Add effects, color correction, titles as needed
+7. **Export**: share_project() or generate FCPXML
+
+## Social Media Tips
+- Front-load the hook in the first 3 seconds
+- Captions are essential — most viewers watch without sound
+- Use generate_social_captions() for word-by-word highlighting style
+- Keep text and key visuals in the center safe zone for 9:16
+"""
+
+
+@mcp.prompt(name="color_grade",
+            description="Color grading workflow: correction, look development, consistency")
+def prompt_color_grade(look: str = "", mood: str = "") -> str:
+    """Guide for color grading a project in FCP."""
+    return f"""You are a professional colorist working in Final Cut Pro via SpliceKit.
+
+Task: Color grade the current project{f' with a {look} look' if look else ''}{f' for a {mood} mood' if mood else ''}.
+
+## Workflow
+1. **Review**: get_timeline_clips() and capture_viewer() to assess current color state
+2. **Primary correction** (per clip):
+   - Select clip: timeline_action("selectClipAtPlayhead")
+   - Add Color Board: timeline_action("addColorBoard") for basic lift/gamma/gain
+   - Or Color Wheels: timeline_action("addColorWheels") for more control
+   - Or Color Curves: timeline_action("addColorCurves") for precise curve adjustments
+3. **Look development**: Use timeline_action("addHueSaturation") for selective color shifts
+4. **Consistency**: Apply the same correction across similar clips using copy/paste attributes
+5. **Verify**: capture_viewer() after each correction to check the result
+
+## Color Tools Available
+- addColorBoard — basic 3-way (global, shadows, midtones, highlights)
+- addColorWheels — lift/gamma/gain wheels
+- addColorCurves — RGB curves
+- addColorAdjustment — exposure, saturation, black point
+- addHueSaturation — selective hue shifts
+- addEnhanceLightAndColor — FCP's auto enhancement
+- balanceColor — automatic white balance
+- matchColor — match color between clips
+
+## Tips
+- Always correct exposure/white balance first, then add creative looks
+- Use capture_viewer() frequently to compare before/after
+- Work clip-by-clip for narrative, or batch for documentary/event
+"""
+
+
+@mcp.prompt(name="rough_cut_assembly",
+            description="Assemble a rough cut from clips: import, arrange, basic transitions")
+def prompt_rough_cut(project_name: str = "", clip_folder: str = "") -> str:
+    """Guide for assembling a rough cut from raw footage."""
+    return f"""You are an assistant editor assembling a rough cut in Final Cut Pro via SpliceKit.
+
+Task: Build a rough cut{f' for "{project_name}"' if project_name else ''}{f' from clips in {clip_folder}' if clip_folder else ''}.
+
+## Workflow
+1. **Review footage**: get_timeline_clips() to see what's in the timeline, or montage_analyze_clips() to score available clips
+2. **Arrange clips**: Use the montage tools for automated assembly, or manually:
+   - Position playhead where you want to place each clip
+   - Use FCPXML for precise placement: generate_fcpxml() + import_fcpxml()
+3. **Rough ordering**: Get the story structure right before fine-tuning
+4. **Basic transitions**: apply_transition_to_all_clips() for uniform cross dissolves, or apply_transition() at specific cuts
+5. **Timing**: Adjust clip durations, add gaps for pacing
+6. **Review**: capture_timeline() for layout overview, capture_viewer() for content check
+
+## Assembly Tips
+- Start with the strongest clips, fill in secondary footage later
+- Don't worry about perfect timing in a rough cut — focus on story order
+- Use markers (timeline_action("addMarker")) to flag sections needing attention
+- Use todo markers (timeline_action("addTodoMarker")) for notes on missing content
+"""
+
+
+@mcp.prompt(name="caption_workflow",
+            description="Full captioning pipeline: transcribe, generate, style, and export captions")
+def prompt_caption_workflow(language: str = "en", export_format: str = "srt") -> str:
+    """Guide for the complete captioning workflow."""
+    return f"""You are a captioning specialist working in Final Cut Pro via SpliceKit.
+
+Task: Create captions for the current timeline in {language}, export as {export_format.upper()}.
+
+## Workflow
+1. **Transcribe**: open_transcript() to start the Parakeet speech-to-text engine
+2. **Review transcript**: get_transcript() to read the text, search_transcript() to find specific words
+3. **Clean up**: delete_transcript_words() to remove filler, move_transcript_words() to fix ordering
+4. **Remove silence**: delete_transcript_silences() to clean dead air (tune with set_silence_threshold())
+5. **Generate captions**: generate_captions() to create subtitle track from transcript
+6. **Style**: set_caption_style() for font, size, position; set_caption_grouping() for line breaks
+7. **Verify**: verify_captions() to check timing and content, capture_viewer() to see visual result
+8. **Export**: export_captions_srt() for SRT or export_captions_txt() for plain text
+
+## Caption Tips
+- Use generate_social_captions() for word-by-word highlighting (TikTok/Reels style)
+- Parakeet v3 supports multilingual transcription
+- SRT is universal; use it for YouTube, Vimeo, social platforms
+- Always verify_captions() before export to catch timing issues
+"""
+
+
+@mcp.prompt(name="documentary_editing",
+            description="Documentary editing: interview structure, B-roll, narrative pacing")
+def prompt_documentary(topic: str = "") -> str:
+    """Guide for documentary-style editing."""
+    return f"""You are a documentary editor working in Final Cut Pro via SpliceKit.
+
+Task: Edit a documentary{f' about "{topic}"' if topic else ''}.
+
+## Workflow
+1. **Organize**: Review all clips with get_timeline_clips(), use markers to tag key moments
+2. **Structure**: Build the narrative arc — establish the story spine with interview clips
+3. **Transcribe**: Use open_transcript() + get_transcript() to find the best soundbites
+4. **Assemble**: Place interview clips in story order using FCPXML or montage tools
+5. **B-roll**: Layer supporting footage above the primary storyline:
+   - select_clip_in_lane(lane=1) to work with connected clips
+   - Use blade_at_times() to trim B-roll to match interview pacing
+6. **Transitions**: Add dissolves at section breaks, hard cuts within scenes
+7. **Audio**: Balance interview audio, add ambient sound, music bed
+8. **Captions**: Full caption workflow for accessibility
+9. **Review**: capture_viewer() and capture_timeline() throughout
+
+## Documentary Tips
+- Let interviews drive the structure, B-roll supports the narrative
+- Use chapter markers (timeline_action("addChapterMarker")) at major sections
+- Use todo markers for sections needing pickup shots or additional footage
+- Color correct interviews for consistency, grade B-roll for mood
+"""
+
+
+# ============================================================
+# Batch Effect & Color Tools
+# ============================================================
+# Apply effects or corrections to multiple clips in one call,
+# reducing round-trips for common bulk operations.
+
+
+@mcp.tool(annotations=_tool_annotations("batch_apply_effect"))
+def batch_apply_effect(name: str = "", effectID: str = "", clip_count: int = 0) -> str:
+    """Apply the same effect to multiple clips sequentially.
+
+    Selects each clip at the playhead, applies the effect, then moves
+    to the next edit point. Starts from the current playhead position.
+
+    Args:
+        name: Display name of the effect (e.g. "Gaussian Blur").
+        effectID: The effect ID string (alternative to name).
+        clip_count: Number of clips to process (0 = all clips from playhead to end).
+
+    Select the starting clip first, or position the playhead at the first clip.
+    """
+    if not name and not effectID:
+        return "Error: provide either name or effectID"
+
+    results = []
+    applied = 0
+    errors = 0
+    i = 0
+
+    # Select clip at current position
+    r = bridge.call("timeline.action", action="selectClipAtPlayhead")
+    if _err(r):
+        return f"Error selecting initial clip: {r.get('error', r)}"
+
+    while clip_count == 0 or i < clip_count:
+        # Apply effect to current selection
+        params = {}
+        if effectID:
+            params["effectID"] = effectID
+        if name:
+            params["name"] = name
+        r = bridge.call("effects.apply", **params)
+        if _err(r):
+            errors += 1
+            results.append({"clip": i, "success": False, "error": r.get("error", str(r))})
+        else:
+            applied += 1
+            results.append({"clip": i, "success": True, "effect": r.get("effect", "?")})
+
+        i += 1
+
+        # Move to next edit and select
+        r = bridge.call("timeline.action", action="nextEdit")
+        if _err(r):
+            break  # No more edit points
+        r = bridge.call("timeline.action", action="selectClipAtPlayhead")
+        if _err(r):
+            break  # No clip at this position
+
+    return json.dumps({
+        "applied": applied,
+        "errors": errors,
+        "total": i,
+        "results": results,
+    }, indent=2, default=str)
+
+
+@mcp.tool(annotations=_tool_annotations("batch_color_correct"))
+def batch_color_correct(correction: str = "addColorBoard", clip_count: int = 0) -> str:
+    """Apply the same color correction to multiple clips sequentially.
+
+    Selects each clip at the playhead, applies the correction, then moves
+    to the next edit point. Starts from the current playhead position.
+
+    Args:
+        correction: The color correction action. One of:
+            "addColorBoard", "addColorWheels", "addColorCurves",
+            "addColorAdjustment", "addHueSaturation",
+            "addEnhanceLightAndColor", "balanceColor", "matchColor"
+        clip_count: Number of clips to process (0 = all clips from playhead to end).
+    """
+    valid_corrections = {
+        "addColorBoard", "addColorWheels", "addColorCurves",
+        "addColorAdjustment", "addHueSaturation",
+        "addEnhanceLightAndColor", "balanceColor", "matchColor",
+    }
+    if correction not in valid_corrections:
+        return f"Error: correction must be one of: {', '.join(sorted(valid_corrections))}"
+
+    results = []
+    applied = 0
+    errors = 0
+    i = 0
+
+    r = bridge.call("timeline.action", action="selectClipAtPlayhead")
+    if _err(r):
+        return f"Error selecting initial clip: {r.get('error', r)}"
+
+    while clip_count == 0 or i < clip_count:
+        r = bridge.call("timeline.action", action=correction)
+        if _err(r):
+            errors += 1
+            results.append({"clip": i, "success": False, "error": r.get("error", str(r))})
+        else:
+            applied += 1
+            results.append({"clip": i, "success": True, "correction": correction})
+
+        i += 1
+
+        r = bridge.call("timeline.action", action="nextEdit")
+        if _err(r):
+            break
+        r = bridge.call("timeline.action", action="selectClipAtPlayhead")
+        if _err(r):
+            break
+
+    return json.dumps({
+        "applied": applied,
+        "errors": errors,
+        "total": i,
+        "correction": correction,
+        "results": results,
+    }, indent=2, default=str)
 
 
 # MCP servers communicate over stdio -- the AI tool framework handles the transport
