@@ -28,6 +28,10 @@ const char *SpliceKit_getSocketPath(void);
 // The log file is handy for post-mortem debugging when Console isn't open.
 void SpliceKit_log(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
 
+// Diagnostics: swizzle result tracking and server ready timing
+NSDictionary *SpliceKit_getSwizzleResults(void);
+void SpliceKit_markServerReady(void);
+
 #pragma mark - Runtime Utilities
 
 // Thin wrappers around objc_msgSend that nil-check the target first.

@@ -28,6 +28,7 @@
 #import <AppKit/AppKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
+#import <Security/Security.h>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/getsect.h>
@@ -394,10 +395,15 @@ static NSDictionary *SpliceKit_handleSystemCallMethod(NSDictionary *params) {
 
 static NSDictionary *SpliceKit_handleSystemVersion(NSDictionary *params) {
     NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
-    return @{
+    NSOperatingSystemVersion osv = [[NSProcessInfo processInfo] operatingSystemVersion];
+    NSString *osStr = [NSString stringWithFormat:@"%ld.%ld.%ld",
+                       (long)osv.majorVersion, (long)osv.minorVersion, (long)osv.patchVersion];
+
+    NSMutableDictionary *result = [@{
         @"splicekit_version": @SPLICEKIT_VERSION,
         @"fcp_version": info[@"CFBundleShortVersionString"] ?: @"unknown",
         @"fcp_build": info[@"CFBundleVersion"] ?: @"unknown",
+        @"macos_version": osStr,
         @"pid": @(getpid()),
         @"arch": @
 #if __arm64__
@@ -405,7 +411,31 @@ static NSDictionary *SpliceKit_handleSystemVersion(NSDictionary *params) {
 #else
             "x86_64"
 #endif
-    };
+        ,
+        @"swizzles": SpliceKit_getSwizzleResults(),
+    } mutableCopy];
+
+    // Add uptime
+    NSTimeInterval uptime = [[NSProcessInfo processInfo] systemUptime];
+    result[@"process_uptime_seconds"] = @((int)uptime);
+
+    // Add signing info
+    SecStaticCodeRef staticCode = NULL;
+    OSStatus codeErr = SecStaticCodeCreateWithPath(
+        (__bridge CFURLRef)[[NSBundle mainBundle] bundleURL], kSecCSDefaultFlags, &staticCode);
+    if (codeErr == errSecSuccess && staticCode) {
+        CFDictionaryRef signingInfo = NULL;
+        OSStatus infoErr = SecCodeCopySigningInformation(
+            (SecCodeRef)staticCode, kSecCSSigningInformation, &signingInfo);
+        if (infoErr == errSecSuccess && signingInfo) {
+            NSString *teamID = ((__bridge NSDictionary *)signingInfo)[@"teamid"];
+            result[@"signing_team"] = teamID ?: @"ad-hoc";
+            CFRelease(signingInfo);
+        }
+        CFRelease(staticCode);
+    }
+
+    return result;
 }
 
 static NSDictionary *SpliceKit_handleSystemSwizzle(NSDictionary *params) {
@@ -19921,6 +19951,7 @@ void SpliceKit_startControlServer(void) {
     SpliceKit_log(@"================================================");
     SpliceKit_log(@"Control server listening on 127.0.0.1:%d", SPLICEKIT_TCP_PORT);
     SpliceKit_log(@"================================================");
+    SpliceKit_markServerReady();
 
     // dispatch_source fires our handler whenever there's a pending connection
     // to accept. Much cleaner than a while(true) accept() loop.

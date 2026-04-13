@@ -15,6 +15,11 @@
 #import "SpliceKitDebugUI.h"
 #import <AppKit/AppKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <Security/Security.h>
+#import <mach-o/dyld.h>
+#import <dlfcn.h>
+#import <signal.h>
+#import <execinfo.h>
 #import <time.h>
 
 extern NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params);
@@ -97,6 +102,177 @@ void SpliceKit_log(NSString *format, ...) {
             [sLogHandle synchronizeFile];
         });
     }
+}
+
+#pragma mark - Startup Diagnostics
+//
+// Track swizzle results, capture crashes, and collect system info so that
+// user bug reports include everything we need to diagnose remotely.
+//
+
+// Swizzle result tracker — records every swizzle attempt and outcome so
+// bridge_status can report exactly which patches are active.
+static NSMutableDictionary *sSwizzleResults = nil;
+
+static void SpliceKit_trackSwizzle(NSString *name, BOOL success) {
+    if (!sSwizzleResults) {
+        sSwizzleResults = [NSMutableDictionary new];
+    }
+    sSwizzleResults[name] = @(success);
+}
+
+NSDictionary *SpliceKit_getSwizzleResults(void) {
+    return sSwizzleResults ? [sSwizzleResults copy] : @{};
+}
+
+// Global uncaught exception handler — logs the exception and full stack trace
+// to the log file BEFORE the process terminates. Apple's crash reporter doesn't
+// capture our log, so this is the last chance to write diagnostic info.
+static NSUncaughtExceptionHandler *sPreviousExceptionHandler = nil;
+
+static void SpliceKit_uncaughtExceptionHandler(NSException *exception) {
+    SpliceKit_log(@"!!! UNCAUGHT EXCEPTION !!!");
+    SpliceKit_log(@"Name: %@", exception.name);
+    SpliceKit_log(@"Reason: %@", exception.reason);
+    NSArray *symbols = [exception callStackSymbols];
+    for (NSString *frame in symbols) {
+        SpliceKit_log(@"  %@", frame);
+    }
+    SpliceKit_log(@"UserInfo: %@", exception.userInfo);
+
+    // Flush log synchronously so it hits disk before we die
+    if (sLogHandle) {
+        [sLogHandle synchronizeFile];
+    }
+
+    // Forward to previous handler if one was installed
+    if (sPreviousExceptionHandler) {
+        sPreviousExceptionHandler(exception);
+    }
+}
+
+// Signal handler for fatal signals — captures stack trace to log file.
+// Handles SIGTRAP (CloudKit entitlement crashes), SIGABRT, SIGSEGV, SIGBUS.
+static void SpliceKit_signalHandler(int sig) {
+    const char *sigName = "UNKNOWN";
+    switch (sig) {
+        case SIGTRAP:  sigName = "SIGTRAP";  break;
+        case SIGABRT:  sigName = "SIGABRT";  break;
+        case SIGSEGV:  sigName = "SIGSEGV";  break;
+        case SIGBUS:   sigName = "SIGBUS";   break;
+    }
+
+    // Can't use SpliceKit_log (not async-signal-safe), write directly.
+    if (sLogHandle) {
+        void *frames[64];
+        int count = backtrace(frames, 64);
+        char **symbols = backtrace_symbols(frames, count);
+
+        char header[256];
+        snprintf(header, sizeof(header),
+                 "\n!!! FATAL SIGNAL: %s (signal %d) !!!\nStack trace:\n", sigName, sig);
+        write([sLogHandle fileDescriptor], header, strlen(header));
+
+        if (symbols) {
+            for (int i = 0; i < count; i++) {
+                write([sLogHandle fileDescriptor], "  ", 2);
+                write([sLogHandle fileDescriptor], symbols[i], strlen(symbols[i]));
+                write([sLogHandle fileDescriptor], "\n", 1);
+            }
+            free(symbols);
+        }
+        fsync([sLogHandle fileDescriptor]);
+    }
+
+    // Re-raise with default handler so macOS crash reporter also gets it
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void SpliceKit_installCrashHandlers(void) {
+    sPreviousExceptionHandler = NSGetUncaughtExceptionHandler();
+    NSSetUncaughtExceptionHandler(SpliceKit_uncaughtExceptionHandler);
+
+    signal(SIGTRAP, SpliceKit_signalHandler);
+    signal(SIGABRT, SpliceKit_signalHandler);
+    signal(SIGSEGV, SpliceKit_signalHandler);
+    signal(SIGBUS,  SpliceKit_signalHandler);
+}
+
+// Dump applied entitlements — critical for diagnosing signing issues
+static void SpliceKit_logEntitlements(void) {
+    SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
+    if (!task) {
+        SpliceKit_log(@"Entitlements: could not create SecTask");
+        return;
+    }
+
+    // Check the specific entitlements we care about
+    struct { const char *key; const char *label; } checks[] = {
+        {"com.apple.security.app-sandbox",                        "sandbox"},
+        {"com.apple.security.cs.disable-library-validation",      "no-lib-val"},
+        {"com.apple.security.cs.allow-dyld-environment-variables","dyld-env"},
+        {"com.apple.security.get-task-allow",                     "task-allow"},
+        {"com.apple.developer.icloud-services",                   "icloud"},
+    };
+
+    NSMutableArray *parts = [NSMutableArray new];
+    for (int i = 0; i < 5; i++) {
+        CFTypeRef val = SecTaskCopyValueForEntitlement(
+            task, (__bridge CFStringRef)@(checks[i].key), NULL);
+        if (val) {
+            [parts addObject:[NSString stringWithFormat:@"%s=%@",
+                              checks[i].label, (__bridge id)val]];
+            CFRelease(val);
+        }
+    }
+    CFRelease(task);
+
+    if (parts.count > 0) {
+        SpliceKit_log(@"Entitlements: %@", [parts componentsJoinedByString:@", "]);
+    } else {
+        SpliceKit_log(@"Entitlements: none detected (unsigned or missing)");
+    }
+}
+
+// Log all loaded Mach-O images from FCP's app bundle (not system frameworks)
+// to identify which FCP frameworks are present — useful for version differences.
+static void SpliceKit_logLoadedFrameworks(void) {
+    uint32_t count = _dyld_image_count();
+    NSString *appPath = [[NSBundle mainBundle] bundlePath];
+    NSMutableArray *fcpFrameworks = [NSMutableArray new];
+
+    for (uint32_t i = 0; i < count; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (!name) continue;
+        NSString *path = @(name);
+        if ([path hasPrefix:appPath] && [path containsString:@".framework"]) {
+            // Extract framework name from path
+            NSString *fw = [[path lastPathComponent] stringByDeletingPathExtension];
+            if (!fw) fw = [path lastPathComponent];
+            [fcpFrameworks addObject:fw];
+        }
+    }
+
+    [fcpFrameworks sortUsingSelector:@selector(compare:)];
+    SpliceKit_log(@"FCP frameworks loaded (%lu): %@",
+                  (unsigned long)fcpFrameworks.count,
+                  [fcpFrameworks componentsJoinedByString:@", "]);
+}
+
+// Measure and log startup timing for each phase
+static CFAbsoluteTime sConstructorStart = 0;
+static CFAbsoluteTime sWillLaunchTime = 0;
+static CFAbsoluteTime sDidLaunchTime = 0;
+static CFAbsoluteTime sServerReadyTime = 0;
+
+void SpliceKit_markServerReady(void) {
+    sServerReadyTime = CFAbsoluteTimeGetCurrent();
+    double total = sServerReadyTime - sConstructorStart;
+    double toLaunch = sDidLaunchTime - sConstructorStart;
+    double toServer = sServerReadyTime - sDidLaunchTime;
+    SpliceKit_log(@"Startup timing: constructor->launch=%.2fs, launch->server=%.2fs, total=%.2fs",
+                  toLaunch, toServer, total);
 }
 
 #pragma mark - Socket Path
@@ -2442,36 +2618,62 @@ static void SpliceKit_swizzleCloudContentClasses(const char *phase) {
 
         // CloudContentFirstLaunchHelper (or any future rename containing this)
         if (strstr(name, "CloudContentFirstLaunchHelper")) {
+            SpliceKit_log(@"  [%s] Found class: %s", phase, name);
             SEL sel1 = NSSelectorFromString(@"setupAndPresentFirstLaunchIfNeeded");
             Method m1 = class_getInstanceMethod(classes[i], sel1);
             if (m1) {
                 method_setImplementation(m1, (IMP)noopMethod);
                 SpliceKit_log(@"  [%s] Swizzled %s -setupAndPresentFirstLaunchIfNeeded", phase, name);
+                SpliceKit_trackSwizzle(@"CloudContentFirstLaunchHelper.setupAndPresent", YES);
+            } else {
+                SpliceKit_log(@"  [%s] WARNING: %s exists but -setupAndPresentFirstLaunchIfNeeded not found", phase, name);
+                // Dump all instance methods so we can see what's available
+                unsigned int methodCount = 0;
+                Method *methods = class_copyMethodList(classes[i], &methodCount);
+                for (unsigned int j = 0; j < methodCount && j < 30; j++) {
+                    SpliceKit_log(@"    method: %@", NSStringFromSelector(method_getName(methods[j])));
+                }
+                if (methods) free(methods);
+                SpliceKit_trackSwizzle(@"CloudContentFirstLaunchHelper.setupAndPresent", NO);
             }
             SEL sel2 = NSSelectorFromString(@"setupAndPresentFirstLaunchIfNeededWithCompletionHandler:");
             Method m2 = class_getInstanceMethod(classes[i], sel2);
             if (m2) {
                 method_setImplementation(m2, (IMP)noopMethodWithArg);
                 SpliceKit_log(@"  [%s] Swizzled %s -setupAndPresentFirstLaunchIfNeeded(completion:)", phase, name);
+                SpliceKit_trackSwizzle(@"CloudContentFirstLaunchHelper.setupAndPresent(completion:)", YES);
             }
         }
 
         // CloudContentCatalog — the actual crashing method
         if (strstr(name, "CloudContentCatalog")) {
+            SpliceKit_log(@"  [%s] Found class: %s", phase, name);
             SEL sel = NSSelectorFromString(@"updateCatalogAndRegistry");
             Method m = class_getInstanceMethod(classes[i], sel);
             if (m) {
                 method_setImplementation(m, (IMP)noopMethod);
                 SpliceKit_log(@"  [%s] Swizzled %s -updateCatalogAndRegistry", phase, name);
+                SpliceKit_trackSwizzle(@"CloudContentCatalog.updateCatalogAndRegistry", YES);
+            } else {
+                SpliceKit_log(@"  [%s] WARNING: %s exists but -updateCatalogAndRegistry not found", phase, name);
+                unsigned int methodCount = 0;
+                Method *methods = class_copyMethodList(classes[i], &methodCount);
+                for (unsigned int j = 0; j < methodCount && j < 30; j++) {
+                    SpliceKit_log(@"    method: %@", NSStringFromSelector(method_getName(methods[j])));
+                }
+                if (methods) free(methods);
+                SpliceKit_trackSwizzle(@"CloudContentCatalog.updateCatalogAndRegistry", NO);
             }
         }
 
         // CloudContentFeatureFlag — prevent the entire code path
         if (strstr(name, "CloudContentFeatureFlag")) {
+            SpliceKit_log(@"  [%s] Found class: %s", phase, name);
             Method m = class_getClassMethod(classes[i], @selector(isEnabled));
             if (m) {
                 method_setImplementation(m, (IMP)returnNO);
                 SpliceKit_log(@"  [%s] Swizzled %s +isEnabled -> NO", phase, name);
+                SpliceKit_trackSwizzle(@"CloudContentFeatureFlag.isEnabled", YES);
             }
         }
     }
@@ -2887,7 +3089,16 @@ static void SpliceKit_init(void) {
         SpliceKit_log(@"Signing: no static code (err=%d)", (int)codeErr);
     }
 
+    // Log entitlements applied to this binary
+    SpliceKit_logEntitlements();
+
     SpliceKit_log(@"================================================");
+
+    sConstructorStart = CFAbsoluteTimeGetCurrent();
+
+    // Install crash handlers FIRST so any crash during startup gets logged
+    SpliceKit_installCrashHandlers();
+    SpliceKit_log(@"Crash handlers installed (NSException + SIGTRAP/SIGABRT/SIGSEGV/SIGBUS)");
 
     // These patches need to land before FCP's own init code runs
     SpliceKit_disableCloudContent();
@@ -2900,14 +3111,18 @@ static void SpliceKit_init(void) {
     [[NSNotificationCenter defaultCenter]
         addObserverForName:NSApplicationWillFinishLaunchingNotification
         object:nil queue:nil usingBlock:^(NSNotification *note) {
-            SpliceKit_log(@"WillFinishLaunching — retrying CloudContent swizzles...");
+            sWillLaunchTime = CFAbsoluteTimeGetCurrent();
+            SpliceKit_log(@"WillFinishLaunching (%.2fs after constructor)",
+                          sWillLaunchTime - sConstructorStart);
             SpliceKit_swizzleCloudContentClasses("willLaunch");
+            SpliceKit_logLoadedFrameworks();
         }];
 
     // Everything else waits for the app to finish launching
     [[NSNotificationCenter defaultCenter]
         addObserverForName:NSApplicationDidFinishLaunchingNotification
         object:nil queue:nil usingBlock:^(NSNotification *note) {
+            sDidLaunchTime = CFAbsoluteTimeGetCurrent();
             SpliceKit_appDidLaunch();
         }];
 

@@ -10,6 +10,22 @@
       <sparkle:version>3.1.10</sparkle:version>
       <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 13 Apr 2026 19:23:19 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.1.10</h2>
+        <p>Fix CloudKit crash on FCP 12.2+, disable spring-loaded blade, comprehensive startup diagnostics</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.10/SpliceKit-v3.1.10.dmg"
+        sparkle:edSignature="xVbZ7Otv02HY9NoBf+NFMerUiDKMQUEQL9k/Z1OEKsxwIL45J6LxDE3iDQ7kg2snEWV5CdNWArlvjMhxqUsXDQ=="
+        length="14111966"
+        type="application/octet-stream" />
+    </item>
+    <item>
+      <title>SpliceKit v3.1.10</title>
+      <sparkle:version>3.1.10</sparkle:version>
+      <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 19:12:41 +0000</pubDate>
       <description><![CDATA[
         <h2>What's New in 3.1.10</h2>
