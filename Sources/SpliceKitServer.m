@@ -794,6 +794,7 @@ static NSDictionary *SpliceKit_handleSetProperty(NSDictionary *params) {
 NSDictionary *SpliceKit_handleTimelineGetDetailedState(NSDictionary *params) {
     SpliceKit_installEffectDragSwizzlesNow();
     NSInteger limit = [params[@"limit"] integerValue] ?: 200;
+    BOOL includeNested = [params[@"include_nested"] boolValue];
 
     __block NSDictionary *result = nil;
     SpliceKit_executeOnMainThread(^{
@@ -829,10 +830,43 @@ NSDictionary *SpliceKit_handleTimelineGetDetailedState(NSDictionary *params) {
                 state[@"playheadTime"] = SpliceKit_serializeCMTime(t);
             }
 
-            // Sequence duration
+            // Sequence duration — try sequence.duration first, fall back to summing spine clips
+            BOOL durationSet = NO;
             if ([sequence respondsToSelector:@selector(duration)]) {
                 SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, @selector(duration));
-                state[@"duration"] = SpliceKit_serializeCMTime(d);
+                double secs = (d.timescale > 0) ? (double)d.value / d.timescale : 0;
+                if (secs > 0) {
+                    state[@"duration"] = SpliceKit_serializeCMTime(d);
+                    durationSet = YES;
+                }
+            }
+            if (!durationSet) {
+                // Fallback: sum durations of primary spine items
+                id pObj = [sequence respondsToSelector:@selector(primaryObject)]
+                    ? ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject)) : nil;
+                if (pObj && [pObj respondsToSelector:@selector(containedItems)]) {
+                    id cItems = ((id (*)(id, SEL))objc_msgSend)(pObj, @selector(containedItems));
+                    if ([cItems isKindOfClass:[NSArray class]]) {
+                        int64_t totalValue = 0;
+                        int32_t totalTs = 0;
+                        for (id ci in (NSArray *)cItems) {
+                            if (![ci respondsToSelector:@selector(duration)]) continue;
+                            SpliceKit_CMTime cd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(ci, @selector(duration));
+                            if (cd.timescale > 0) {
+                                if (totalTs == 0) totalTs = cd.timescale;
+                                if (cd.timescale == totalTs) {
+                                    totalValue += cd.value;
+                                } else {
+                                    totalValue += cd.value * totalTs / cd.timescale;
+                                }
+                            }
+                        }
+                        if (totalTs > 0) {
+                            SpliceKit_CMTime computed = {totalValue, totalTs, 1, 0};
+                            state[@"duration"] = SpliceKit_serializeCMTime(computed);
+                        }
+                    }
+                }
             }
 
             // Selected items (get set for checking)
@@ -925,6 +959,48 @@ NSDictionary *SpliceKit_handleTimelineGetDetailedState(NSDictionary *params) {
                                 info[@"endTime"] = SpliceKit_serializeCMTime(endTime);
                             } @catch (NSException *e) {
                                 // Silently skip if effectiveRangeOfObject: fails for this item
+                            }
+                        }
+
+                        // Detect compound clips (FFAnchoredCollection) and expose nested contents
+                        NSString *cls = NSStringFromClass([item class]);
+                        BOOL isCompound = [cls containsString:@"Collection"] || [cls containsString:@"AnchoredClip"];
+                        if (isCompound && [item respondsToSelector:@selector(primaryObject)]) {
+                            info[@"isCompound"] = @YES;
+                            id innerPrimary = ((id (*)(id, SEL))objc_msgSend)(item, @selector(primaryObject));
+                            if (innerPrimary && [innerPrimary respondsToSelector:@selector(containedItems)]) {
+                                id innerItems = ((id (*)(id, SEL))objc_msgSend)(innerPrimary, @selector(containedItems));
+                                if ([innerItems isKindOfClass:[NSArray class]]) {
+                                    info[@"nestedItemCount"] = @([(NSArray *)innerItems count]);
+
+                                    if (includeNested) {
+                                        NSMutableArray *nested = [NSMutableArray array];
+                                        SEL innerErSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+                                        BOOL canGetInnerRange = [innerPrimary respondsToSelector:innerErSel];
+                                        for (id nestedItem in (NSArray *)innerItems) {
+                                            NSMutableDictionary *ni = [NSMutableDictionary dictionary];
+                                            ni[@"class"] = NSStringFromClass([nestedItem class]);
+                                            if ([nestedItem respondsToSelector:@selector(displayName)]) {
+                                                id nn = ((id (*)(id, SEL))objc_msgSend)(nestedItem, @selector(displayName));
+                                                ni[@"name"] = nn ?: @"";
+                                            }
+                                            if ([nestedItem respondsToSelector:@selector(duration)]) {
+                                                SpliceKit_CMTime nd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(nestedItem, @selector(duration));
+                                                ni[@"duration"] = SpliceKit_serializeCMTime(nd);
+                                            }
+                                            ni[@"handle"] = SpliceKit_storeHandle(nestedItem);
+                                            if (canGetInnerRange) {
+                                                @try {
+                                                    SpliceKit_CMTimeRange nr = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                                                        innerPrimary, innerErSel, nestedItem);
+                                                    ni[@"startTime"] = SpliceKit_serializeCMTime(nr.start);
+                                                } @catch (NSException *e) {}
+                                            }
+                                            [nested addObject:ni];
+                                        }
+                                        info[@"nestedItems"] = nested;
+                                    }
+                                }
                             }
                         }
 
@@ -2715,6 +2791,75 @@ NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
         }
     }
 
+    // addTodoMarker: doesn't exist as an IBAction on FFAnchoredTimelineModule or in the
+    // responder chain. Use the direct sequence method that batch markers also uses.
+    if ([action isEqualToString:@"addTodoMarker"]) {
+        __block NSDictionary *todoResult = nil;
+        SpliceKit_executeOnMainThread(^{
+            @try {
+                id timeline = SpliceKit_getActiveTimelineModule();
+                if (!timeline) { todoResult = @{@"error": @"No active timeline module. Is a project open?"}; return; }
+
+                id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+                if (!sequence) { todoResult = @{@"error": @"No sequence in timeline"}; return; }
+
+                // Get playhead time for marker position
+                SpliceKit_CMTime playheadTime = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(timeline, @selector(playheadTime));
+                SpliceKit_CMTime frameDur = {100, 2400, 1, 0};
+                SEL fdSel = NSSelectorFromString(@"frameDuration");
+                if ([sequence respondsToSelector:fdSel]) {
+                    SpliceKit_CMTime fd = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(sequence, fdSel);
+                    if (fd.timescale > 0) frameDur = fd;
+                }
+
+                // Find the clip at the playhead
+                id primaryObj = [sequence respondsToSelector:@selector(primaryObject)]
+                    ? ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject)) : nil;
+                id targetClip = primaryObj; // fallback to primary object
+                if (primaryObj && [primaryObj respondsToSelector:@selector(containedItems)]) {
+                    id items = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
+                    if ([items isKindOfClass:[NSArray class]]) {
+                        SEL erSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+                        if ([primaryObj respondsToSelector:erSel]) {
+                            for (id item in (NSArray *)items) {
+                                @try {
+                                    SpliceKit_CMTimeRange range = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                                        primaryObj, erSel, item);
+                                    double clipStart = (range.start.timescale > 0) ? (double)range.start.value / range.start.timescale : 0;
+                                    double clipDur = (range.duration.timescale > 0) ? (double)range.duration.value / range.duration.timescale : 0;
+                                    double ph = (playheadTime.timescale > 0) ? (double)playheadTime.value / playheadTime.timescale : 0;
+                                    if (ph >= clipStart - 0.01 && ph < clipStart + clipDur + 0.01) {
+                                        targetClip = item;
+                                        break;
+                                    }
+                                } @catch (NSException *e) {}
+                            }
+                        }
+                    }
+                }
+
+                SEL addSel = NSSelectorFromString(@"actionAddMarkerToAnchoredObject:isToDo:isChapter:withRange:error:");
+                if (![sequence respondsToSelector:addSel]) {
+                    todoResult = @{@"error": @"Sequence does not support actionAddMarkerToAnchoredObject:"};
+                    return;
+                }
+
+                SpliceKit_CMTimeRange range = {playheadTime, frameDur};
+                NSError *err = nil;
+                typedef BOOL (*AddMarkerFn)(id, SEL, id, BOOL, BOOL, SpliceKit_CMTimeRange, NSError **);
+                BOOL ok = ((AddMarkerFn)objc_msgSend)(sequence, addSel, targetClip, YES, NO, range, &err);
+                if (ok) {
+                    todoResult = @{@"action": @"addTodoMarker", @"status": @"ok"};
+                } else {
+                    todoResult = @{@"error": err ? [err localizedDescription] : @"Failed to add todo marker"};
+                }
+            } @catch (NSException *e) {
+                todoResult = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+            }
+        });
+        return todoResult ?: @{@"error": @"Failed to add todo marker"};
+    }
+
     // First try on the timeline module directly (fastest, most specific)
     NSDictionary *result = SpliceKit_sendTimelineAction(selector);
 
@@ -4164,12 +4309,33 @@ static NSDictionary *SpliceKit_handleBatchAddMarkers(NSDictionary *params) {
 
             id containedItems = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
             NSMutableArray *clipInfos = [NSMutableArray array];
+
+            // Detect timeline start offset (e.g. 01:00:00:00 = 3600s) using the first clip's
+            // effective range. Input times are relative to content (0 = first frame), so we
+            // add this offset when creating CMTimes for marker placement.
+            double timelineStartOffset = 0;
+            SEL erSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+            BOOL canGetRange = [primaryObj respondsToSelector:erSel];
+
             if ([containedItems isKindOfClass:[NSArray class]]) {
                 double cumulativeStart = 0;
+                BOOL firstClip = YES;
                 for (id item in (NSArray *)containedItems) {
                     if (![item respondsToSelector:@selector(duration)]) continue;
                     SpliceKit_CMTime d = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
                     double dur = (d.timescale > 0) ? (double)d.value / d.timescale : 0;
+
+                    // Get start offset from first clip's absolute position
+                    if (firstClip && canGetRange) {
+                        firstClip = NO;
+                        @try {
+                            SpliceKit_CMTimeRange range = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                                primaryObj, erSel, item);
+                            double absStart = (range.start.timescale > 0) ? (double)range.start.value / range.start.timescale : 0;
+                            timelineStartOffset = absStart; // e.g. 3600.0 for 01:00:00:00
+                        } @catch (NSException *e) {}
+                    }
+
                     [clipInfos addObject:@{@"clip": item, @"start": @(cumulativeStart), @"end": @(cumulativeStart + dur)}];
                     cumulativeStart += dur;
                 }
@@ -4213,7 +4379,9 @@ static NSDictionary *SpliceKit_handleBatchAddMarkers(NSDictionary *params) {
                 // Fallback: use the last clip if marker time is past all clips
                 if (!targetClip) targetClip = [clipInfos lastObject][@"clip"];
 
-                SpliceKit_CMTime markerTime = {(int64_t)round(t * ts), ts, 1, 0};
+                // Add timeline start offset so relative times map to absolute FCP positions
+                double absoluteTime = t + timelineStartOffset;
+                SpliceKit_CMTime markerTime = {(int64_t)round(absoluteTime * ts), ts, 1, 0};
                 SpliceKit_CMTimeRange range = {markerTime, frameDur};
                 NSError *err = nil;
                 BOOL ok = addMarker(sequence, addSel, targetClip, isToDo, isChapter, range, &err);
@@ -5153,9 +5321,15 @@ static NSDictionary *SpliceKit_handleTranscriptClose(NSDictionary *params) {
 }
 
 static NSDictionary *SpliceKit_handleTranscriptGetState(NSDictionary *params) {
-    // Don't dispatch to main thread - getState reads properties that are safe from any thread
-    // Using main thread here would deadlock if transcription is in progress on main thread
-    return [[SpliceKitTranscriptPanel sharedPanel] getState] ?: @{@"status": @"idle"};
+    // Check for project switch before returning state — ensures stale transcript
+    // from a previous project is cleared/replaced with the current project's data.
+    SpliceKitTranscriptPanel *panel = [SpliceKitTranscriptPanel sharedPanel];
+    if (panel.status != SpliceKitTranscriptStatusTranscribing) {
+        SpliceKit_executeOnMainThread(^{
+            [panel ensurePersistedStateLoaded];
+        });
+    }
+    return [panel getState] ?: @{@"status": @"idle"};
 }
 
 static NSDictionary *SpliceKit_handleTranscriptDeleteWords(NSDictionary *params) {
@@ -19240,6 +19414,11 @@ NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleTranscriptSearch(params);
     } else if ([method isEqualToString:@"transcript.deleteSilences"]) {
         result = SpliceKit_handleTranscriptDeleteSilences(params);
+    } else if ([method isEqualToString:@"transcript.clear"]) {
+        SpliceKit_executeOnMainThread(^{
+            [[SpliceKitTranscriptPanel sharedPanel] clearTranscript];
+        });
+        result = @{@"status": @"ok", @"message": @"Transcript cleared from memory and disk cache."};
     } else if ([method isEqualToString:@"transcript.setSilenceThreshold"]) {
         result = SpliceKit_handleTranscriptSetSilenceThreshold(params);
     } else if ([method isEqualToString:@"transcript.setSpeaker"]) {

@@ -868,6 +868,21 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
 
 - (void)ensurePersistedStateLoaded {
     if (self.status == SpliceKitTranscriptStatusTranscribing) return;
+
+    // Check if the current sequence matches what we have in memory.
+    // If the sequence changed (project switch), we need to restore/clear even if words exist.
+    id sequence = [self currentSequence];
+    if (sequence && self.lastRestoredSequenceKey.length > 0 && self.mutableWords.count > 0) {
+        NSDictionary *state = SpliceKit_loadSequenceState(sequence);
+        NSString *currentKey = [state[@"sequenceIdentity"] isKindOfClass:[NSDictionary class]]
+            ? state[@"sequenceIdentity"][@"cacheKey"] : nil;
+        if (currentKey.length > 0 && ![self.lastRestoredSequenceKey isEqualToString:currentKey]) {
+            // Sequence changed — trigger restore which will clear or load new data
+            [self restorePersistedStateForCurrentSequenceIfNeeded];
+            return;
+        }
+    }
+
     if (self.mutableWords.count > 0) return;
     [self restorePersistedStateForCurrentSequenceIfNeeded];
 }
@@ -935,10 +950,30 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
     NSDictionary *state = SpliceKit_loadSequenceState(sequence);
     NSDictionary *transcript = [state[@"transcript"] isKindOfClass:[NSDictionary class]] ? state[@"transcript"] : nil;
     NSArray *wordDicts = [transcript[@"words"] isKindOfClass:[NSArray class]] ? transcript[@"words"] : nil;
-    if (!transcript || wordDicts.count == 0) return;
 
+    // Check if the sequence changed — if so, clear stale transcript from previous project
     NSString *sequenceKey = [state[@"sequenceIdentity"] isKindOfClass:[NSDictionary class]]
         ? state[@"sequenceIdentity"][@"cacheKey"] : nil;
+    if (sequenceKey.length > 0 &&
+        self.lastRestoredSequenceKey.length > 0 &&
+        ![self.lastRestoredSequenceKey isEqualToString:sequenceKey]) {
+        // Sequence changed — clear old transcript data
+        @synchronized (self.mutableWords) {
+            [self.mutableWords removeAllObjects];
+        }
+        [self.mutableSilences removeAllObjects];
+        self.fullText = nil;
+        self.status = SpliceKitTranscriptStatusIdle;
+        self.lastRestoredSequenceKey = sequenceKey;
+        if (self.panel) {
+            [self rebuildTextView];
+            self.deleteSilencesButton.enabled = NO;
+            [self updateStatusUI:@"Project changed. Tap Refresh to transcribe."];
+        }
+    }
+
+    if (!transcript || wordDicts.count == 0) return;
+
     if (sequenceKey.length > 0 &&
         [self.lastRestoredSequenceKey isEqualToString:sequenceKey] &&
         self.mutableWords.count > 0) {
@@ -1009,6 +1044,39 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
     }
 
     self.suppressPersistenceWrites = NO;
+}
+
+- (void)clearTranscript {
+    if (![NSThread isMainThread]) {
+        SpliceKit_executeOnMainThread(^{ [self clearTranscript]; });
+        return;
+    }
+
+    @synchronized (self.mutableWords) {
+        [self.mutableWords removeAllObjects];
+    }
+    [self.mutableSilences removeAllObjects];
+    self.fullText = nil;
+    self.status = SpliceKitTranscriptStatusIdle;
+    self.errorMessage = nil;
+    self.lastRestoredSequenceKey = nil;
+
+    // Remove persisted transcript for current sequence
+    id sequence = [self currentSequence];
+    if (sequence) {
+        NSMutableDictionary *state = [[SpliceKit_loadSequenceState(sequence) mutableCopy] ?: [NSMutableDictionary dictionary] mutableCopy];
+        [state removeObjectForKey:@"transcript"];
+        NSError *error = nil;
+        SpliceKit_saveSequenceState(sequence, state, &error);
+    }
+
+    if (self.panel) {
+        [self rebuildTextView];
+        self.deleteSilencesButton.enabled = NO;
+        [self updateStatusUI:@"Transcript cleared."];
+    }
+
+    SpliceKit_log(@"[Transcript] Transcript cleared");
 }
 
 #pragma mark - Button Actions
@@ -2626,10 +2694,40 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
     @synchronized (self.mutableWords) {
         if (self.mutableWords.count < 2) return;
 
+        // Compute median word duration to detect silence absorption.
+        // Some engines (especially Parakeet) extend a word's endTime through trailing
+        // silence instead of leaving a gap, making pauses invisible to gap-only detection.
+        NSMutableArray<NSNumber *> *durations = [NSMutableArray arrayWithCapacity:self.mutableWords.count];
+        for (SpliceKitTranscriptWord *word in self.mutableWords) {
+            [durations addObject:@(word.duration)];
+        }
+        [durations sortUsingSelector:@selector(compare:)];
+        double medianDuration = [durations[durations.count / 2] doubleValue];
+        // Use 75th percentile as a more robust estimate of "normal" word length
+        double p75Duration = [durations[(NSUInteger)(durations.count * 0.75)] doubleValue];
+
+        // Words longer than 2x the 75th percentile are suspicious — likely contain
+        // absorbed silence. Previous threshold of MAX(3x median, 1.0) was too aggressive
+        // and missed pauses absorbed into 0.5-0.9s words.
+        double suspectThreshold = MAX(p75Duration * 2.0, self.silenceThreshold * 2.0);
+
+        // Phase 1: Also compute start-to-start intervals to detect silence in engines
+        // that produce contiguous timestamps (endTime[i] == startTime[i+1]) with no gaps.
+        // A large start-to-start interval relative to typical speech rate implies a pause.
+        NSMutableArray<NSNumber *> *intervals = [NSMutableArray arrayWithCapacity:self.mutableWords.count - 1];
+        for (NSUInteger i = 0; i < self.mutableWords.count - 1; i++) {
+            double interval = self.mutableWords[i + 1].startTime - self.mutableWords[i].startTime;
+            if (interval > 0) [intervals addObject:@(interval)];
+        }
+        [intervals sortUsingSelector:@selector(compare:)];
+        double medianInterval = intervals.count > 0 ? [intervals[intervals.count / 2] doubleValue] : 0;
+
         for (NSUInteger i = 0; i < self.mutableWords.count - 1; i++) {
             SpliceKitTranscriptWord *current = self.mutableWords[i];
             SpliceKitTranscriptWord *next = self.mutableWords[i + 1];
+            BOOL silenceAdded = NO;
 
+            // Standard inter-word gap detection
             double gap = next.startTime - current.endTime;
             if (gap >= self.silenceThreshold) {
                 SpliceKitTranscriptSilence *silence = [[SpliceKitTranscriptSilence alloc] init];
@@ -2638,12 +2736,81 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
                 silence.duration = gap;
                 silence.afterWordIndex = i;
                 [self.mutableSilences addObject:silence];
+                silenceAdded = YES;
+            }
+
+            // Intra-word silence detection: if a word is suspiciously long, the tail
+            // portion beyond a typical word duration is likely absorbed silence.
+            if (!silenceAdded && current.duration >= suspectThreshold) {
+                double estimatedSpeechEnd = current.startTime + medianDuration;
+                double intraGap = current.endTime - estimatedSpeechEnd;
+                if (intraGap >= self.silenceThreshold) {
+                    SpliceKitTranscriptSilence *silence = [[SpliceKitTranscriptSilence alloc] init];
+                    silence.startTime = estimatedSpeechEnd;
+                    silence.endTime = current.endTime;
+                    silence.duration = intraGap;
+                    silence.afterWordIndex = i;
+                    [self.mutableSilences addObject:silence];
+                    silenceAdded = YES;
+                }
+            }
+
+            // Phase 2: Start-to-start interval detection for contiguous-timestamp engines.
+            // If gap was 0 (no inter-word gap) and no intra-word silence was found,
+            // check if the interval between word starts is abnormally long.
+            if (!silenceAdded && medianInterval > 0) {
+                double interval = next.startTime - current.startTime;
+                // An interval > 2.5x median with duration >= threshold indicates a pause
+                // absorbed into contiguous timing
+                if (interval > medianInterval * 2.5 && interval - medianDuration >= self.silenceThreshold) {
+                    double silenceStart = current.startTime + medianDuration;
+                    double silenceDuration = next.startTime - silenceStart;
+                    if (silenceDuration >= self.silenceThreshold) {
+                        SpliceKitTranscriptSilence *silence = [[SpliceKitTranscriptSilence alloc] init];
+                        silence.startTime = silenceStart;
+                        silence.endTime = next.startTime;
+                        silence.duration = silenceDuration;
+                        silence.afterWordIndex = i;
+                        [self.mutableSilences addObject:silence];
+                    }
+                }
             }
         }
+
+        // Check last word too
+        SpliceKitTranscriptWord *lastWord = self.mutableWords.lastObject;
+        if (lastWord.duration >= suspectThreshold) {
+            double estimatedSpeechEnd = lastWord.startTime + medianDuration;
+            double intraGap = lastWord.endTime - estimatedSpeechEnd;
+            if (intraGap >= self.silenceThreshold) {
+                SpliceKitTranscriptSilence *silence = [[SpliceKitTranscriptSilence alloc] init];
+                silence.startTime = estimatedSpeechEnd;
+                silence.endTime = lastWord.endTime;
+                silence.duration = intraGap;
+                silence.afterWordIndex = self.mutableWords.count - 1;
+                [self.mutableSilences addObject:silence];
+            }
+        }
+
+        // Sort by start time since intra-word silences may interleave with gap silences
+        [self.mutableSilences sortUsingComparator:^NSComparisonResult(SpliceKitTranscriptSilence *a, SpliceKitTranscriptSilence *b) {
+            return [@(a.startTime) compare:@(b.startTime)];
+        }];
     }
 
-    SpliceKit_log(@"[Transcript] Detected %lu silences (threshold: %.2fs)",
-                  (unsigned long)self.mutableSilences.count, self.silenceThreshold);
+    SpliceKit_log(@"[Transcript] Detected %lu silences (threshold: %.2fs, suspectThreshold: %.2fs)",
+                  (unsigned long)self.mutableSilences.count, self.silenceThreshold,
+                  self.silenceThreshold * 2.0);
+}
+
+- (void)redetectSilencesAndRefreshUI {
+    [self detectSilences];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self rebuildTextView];
+        self.deleteSilencesButton.enabled = (self.mutableSilences.count > 0);
+        [self updateStatusUI:[NSString stringWithFormat:@"%lu words, %lu pauses",
+            (unsigned long)self.mutableWords.count, (unsigned long)self.mutableSilences.count]];
+    });
 }
 
 #pragma mark - Speaker Assignment
@@ -4410,6 +4577,35 @@ static double CMTimeToSeconds(SpliceKitTranscript_CMTime t) {
             }];
         }
         state[@"silences"] = silenceList;
+    }
+
+    // Gap histogram — helps users pick a useful silence threshold
+    if (self.mutableWords.count >= 2) {
+        NSUInteger gaps01 = 0, gaps03 = 0, gaps05 = 0, gaps10 = 0, gaps20 = 0, gaps50 = 0;
+        @synchronized (self.mutableWords) {
+            for (NSUInteger i = 0; i < self.mutableWords.count - 1; i++) {
+                SpliceKitTranscriptWord *current = self.mutableWords[i];
+                SpliceKitTranscriptWord *next = self.mutableWords[i + 1];
+                double gap = next.startTime - current.endTime;
+                // Also count intra-word gaps from suspiciously long words
+                double wordExcess = current.duration - 1.0;
+                double effectiveGap = MAX(gap, wordExcess);
+                if (effectiveGap >= 0.1) gaps01++;
+                if (effectiveGap >= 0.3) gaps03++;
+                if (effectiveGap >= 0.5) gaps05++;
+                if (effectiveGap >= 1.0) gaps10++;
+                if (effectiveGap >= 2.0) gaps20++;
+                if (effectiveGap >= 5.0) gaps50++;
+            }
+        }
+        state[@"gapBuckets"] = @{
+            @"0.1+": @(gaps01),
+            @"0.3+": @(gaps03),
+            @"0.5+": @(gaps05),
+            @"1.0+": @(gaps10),
+            @"2.0+": @(gaps20),
+            @"5.0+": @(gaps50),
+        };
     }
 
     return state;
