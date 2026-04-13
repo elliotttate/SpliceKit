@@ -292,7 +292,8 @@ timeline_action("clearRange")      # remove range selection
 ```
 open_transcript()                              # transcribe all clips on timeline
 open_transcript(file_url="/path/to/video.mp4") # transcribe a specific file
-get_transcript()                               # get words with timestamps + speakers + silences
+open_transcript(force_retranscribe=True)       # discard cache and re-transcribe
+get_transcript()                               # get words with timestamps + speakers + silences + gap histogram
 delete_transcript_words(start_index=5, count=3) # delete words 5-7 (removes video segment)
 move_transcript_words(start_index=10, count=2, dest_index=3) # reorder clips
 search_transcript("hello")                     # search for text in transcript
@@ -300,7 +301,7 @@ search_transcript("pauses")                    # find all silences/pauses
 delete_transcript_silences()                   # batch-remove all silences from timeline
 delete_transcript_silences(min_duration=1.0)   # remove only silences > 1 second
 set_transcript_speaker(start_index=0, count=50, speaker="Host")  # label speakers
-set_silence_threshold(threshold=0.5)           # set minimum pause detection (seconds)
+set_silence_threshold(threshold=0.5)           # recompute silences immediately (no re-transcription)
 close_transcript()                             # close the panel
 ```
 
@@ -415,6 +416,34 @@ export_xml()                                       # export to /tmp/splicekit_ex
 export_xml(path="/tmp/my_project.fcpxml")           # export to custom path
 ```
 Programmatic export — no save dialog. Returns the FCPXML file path.
+
+## OpenTimelineIO Import & Export
+```
+export_otio()                                      # export to /tmp/splicekit_export.otio
+export_otio(path="/tmp/my_project.otio")           # export as .otio (DaVinci Resolve native)
+export_otio(path="/tmp/my_project.fcpxml")         # export as .fcpxml (native FCP exporter)
+export_otio(path="/tmp/my_project.edl")            # export as EDL (Premiere/Resolve/Avid)
+export_otio(path="/tmp/my_project.edl", rate=29.97) # EDL with explicit frame rate
+export_otio(path="/tmp/my_project.aaf")            # export as AAF (Avid Media Composer)
+import_otio(path="/tmp/from_resolve.otio")         # import .otio from DaVinci Resolve
+import_otio(path="/tmp/project.fcpxml")            # import .fcpxml into FCP
+import_otio(path="/tmp/premiere.edl", rate=29.97)  # import EDL from Premiere (set fps)
+import_otio(path="/tmp/avid.aaf")                  # import AAF from Avid
+import_otio(otio_json='{"OTIO_SCHEMA":...}')       # import raw OTIO JSON string
+```
+
+Universal timeline import/export via OpenTimelineIO. Handles all OTIO formats
+AND FCPXML/EDL/AAF, replacing `import_fcpxml` / `export_xml` as the primary tools.
+Enables timeline exchange with DaVinci Resolve, Premiere Pro, Avid Media Composer.
+
+Supported formats:
+- `.otio` — OpenTimelineIO native JSON (DaVinci Resolve, universal)
+- `.fcpxml` — Final Cut Pro XML (uses FCP's native importer/exporter for full fidelity)
+- `.edl` — CMX 3600 EDL (Premiere, Resolve, Avid — set `rate` for drop-frame)
+- `.aaf` — Avid AAF (requires Avid-specific metadata on clips)
+- `.otioz` / `.otiod` — OTIO bundles (media files must exist on disk)
+
+Requires: `pip install opentimelineio otio-fcpx-xml-adapter otio-cmx3600-adapter`
 
 ## Deploy & Restart FCP
 ```
