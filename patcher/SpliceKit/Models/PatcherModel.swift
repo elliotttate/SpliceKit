@@ -602,7 +602,10 @@ class PatcherModel: ObservableObject {
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
             <plist version="1.0"><dict>
-            <key>com.apple.security.cs-disable-library-validation</key><true/>
+            <key>com.apple.security.app-sandbox</key><false/>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+            <key>com.apple.security.get-task-allow</key><true/>
             </dict></plist>
             """
         try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)
@@ -796,7 +799,10 @@ class PatcherModel: ObservableObject {
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
             <plist version="1.0"><dict>
-            <key>com.apple.security.cs-disable-library-validation</key><true/>
+            <key>com.apple.security.app-sandbox</key><false/>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+            <key>com.apple.security.get-task-allow</key><true/>
             </dict></plist>
             """
         try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)

@@ -362,7 +362,10 @@ cat > "$ENTITLEMENTS" << 'ENT'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>com.apple.security.cs-disable-library-validation</key><true/>
+    <key>com.apple.security.app-sandbox</key><false/>
+    <key>com.apple.security.cs.disable-library-validation</key><true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+    <key>com.apple.security.get-task-allow</key><true/>
 </dict>
 </plist>
 ENT
@@ -403,7 +406,7 @@ else
 fi
 
 # Verify entitlements applied
-if codesign -d --entitlements - "$MODDED_APP" 2>&1 | grep -q "cs-disable-library-validation"; then
+if codesign -d --entitlements - "$MODDED_APP" 2>&1 | grep -q "disable-library-validation"; then
     log "Entitlements applied (no sandbox, library validation disabled)"
 else
     err "Entitlements not applied correctly"
