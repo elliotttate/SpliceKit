@@ -4695,16 +4695,27 @@ static NSString *SpliceKit_tailLogFile(NSString *path, NSUInteger maxBytes) {
 
     // Timeline actions
     addTool(@"timeline_action",
-        @"Execute a timeline editing action (blade, delete, markers, color, speed, etc). "
-        @"Common actions: blade, bladeAll, delete, cut, copy, paste, undo, redo, "
-        @"selectClipAtPlayhead, selectAll, deselectAll, addMarker, addChapterMarker, addTodoMarker, "
-        @"deleteMarker, nextMarker, previousMarker, nextEdit, previousEdit, addTransition, "
-        @"trimToPlayhead, insertGap, addColorBoard, addColorWheels, addColorCurves, "
-        @"retimeNormal, retimeSlow50, retimeSlow25, retimeFast2x, retimeFast4x, retimeReverse, freezeFrame, "
-        @"addBasicTitle, addBasicLowerThird, adjustVolumeUp, adjustVolumeDown, "
-        @"solo, disable, removeEffects, detachAudio, zoomToFit, renderAll, exportXML, "
-        @"favorite, reject, unrate, createCompoundClip, autoReframe, addKeyframe, deleteKeyframes, "
-        @"showPreferences (open app preferences/settings)",
+        @"Execute a timeline editing action. Actions:\n"
+        @"EDITING: blade, bladeAll, delete, cut, copy, paste, undo, redo, joinClips, replaceWithGap, pasteAsConnected, insertGap, insertPlaceholder\n"
+        @"SELECTION: selectAll, deselectAll, selectClipAtPlayhead, selectToPlayhead\n"
+        @"TRIM: trimToPlayhead, extendEditToPlayhead, trimStart, trimEnd, nudgeLeft, nudgeRight, nudgeUp, nudgeDown\n"
+        @"RANGE: setRangeStart, setRangeEnd, clearRange, setClipRange\n"
+        @"MARKERS: addMarker, addTodoMarker, addChapterMarker, deleteMarker, deleteMarkersInSelection, nextMarker, previousMarker\n"
+        @"NAVIGATION: nextEdit, previousEdit, addTransition\n"
+        @"COLOR: addColorBoard, addColorWheels, addColorCurves, addHueSaturation, addEnhanceLightAndColor, balanceColor, matchColor, addMagneticMask, addColorAdjustment, resetColorBoard, smartConform\n"
+        @"AUDIO: adjustVolumeUp, adjustVolumeDown, volumeMute, detachAudio, addChannelEQ, enhanceAudio, matchAudio, expandAudio, expandAudioComponents, addAudioFadeIn, addAudioFadeOut\n"
+        @"TITLES: addBasicTitle, addBasicLowerThird\n"
+        @"SPEED: retimeNormal, retimeFast2x, retimeFast4x, retimeFast8x, retimeFast20x, retimeSlow50, retimeSlow25, retimeSlow10, retimeReverse, retimeHold, freezeFrame, retimeBladeSpeed, retimeSpeedRampToZero, retimeSpeedRampFromZero\n"
+        @"CLIPS: solo, disable, createCompoundClip, breakApartClipItems, addAdjustmentClip, liftFromPrimaryStoryline, createStoryline, overwriteToPrimaryStoryline, collapseToConnectedStoryline, renameClip, openClip, changeDuration, synchronizeClips, referenceNewParentClip\n"
+        @"EFFECTS: removeEffects, pasteEffects, pasteAttributes, copyAttributes, removeAttributes, autoReframe, showTransformControls, showCropControls\n"
+        @"CAPTIONS: addCaption, splitCaption, resolveOverlaps, importCaptions\n"
+        @"MULTICAM: createMulticamClip, switchAngle01, switchAngle02, switchAngle03, switchAngle04, cutAndSwitchAngle01, cutAndSwitchAngle02\n"
+        @"RATING: favorite, reject, unrate\n"
+        @"KEYFRAMES: addKeyframe, deleteKeyframes, nextKeyframe, previousKeyframe\n"
+        @"VIEW: zoomToFit, zoomIn, zoomOut, verticalZoomToFit, toggleSnapping, toggleSkimming, toggleClipSkimming, toggleInspector, toggleTimeline, toggleTimelineIndex, showAudioLanes, enterFullScreen, increaseClipHeight, decreaseClipHeight, showVideoAnimation, showAudioAnimation, showPrecisionEditor\n"
+        @"PROJECT: duplicateProject, snapshotProject, projectProperties, newProject, newEvent, importMedia, find, findAndReplaceTitle, revealInFinder, renderAll, exportXML, analyzeAndFix, recordVoiceover, backgroundTasks, deleteGeneratedFiles, deleteRenderFiles, showPreferences\n"
+        @"AUDITION: createAudition, finalizeAudition, nextAuditionPick, previousAuditionPick\n"
+        @"STORYLINE: createStoryline, liftFromPrimaryStoryline, overwriteToPrimaryStoryline, collapseToConnectedStoryline",
         @{@"type": @"object",
           @"properties": @{
               @"action": @{@"type": @"string", @"description": @"Action name"}
@@ -4766,7 +4777,11 @@ static NSString *SpliceKit_tailLogFile(NSString *path, NSUInteger maxBytes) {
 
     // Effects
     addTool(@"apply_effect",
-        @"Apply a video/audio effect to the selected clip.",
+        @"Apply a video/audio effect to the selected clip. Common effects: "
+        @"Gaussian Blur, Sharpen, Keyer, Luma Keyer, Vignette, Noise Reduction, Stabilization, "
+        @"Black & White, Sepia, Aged Film, Film Grain, Bloom, Glow, Pixellate, Posterize, "
+        @"Invert, Flipped, Tilt-Shift, Drop Shadow, Letterbox, Lens Flare, Underwater, Rolling Shutter. "
+        @"Use list_effects() to discover all available effects.",
         @{@"type": @"object",
           @"properties": @{
               @"name": @{@"type": @"string", @"description": @"Effect name (e.g. Gaussian Blur, Keyer, Vignette)"},
@@ -5149,15 +5164,35 @@ static NSString * const kGemmaSystemPrompt =
     @"1. Call get_timeline_clips first if you need to know what's on the timeline\n"
     @"2. Use seek_to_time(seconds) for playhead positioning — it's instant\n"
     @"3. Most edits require selecting a clip first: timeline_action(\"selectClipAtPlayhead\")\n"
-    @"4. If a tool returns an error, try an alternative approach\n"
-    @"5. When done, respond with a brief summary of what you changed\n\n"
+    @"4. For connected clips (titles, B-roll), use select_clip_in_lane(lane=1 above, -1 below)\n"
+    @"5. If a tool returns an error, try an alternative approach\n"
+    @"6. When done, respond with a brief summary of what you changed\n\n"
     @"CRITICAL — batch operations:\n"
     @"For repetitive tasks (cutting at intervals, adding many markers, etc.), ALWAYS use batch tools:\n"
     @"- blade_at_times([3.0, 6.0, 9.0, ...]) — cut at many times in ONE call\n"
     @"- add_markers_at_times([...]) — add many markers in ONE call\n"
     @"- batch_timeline_actions([...]) — chain many actions in ONE call\n"
     @"Compute all needed times/actions upfront, then execute in a single tool call.\n"
-    @"NEVER loop step-by-step (seek+blade, seek+blade...) — use the batch tool instead.";
+    @"NEVER loop step-by-step (seek+blade, seek+blade...) — use the batch tool instead.\n\n"
+    @"CAPABILITIES:\n"
+    @"- Color: addColorBoard/Wheels/Curves, addHueSaturation, balanceColor, matchColor, addMagneticMask\n"
+    @"- Speed: retimeSlow50/25/10, retimeFast2x/4x/8x/20x, retimeReverse, freezeFrame, retimeHold, retimeBladeSpeed, retimeSpeedRampToZero/FromZero\n"
+    @"- Audio: adjustVolumeUp/Down, volumeMute, addAudioFadeIn/Out, detachAudio, addChannelEQ, enhanceAudio, matchAudio\n"
+    @"- Captions: addCaption, splitCaption, resolveOverlaps, generate_captions (social media style)\n"
+    @"- Multicam: createMulticamClip, switchAngle01-04, cutAndSwitchAngle01-02\n"
+    @"- Compound clips: createCompoundClip, breakApartClipItems, openClip (enter), backToParent (exit)\n"
+    @"- Storylines: createStoryline, liftFromPrimaryStoryline, overwriteToPrimaryStoryline\n"
+    @"- Transitions: apply_transition (Cross Dissolve, Flow, Wipe, etc.) with freeze_extend option\n"
+    @"- Effects: apply_effect (Gaussian Blur, Keyer, Vignette, etc.), removeEffects, pasteEffects/Attributes\n"
+    @"- Inspector: get/set_inspector_property (opacity, volume, positionX/Y, rotation, scaleX/Y)\n"
+    @"- Transcript: open_transcript, get_transcript, delete_transcript_silences (remove pauses)\n"
+    @"- Scene detection: detect_scene_changes (add markers or blade at cuts)\n"
+    @"- FCPXML: generate_fcpxml, import_fcpxml, export_xml\n"
+    @"- View: toggle_panel, capture_viewer/timeline for screenshots\n"
+    @"- Trim: trimToPlayhead, trimStart, trimEnd, nudgeLeft/Right/Up/Down\n"
+    @"- Auditions: createAudition, finalizeAudition, nextAuditionPick, previousAuditionPick\n"
+    @"- Rating: favorite, reject, unrate\n"
+    @"- Project: newProject, newEvent, duplicateProject, importMedia, analyzeAndFix, share_project";
 
 - (void)executeNaturalLanguageGemma:(NSString *)query
                          completion:(void(^)(NSString *summary, NSString *error))completion {
