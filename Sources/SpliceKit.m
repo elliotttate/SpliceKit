@@ -2315,9 +2315,11 @@ static void SpliceKit_appDidLaunch(void) {
         SpliceKit_installSuppressAutoImport();
     }
 
-    // Install spring-loaded blade (hold Option → blade, release → revert) if enabled
+    // Spring-loaded blade disabled — intercepting Option key breaks FCP's native
+    // Option+click (extend edit) and Option+drag (copy clip) behaviors.
     if (SpliceKit_isSpringLoadedBladeEnabled()) {
-        SpliceKit_installSpringLoadedBlade();
+        SpliceKit_setSpringLoadedBladeEnabled(NO);
+        SpliceKit_log(@"  Spring-loaded blade auto-disabled (conflicts with Option+click editing)");
     }
 
     // Install default spatial conform swizzle if set to non-default value

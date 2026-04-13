@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.1.10</title>
+      <sparkle:version>3.1.10</sparkle:version>
+      <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 13 Apr 2026 18:31:05 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.1.10</h2>
+        <p>Fix CloudKit crash on FCP 12.2+ with ad-hoc signing, disable spring-loaded blade (conflicts with Option+click editing)</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.10/SpliceKit-v3.1.10.dmg"
+        sparkle:edSignature="TVCXcYteABgUJMDq7sMi1dxciLldpurw6SoNvTWWzxXybSNyKpgNMVB5DirpE1tNAZ7Y2rRbMetMnxv6auHgBw=="
+        length="14098645"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.1.9</title>
       <sparkle:version>3.1.9</sparkle:version>
       <sparkle:shortVersionString>3.1.9</sparkle:shortVersionString>
