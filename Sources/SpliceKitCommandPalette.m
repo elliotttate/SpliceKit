@@ -536,6 +536,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"Audio Fade In", @"addAudioFadeIn", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Add audio fade-in to selected clip", @[@"ramp up"]);
     add(@"Audio Fade Out", @"addAudioFadeOut", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Add audio fade-out to selected clip", @[@"ramp down"]);
     add(@"Expand Audio Components", @"expandAudioComponents", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Show individual audio channels", @[@"channels"]);
+    add(@"Mute Audio", @"toggleMuteAudio", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", @"Ctrl+Opt+M", @"Mute/unmute audio on selected clip or clip at playhead", @[@"mute", @"silence", @"audio off", @"toggle audio", @"unmute"]);
     add(@"Audio Enhancements", @"showAudioEnhancements", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Open audio enhancement controls", @[@"eq", @"noise removal", @"loudness"]);
     add(@"Audio Match", @"matchAudio", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Match audio levels between clips", @[@"normalize"]);
 
@@ -817,6 +818,10 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"Analyze Clips for Montage", @"analyzeClips", @"montage", SpliceKitCommandCategoryMusic, @"Montage", nil, @"Score and rank clips in the browser for montage creation", @[@"analyze", @"score", @"rank", @"clips"]);
     add(@"Plan Montage Edit", @"planEdit", @"montage", SpliceKitCommandCategoryMusic, @"Montage", nil, @"Create an edit decision list mapping clips to musical beats", @[@"plan", @"edl", @"edit plan", @"beat sync"]);
     add(@"Assemble Montage", @"assemble", @"montage", SpliceKitCommandCategoryMusic, @"Montage", nil, @"Build a montage timeline from an edit plan with transitions and music", @[@"assemble", @"build", @"create", @"timeline"]);
+
+    // --- Arrange ---
+    add(@"Shuffle Clips", @"shuffle", @"spine_action", SpliceKitCommandCategoryEditing, @"Arrange", nil, @"Randomly reorder all clips on the timeline", @[@"randomize", @"random", @"scramble", @"rearrange", @"mix up", @"shuffle order"]);
+    add(@"Reverse Clips", @"reverse", @"spine_action", SpliceKitCommandCategoryEditing, @"Arrange", nil, @"Reverse the order of all clips on the timeline", @[@"backwards", @"flip order", @"mirror"]);
 
     // --- Options ---
     add(@"SpliceKit Options", @"bridgeOptions", @"bridge_options", SpliceKitCommandCategoryOptions, @"Options", nil, @"Open SpliceKit options panel", @[@"settings", @"preferences", @"config"]);
@@ -1540,6 +1545,62 @@ static NSString *FCPStripStopWords(NSString *query) {
     } else if ([type isEqualToString:@"scene_options"]) {
         [self showSceneDetectionOptionsPanel];
         result = @{@"action": action, @"status": @"started"};
+    } else if ([type isEqualToString:@"spine_action"]) {
+        // Spine manipulation actions (shuffle, reverse)
+        if ([action isEqualToString:@"shuffle"]) {
+            extern NSDictionary *SpliceKit_handleSpineGetItems(NSDictionary *params);
+            extern NSDictionary *SpliceKit_handleSpineReorder(NSDictionary *params);
+
+            NSDictionary *state = SpliceKit_handleSpineGetItems(@{});
+            NSArray *items = state[@"items"];
+            if (!items || [items count] < 2) {
+                result = @{@"error": @"Need at least 2 clips to shuffle"};
+            } else {
+                // Collect clip indices (skip transitions)
+                NSMutableArray *clipIndices = [NSMutableArray array];
+                for (NSDictionary *item in items) {
+                    NSString *cls = item[@"class"] ?: @"";
+                    if (![cls containsString:@"Transition"]) {
+                        [clipIndices addObject:@(clipIndices.count)];
+                    }
+                }
+                // Fisher-Yates shuffle
+                for (NSInteger i = clipIndices.count - 1; i > 0; i--) {
+                    NSInteger j = arc4random_uniform((uint32_t)(i + 1));
+                    [clipIndices exchangeObjectAtIndex:i withObjectAtIndex:j];
+                }
+                result = SpliceKit_handleSpineReorder(@{@"order": clipIndices});
+                if (result[@"status"]) {
+                    SpliceKit_log(@"[Shuffle] Reordered %@ clips (%@ transitions removed)",
+                        result[@"clipsReordered"], result[@"transitionsRemoved"]);
+                }
+            }
+        } else if ([action isEqualToString:@"reverse"]) {
+            extern NSDictionary *SpliceKit_handleSpineGetItems(NSDictionary *params);
+            extern NSDictionary *SpliceKit_handleSpineReorder(NSDictionary *params);
+
+            NSDictionary *state = SpliceKit_handleSpineGetItems(@{});
+            NSArray *items = state[@"items"];
+            if (!items || [items count] < 2) {
+                result = @{@"error": @"Need at least 2 clips to reverse"};
+            } else {
+                NSMutableArray *clipIndices = [NSMutableArray array];
+                for (NSDictionary *item in items) {
+                    NSString *cls = item[@"class"] ?: @"";
+                    if (![cls containsString:@"Transition"]) {
+                        [clipIndices addObject:@(clipIndices.count)];
+                    }
+                }
+                // Reverse the array
+                NSArray *reversed = [[clipIndices reverseObjectEnumerator] allObjects];
+                result = SpliceKit_handleSpineReorder(@{@"order": reversed});
+                if (result[@"status"]) {
+                    SpliceKit_log(@"[Reverse] Reversed %@ clips", result[@"clipsReordered"]);
+                }
+            }
+        } else {
+            result = @{@"error": [NSString stringWithFormat:@"Unknown spine action: %@", action]};
+        }
     } else if ([type isEqualToString:@"batch_export"]) {
         extern NSDictionary *SpliceKit_handleBatchExport(NSDictionary *params);
         result = SpliceKit_handleBatchExport(@{@"scope": @"all"});

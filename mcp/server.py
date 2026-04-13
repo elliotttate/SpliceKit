@@ -764,7 +764,7 @@ def timeline_action(action: str) -> str:
                    retimeReset, retimeOpticalFlow, retimeFrameBlending, retimeFloorFrame
       Keywords: addKeywordGroup1..7
       Color Nav: nextColorEffect, previousColorEffect, resetColorBoard, toggleAllColorOff
-      Audio Extra: alignAudioToVideo, volumeMute, addDefaultAudioEffect,
+      Audio Extra: alignAudioToVideo, volumeMute, toggleMuteAudio, addDefaultAudioEffect,
                    addDefaultVideoEffect, applyAudioFades
       Clip Extra: makeClipsUnique, enableDisable, transcodeMedia, pasteAllAttributes
       Navigate: goToInspector, goToTimeline, goToViewer, goToColorBoard,
@@ -1861,11 +1861,15 @@ def raw_call(method: str, params: str = "{}") -> str:
 # drag words to reorder clips.
 
 @mcp.tool(annotations=_tool_annotations("open_transcript"))
-def open_transcript(file_url: str = "") -> str:
+def open_transcript(file_url: str = "", force_retranscribe: bool = False) -> str:
     """Open the transcript panel and start transcribing.
 
     If no file_url is provided, transcribes all clips on the current timeline.
     If file_url is provided, transcribes that specific audio/video file.
+
+    By default, if a persisted transcript exists it will be restored without
+    re-running analysis. Set force_retranscribe=True to discard the cache
+    and run a fresh transcription.
 
     The transcript panel allows text-based editing:
     - Clicking a word jumps the playhead to that time
@@ -1877,6 +1881,8 @@ def open_transcript(file_url: str = "") -> str:
     params = {}
     if file_url:
         params["fileURL"] = file_url
+    if force_retranscribe:
+        params["forceRetranscribe"] = True
     r = bridge.call("transcript.open", **params)
     if _err(r):
         return f"Error: {r.get('error', r)}"
@@ -1908,6 +1914,11 @@ def get_transcript() -> str:
     lines.append(f"Words: {r.get('wordCount', 0)}")
     lines.append(f"Silences: {r.get('silenceCount', 0)}")
     lines.append(f"Silence threshold: {r.get('silenceThreshold', 0.3):.1f}s")
+
+    if r.get('gapBuckets'):
+        gb = r['gapBuckets']
+        buckets = ' | '.join(f">={k}: {gb[k]}" for k in sorted(gb.keys()))
+        lines.append(f"Gap histogram: {buckets}")
 
     if r.get('progress'):
         p = r['progress']
@@ -2072,7 +2083,8 @@ def set_silence_threshold(threshold: float) -> str:
         threshold: Duration in seconds. Default is 0.3 (300ms).
                    Lower values detect shorter pauses, higher values only long ones.
 
-    The transcript must be re-transcribed for changes to take effect.
+    Takes effect immediately — silences are recomputed from existing word
+    timings without re-transcription. Returns the updated silence count.
     """
     r = bridge.call("transcript.setSilenceThreshold", threshold=threshold)
     if _err(r):

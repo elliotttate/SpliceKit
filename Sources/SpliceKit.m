@@ -16,6 +16,8 @@
 #import <AppKit/AppKit.h>
 #import <time.h>
 
+extern NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params);
+
 #pragma mark - Logging
 //
 // We log to both NSLog (shows up in Console.app) and a file on disk.
@@ -217,6 +219,7 @@ static void SpliceKit_checkCompatibility(void) {
 - (void)toggleSecondaryAudioMeters:(id)sender;
 - (void)toggleSecondaryEffectsBrowser:(id)sender;
 - (void)toggleSecondaryTransitionsBrowser:(id)sender;
+- (void)toggleMuteAudio:(id)sender;
 @property (nonatomic, weak) NSButton *toolbarButton;
 @property (nonatomic, weak) NSButton *paletteToolbarButton;
 @property (nonatomic, strong) NSMenu *luaScriptsMenu;
@@ -293,6 +296,12 @@ static void SpliceKit_checkCompatibility(void) {
     } else {
         SpliceKit_handleSectionsShow(@{});
     }
+}
+
+- (void)toggleMuteAudio:(id)sender {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        SpliceKit_handleTimelineAction(@{@"action": @"toggleMuteAudio"});
+    });
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
@@ -726,6 +735,16 @@ static void SpliceKit_installMenu(void) {
     sectionsItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
     sectionsItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:sectionsItem];
+
+    [bridgeMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *muteAudioItem = [[NSMenuItem alloc]
+        initWithTitle:@"Mute Audio"
+               action:@selector(toggleMuteAudio:)
+        keyEquivalent:@"m"];
+    muteAudioItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
+    muteAudioItem.target = [SpliceKitMenuController shared];
+    [bridgeMenu addItem:muteAudioItem];
 
     // --- Lua Scripts submenu (dynamically populated) ---
     NSMenu *luaScriptsMenu = [[NSMenu alloc] initWithTitle:@"Lua Scripts"];
