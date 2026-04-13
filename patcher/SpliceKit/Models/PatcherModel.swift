@@ -87,6 +87,9 @@ class PatcherModel: ObservableObject {
     @Published var isUpdateMode = false
     @Published var currentPanel: WizardPanel = .welcome
 
+    private var launchedFCPProcess: Process?
+    private var launchMonitorTask: Task<Void, Never>?
+
     static let standardApp = "/Applications/Final Cut Pro.app"
     static let creatorStudioApp = "/Applications/Final Cut Pro Creator Studio.app"
 
@@ -330,21 +333,65 @@ class PatcherModel: ObservableObject {
 
     func launch() {
         let binary = moddedApp + "/Contents/MacOS/Final Cut Pro"
+        let launchTime = Date()
+        let spliceKitLogURL = runtimeLogURL(named: "splicekit.log")
+        let spliceKitLogDateBeforeLaunch = fileModificationDate(at: spliceKitLogURL)
+        let cloudContentSnapshot = configureCloudContentDefaults(for: moddedApp)
+
+        launchMonitorTask?.cancel()
         appendLog("Launching modded FCP...")
-        Task.detached {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: binary)
-            try? p.run()
+        appendLog("Launch binary: \(binary)")
+        appendLog("CloudContent defaults: \(cloudContentSnapshot)")
+        if let previousLogDate = spliceKitLogDateBeforeLaunch {
+            appendLog("Existing SpliceKit log mtime before launch: \(iso8601(previousLogDate))")
+        } else {
+            appendLog("Existing SpliceKit log mtime before launch: none")
         }
 
-        Task {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.terminationHandler = { [weak self] proc in
+            Task { @MainActor in
+                self?.handleLaunchTermination(
+                    process: proc,
+                    launchTime: launchTime,
+                    spliceKitLogDateBeforeLaunch: spliceKitLogDateBeforeLaunch
+                )
+            }
+        }
+        do {
+            try process.run()
+            launchedFCPProcess = process
+            appendLog("Spawned Final Cut Pro pid \(process.processIdentifier)")
+        } catch {
+            launchedFCPProcess = nil
+            appendLog("Failed to launch Final Cut Pro: \(error.localizedDescription)")
+            return
+        }
+
+        launchMonitorTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(12))
-            await MainActor.run {
-                checkStatus()
-                if bridgeConnected {
-                    appendLog("SpliceKit connected on port 9876")
-                } else {
-                    appendLog("Waiting for SpliceKit... (check ~/Library/Logs/SpliceKit/splicekit.log)")
+            guard let self, !Task.isCancelled else { return }
+            self.checkStatus()
+            if self.bridgeConnected {
+                self.appendLog("SpliceKit connected on port 9876")
+                let diagnostics = self.launchDiagnostics(
+                    launchTime: launchTime,
+                    spliceKitLogDateBeforeLaunch: spliceKitLogDateBeforeLaunch
+                )
+                if let first = diagnostics.first {
+                    self.appendLog(first)
+                }
+            } else {
+                self.appendLog("Bridge not ready after 12s")
+                for line in self.launchDiagnostics(
+                    launchTime: launchTime,
+                    spliceKitLogDateBeforeLaunch: spliceKitLogDateBeforeLaunch
+                ) {
+                    self.appendLog(line)
+                }
+                if self.launchedFCPProcess?.isRunning == true {
+                    self.appendLog("Final Cut Pro is still running, but the SpliceKit bridge is not listening yet.")
                 }
             }
         }
@@ -675,9 +722,8 @@ class PatcherModel: ObservableObject {
 
         // Step 7: Skip FCP's first-launch cloud content download dialog
         await setStepAsync(.configureDefaults)
-        shell("defaults write com.apple.FinalCut CloudContentFirstLaunchCompleted -bool true 2>/dev/null")
-        shell("defaults write com.apple.FinalCut FFCloudContentDisabled -bool true 2>/dev/null")
-        await logAsync("CloudContent defaults configured")
+        let cloudContentSnapshot = configureCloudContentDefaults(for: moddedApp)
+        await logAsync("CloudContent defaults configured: \(cloudContentSnapshot)")
         await completeStepAsync(.configureDefaults)
 
         // Step 8: MCP
@@ -912,6 +958,9 @@ class PatcherModel: ObservableObject {
         }
         await completeStepAsync(.signApp)
 
+        await setStepAsync(.configureDefaults)
+        let cloudContentSnapshot = configureCloudContentDefaults(for: moddedApp)
+        await logAsync("CloudContent defaults configured: \(cloudContentSnapshot)")
         await completeStepAsync(.configureDefaults)
         await completeStepAsync(.setupMCP)
 
@@ -955,8 +1004,8 @@ class PatcherModel: ObservableObject {
 
     // MARK: - Helpers
 
-    /// Read a bundle version from either CFBundleShortVersionString or CFBundleVersion.
-    private nonisolated func readBundleVersion(_ bundlePath: String) -> String {
+    /// Read a bundle value from common Info.plist locations inside an app or framework bundle.
+    private nonisolated func readBundleValue(_ key: String, bundlePath: String) -> String {
         let fm = FileManager.default
         let plistCandidates = [
             bundlePath + "/Contents/Info.plist",
@@ -966,16 +1015,225 @@ class PatcherModel: ObservableObject {
 
         for plistPath in plistCandidates where fm.fileExists(atPath: plistPath) {
             let quotedPath = shellQuote(plistPath)
-            for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
-                let ver = shell("/usr/libexec/PlistBuddy -c 'Print :\(key)' \(quotedPath) 2>/dev/null")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if !ver.isEmpty && !ver.contains("Doesn't Exist") {
-                    return ver
-                }
+            let value = shell("/usr/libexec/PlistBuddy -c 'Print :\(key)' \(quotedPath) 2>/dev/null")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty && !value.contains("Doesn't Exist") {
+                return value
             }
         }
 
         return ""
+    }
+
+    /// Read a bundle version from either CFBundleShortVersionString or CFBundleVersion.
+    private nonisolated func readBundleVersion(_ bundlePath: String) -> String {
+        for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
+            let value = readBundleValue(key, bundlePath: bundlePath)
+            if !value.isEmpty {
+                return value
+            }
+        }
+        return ""
+    }
+
+    private nonisolated func readBundleIdentifier(_ bundlePath: String) -> String {
+        readBundleValue("CFBundleIdentifier", bundlePath: bundlePath)
+    }
+
+    private nonisolated func cloudContentDefaultsDomain(for bundlePath: String) -> String {
+        let bundleID = readBundleIdentifier(bundlePath)
+        return bundleID.isEmpty ? "com.apple.FinalCut" : bundleID
+    }
+
+    private nonisolated func configureCloudContentDefaults(for bundlePath: String) -> String {
+        let domain = cloudContentDefaultsDomain(for: bundlePath)
+        CFPreferencesSetAppValue("CloudContentFirstLaunchCompleted" as CFString,
+                                 kCFBooleanTrue,
+                                 domain as CFString)
+        CFPreferencesSetAppValue("FFCloudContentDisabled" as CFString,
+                                 kCFBooleanTrue,
+                                 domain as CFString)
+        CFPreferencesAppSynchronize(domain as CFString)
+        return cloudContentDefaultsSnapshot(for: domain)
+    }
+
+    private nonisolated func cloudContentDefaultsSnapshot(for domain: String) -> String {
+        let firstLaunch = preferenceValueString(forKey: "CloudContentFirstLaunchCompleted", domain: domain)
+        let disabled = preferenceValueString(forKey: "FFCloudContentDisabled", domain: domain)
+        return "\(domain): CloudContentFirstLaunchCompleted=\(firstLaunch) FFCloudContentDisabled=\(disabled)"
+    }
+
+    private nonisolated func preferenceValueString(forKey key: String, domain: String) -> String {
+        let value = CFPreferencesCopyAppValue(key as CFString, domain as CFString)
+        if let bool = value as? Bool {
+            return bool ? "true" : "false"
+        }
+        if let value {
+            return String(describing: value)
+        }
+        return "unset"
+    }
+
+    private nonisolated func runtimeLogURL(named name: String) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/SpliceKit")
+            .appendingPathComponent(name)
+    }
+
+    private nonisolated func fileModificationDate(at url: URL) -> Date? {
+        guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]) else {
+            return nil
+        }
+        return values.contentModificationDate
+    }
+
+    private nonisolated func iso8601(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    private nonisolated func tailOfTextFile(_ url: URL, maxCharacters: Int = 1200) -> String? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return nil
+        }
+        if text.count <= maxCharacters {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let start = text.index(text.endIndex, offsetBy: -maxCharacters)
+        return String(text[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private nonisolated func latestCrashReportURL(after launchTime: Date) -> URL? {
+        let fm = FileManager.default
+        let directories = [
+            fm.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs/DiagnosticReports"),
+            URL(fileURLWithPath: "/Library/Logs/DiagnosticReports")
+        ]
+
+        var newestReport: (url: URL, modified: Date)?
+        for directory in directories {
+            guard let urls = try? fm.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for url in urls {
+                let filename = url.lastPathComponent
+                guard filename.hasPrefix("Final Cut Pro"),
+                      ["ips", "crash", "txt"].contains(url.pathExtension.lowercased()),
+                      let modified = fileModificationDate(at: url),
+                      modified >= launchTime.addingTimeInterval(-5) else {
+                    continue
+                }
+                if newestReport == nil || modified > newestReport!.modified {
+                    newestReport = (url, modified)
+                }
+            }
+        }
+        return newestReport?.url
+    }
+
+    private nonisolated func summarizeCrashReport(at url: URL) -> String {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return "Unable to read crash report."
+        }
+
+        let interestingPrefixes = [
+            "Process:",
+            "Path:",
+            "Identifier:",
+            "Version:",
+            "Date/Time:",
+            "Launch Time:",
+            "Exception Type:",
+            "Termination Reason:",
+            "Triggered by Thread:",
+            "Thread ",
+            "Binary Images:"
+        ]
+        let keywords = ["CloudContent", "CloudKit", "ImagePlayground", "SIGTRAP", "SpliceKit"]
+        var matches: [String] = []
+
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            if interestingPrefixes.contains(where: { line.hasPrefix($0) }) ||
+                keywords.contains(where: { line.localizedCaseInsensitiveContains($0) }) {
+                matches.append(line)
+            }
+            if matches.count >= 20 {
+                break
+            }
+        }
+
+        if matches.isEmpty {
+            return String(text.prefix(1200)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return matches.joined(separator: "\n")
+    }
+
+    private func launchDiagnostics(launchTime: Date,
+                                   spliceKitLogDateBeforeLaunch: Date?) -> [String] {
+        var lines: [String] = []
+        let logURL = runtimeLogURL(named: "splicekit.log")
+        if let modified = fileModificationDate(at: logURL) {
+            lines.append("SpliceKit log mtime after launch check: \(iso8601(modified))")
+            let freshnessBaseline = spliceKitLogDateBeforeLaunch ?? launchTime
+            if modified <= freshnessBaseline {
+                lines.append("SpliceKit log did not change after launch. The injected dylib likely never initialized on this run.")
+            } else {
+                lines.append("SpliceKit log changed after launch. The injected dylib initialized on this run.")
+            }
+            if let tail = tailOfTextFile(logURL), !tail.isEmpty {
+                lines.append("SpliceKit log tail:\n\(tail)")
+            }
+        } else {
+            lines.append("SpliceKit log not found at \(logURL.path)")
+        }
+
+        if let crashURL = latestCrashReportURL(after: launchTime) {
+            lines.append("Latest Final Cut Pro crash report: \(crashURL.path)")
+            lines.append("Crash summary:\n\(summarizeCrashReport(at: crashURL))")
+        } else {
+            lines.append("No Final Cut Pro crash report newer than the launch time was found.")
+        }
+
+        return lines
+    }
+
+    private func handleLaunchTermination(process: Process,
+                                         launchTime: Date,
+                                         spliceKitLogDateBeforeLaunch: Date?) {
+        let runtime = Date().timeIntervalSince(launchTime)
+        let reason: String
+        switch process.terminationReason {
+        case .exit:
+            reason = "exit"
+        case .uncaughtSignal:
+            reason = "signal"
+        @unknown default:
+            reason = "unknown"
+        }
+
+        appendLog(String(format: "Final Cut Pro process %d terminated after %.1fs (%@ %d)",
+                         process.processIdentifier,
+                         runtime,
+                         reason,
+                         process.terminationStatus))
+        if runtime < 90 || process.terminationStatus != 0 || process.terminationReason == .uncaughtSignal {
+            for line in launchDiagnostics(
+                launchTime: launchTime,
+                spliceKitLogDateBeforeLaunch: spliceKitLogDateBeforeLaunch
+            ) {
+                appendLog(line)
+            }
+        }
+        if launchedFCPProcess?.processIdentifier == process.processIdentifier {
+            launchedFCPProcess = nil
+            launchMonitorTask?.cancel()
+            launchMonitorTask = nil
+        }
     }
 
     private nonisolated func currentSpliceKitVersion() -> String {

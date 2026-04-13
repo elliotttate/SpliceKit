@@ -125,6 +125,26 @@ NSDictionary *SpliceKit_getSwizzleResults(void) {
     return sSwizzleResults ? [sSwizzleResults copy] : @{};
 }
 
+static NSString *SpliceKit_swizzleStateDescription(NSString *name) {
+    NSNumber *value = sSwizzleResults[name];
+    if (!value) return @"unset";
+    return value.boolValue ? @"YES" : @"NO";
+}
+
+static void SpliceKit_logCloudContentGuardSummary(NSString *phase) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    BOOL firstLaunchDone = [defaults boolForKey:@"CloudContentFirstLaunchCompleted"];
+    BOOL cloudContentDisabled = [defaults boolForKey:@"FFCloudContentDisabled"];
+    SpliceKit_log(@"CloudContent guard (%@): firstLaunch=%@ disabled=%@ featureFlag=%@ catalog=%@ helper=%@ helperCompletion=%@",
+                  phase,
+                  firstLaunchDone ? @"YES" : @"NO",
+                  cloudContentDisabled ? @"YES" : @"NO",
+                  SpliceKit_swizzleStateDescription(@"CloudContentFeatureFlag.isEnabled"),
+                  SpliceKit_swizzleStateDescription(@"CloudContentCatalog.updateCatalogAndRegistry"),
+                  SpliceKit_swizzleStateDescription(@"CloudContentFirstLaunchHelper.setupAndPresent"),
+                  SpliceKit_swizzleStateDescription(@"CloudContentFirstLaunchHelper.setupAndPresent(completion:)"));
+}
+
 // Global uncaught exception handler — logs the exception and full stack trace
 // to the log file BEFORE the process terminates. Apple's crash reporter doesn't
 // capture our log, so this is the last chance to write diagnostic info.
@@ -2674,6 +2694,9 @@ static void SpliceKit_swizzleCloudContentClasses(const char *phase) {
                 method_setImplementation(m, (IMP)returnNO);
                 SpliceKit_log(@"  [%s] Swizzled %s +isEnabled -> NO", phase, name);
                 SpliceKit_trackSwizzle(@"CloudContentFeatureFlag.isEnabled", YES);
+            } else {
+                SpliceKit_log(@"  [%s] WARNING: %s exists but +isEnabled not found", phase, name);
+                SpliceKit_trackSwizzle(@"CloudContentFeatureFlag.isEnabled", NO);
             }
         }
     }
@@ -2702,11 +2725,14 @@ static void SpliceKit_disableCloudContent(void) {
         if (m) {
             method_setImplementation(m, (IMP)returnNO);
             SpliceKit_log(@"  Swizzled +[CloudContentFeatureFlag isEnabled] -> NO");
+            SpliceKit_trackSwizzle(@"CloudContentFeatureFlag.isEnabled", YES);
         } else {
             SpliceKit_log(@"  WARNING: +isEnabled not found on CloudContentFeatureFlag");
+            SpliceKit_trackSwizzle(@"CloudContentFeatureFlag.isEnabled", NO);
         }
     } else {
         SpliceKit_log(@"  WARNING: CloudContentFeatureFlag class not found");
+        SpliceKit_trackSwizzle(@"CloudContentFeatureFlag.isEnabled", NO);
     }
 
     Class ipClass = objc_getClass("_TtC5Flexo17FFImagePlayground");
@@ -2732,6 +2758,9 @@ static void SpliceKit_disableCloudContent(void) {
         if (m) {
             method_setImplementation(m, (IMP)noopMethodWithArg);
             SpliceKit_log(@"  Handled CCFirstLaunchHelper (CloudKit entitlements fix)");
+            SpliceKit_trackSwizzle(@"CloudContentFirstLaunchHelper.setupAndPresent(completion:)", YES);
+        } else {
+            SpliceKit_trackSwizzle(@"CloudContentFirstLaunchHelper.setupAndPresent(completion:)", NO);
         }
     }
 
@@ -3038,6 +3067,7 @@ static void SpliceKit_handleSubscriptionValidation(void) {
     [defaults setBool:YES forKey:@"FFCloudContentDisabled"];
 
     SpliceKit_log(@"  Subscription validation configured");
+    SpliceKit_logCloudContentGuardSummary(@"subscription-validation");
 }
 
 #pragma mark - Constructor
@@ -3115,6 +3145,7 @@ static void SpliceKit_init(void) {
             SpliceKit_log(@"WillFinishLaunching (%.2fs after constructor)",
                           sWillLaunchTime - sConstructorStart);
             SpliceKit_swizzleCloudContentClasses("willLaunch");
+            SpliceKit_logCloudContentGuardSummary(@"will-launch");
             SpliceKit_logLoadedFrameworks();
         }];
 
