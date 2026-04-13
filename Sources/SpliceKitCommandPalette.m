@@ -14,6 +14,7 @@
 
 #import "SpliceKitCommandPalette.h"
 #import "SpliceKit.h"
+#import "SpliceKitUprezzer.h"
 #import "SpliceKitURLImport.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
@@ -481,6 +482,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"Export FCPXML", @"exportXML", @"timeline", SpliceKitCommandCategoryExport, @"Export", nil, @"Export timeline as FCPXML", @[@"xml"]);
     add(@"Share Selection", @"shareSelection", @"timeline", SpliceKitCommandCategoryExport, @"Export", nil, @"Share/export selected range", @[@"render"]);
     add(@"Batch Export", @"batchExport", @"batch_export", SpliceKitCommandCategoryExport, @"Export", nil, @"Export each clip individually using default share destination", @[@"batch", @"export all", @"individual"]);
+    add(@"Uprezzer", @"open", @"uprezzer", SpliceKitCommandCategoryExport, @"Export", nil, @"Upscale selected clips from the timeline or browser using local processing", @[@"upscale", @"enhance", @"resolution boost", @"uprez", @"fx-upscale"]);
     add(@"Auto Reframe", @"autoReframe", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Auto-reframe for different aspect ratios", @[@"crop", @"aspect"]);
     add(@"Stabilize Subject", @"stabilize_subject", @"subject_stabilize", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Lock camera onto a subject — keeps it fixed while background moves", @[@"lock on", @"track", @"stabilize", @"pin", @"follow", @"steady"]);
 
@@ -652,6 +654,10 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     // --- Social Captions ---
     add(@"Social Captions", @"openCaptions", @"captions", SpliceKitCommandCategoryTitles, @"Captions", @"Ctrl+Opt+C", @"Open social captions panel with auto-transcription", @[@"subtitle", @"tiktok", @"reels", @"highlight"]);
     add(@"Close Social Captions", @"closeCaptions", @"captions", SpliceKitCommandCategoryTitles, @"Captions", nil, @"Close the social captions panel", @[]);
+
+    // --- LiveCam ---
+    add(@"Open LiveCam", @"openLiveCam", @"livecam", SpliceKitCommandCategoryExport, @"LiveCam", nil, @"Open the native webcam booth for direct-to-Library or direct-to-Timeline capture", @[@"camera", @"webcam", @"record to timeline", @"reaction cam", @"live booth"]);
+    add(@"Close LiveCam", @"closeLiveCam", @"livecam", SpliceKitCommandCategoryExport, @"LiveCam", nil, @"Close the LiveCam panel", @[@"hide camera", @"close webcam"]);
 
     // ===================================================================
     // NEW: Comprehensive MCP actions added to command palette
@@ -1507,6 +1513,18 @@ static NSString *FCPStripStopWords(NSString *query) {
             }
         });
         result = @{@"action": action, @"status": @"ok"};
+    } else if ([type isEqualToString:@"livecam"]) {
+        SpliceKit_executeOnMainThread(^{
+            Class panelClass = objc_getClass("SpliceKitLiveCamPanel");
+            if (!panelClass) return;
+            id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
+            if ([action isEqualToString:@"openLiveCam"]) {
+                ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
+            } else if ([action isEqualToString:@"closeLiveCam"]) {
+                ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
+            }
+        });
+        result = @{@"action": action, @"status": @"ok"};
     } else if ([type isEqualToString:@"transition_browse"]) {
         // Switch palette into transition browsing mode
         [self enterTransitionBrowseMode];
@@ -1619,6 +1637,11 @@ static NSString *FCPStripStopWords(NSString *query) {
         SpliceKit_setDefaultSpatialConformType(next);
         result = @{@"action": action, @"status": @"ok",
                    @"defaultSpatialConformType": next};
+    } else if ([type isEqualToString:@"uprezzer"]) {
+        SpliceKit_executeOnMainThread(^{
+            [[SpliceKitUprezzerPanel sharedPanel] showPanel];
+        });
+        result = @{@"action": action, @"status": @"started"};
     } else if ([type isEqualToString:@"url_import_prompt"]) {
         [self showURLImportPromptWithDefaultMode:action];
         result = @{@"action": action, @"status": @"started"};

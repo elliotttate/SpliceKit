@@ -201,9 +201,11 @@ READ_ONLY_TOOLS = {
     "search_methods",
     "get_transcript",
     "search_transcript",
+    "transcript_grep_analyze",
     "list_effects",
     "list_transitions",
     "search_commands",
+    "get_livecam_status",
     "list_menus",
     "get_inspector_properties",
     "get_title_text",
@@ -239,6 +241,7 @@ READ_ONLY_TOOLS = {
     "plugin_list",
     "plugin_list_methods",
     "reload_plugin_tools",
+    "import_url_status",
 }
 
 DESTRUCTIVE_TOOLS = {
@@ -300,6 +303,9 @@ DESTRUCTIVE_TOOLS = {
     "lua_reset",
     "lua_watch",
     "raw_call",
+    "transcript_grep_apply",
+    "import_url",
+    "cancel_import_url",
 }
 
 IDEMPOTENT_LOCAL_WRITE_TOOLS = {
@@ -315,6 +321,9 @@ IDEMPOTENT_LOCAL_WRITE_TOOLS = {
     "set_transcript_engine",
     "open_project",
     "select_clip_in_lane",
+    "transcript_grep_jump",
+    "open_livecam",
+    "close_livecam",
 }
 
 CUSTOM_TOOL_TITLES = {
@@ -352,6 +361,12 @@ CUSTOM_TOOL_TITLES = {
     "move_transcript_words": "Move Transcript Words",
     "close_transcript": "Close Transcript Panel",
     "search_transcript": "Search Transcript",
+    "transcript_grep_analyze": "Analyze Transcript Grep",
+    "transcript_grep_jump": "Jump To Transcript Grep Match",
+    "transcript_grep_apply": "Apply Transcript Grep Plan",
+    "open_livecam": "Open LiveCam",
+    "close_livecam": "Close LiveCam",
+    "get_livecam_status": "Get LiveCam Status",
     "delete_transcript_silences": "Delete Transcript Silences",
     "set_silence_threshold": "Set Silence Threshold",
     "show_command_palette": "Show Command Palette",
@@ -416,6 +431,9 @@ CUSTOM_TOOL_TITLES = {
     "stabilize_subject": "Stabilize Subject",
     "insert_title": "Insert Title",
     "set_transcript_engine": "Set Transcript Engine",
+    "import_url": "Import Media URL",
+    "import_url_status": "URL Import Status",
+    "cancel_import_url": "Cancel URL Import",
     "open_captions": "Open Captions Panel",
     "close_captions": "Close Captions Panel",
     "get_caption_state": "Get Caption State",
@@ -1255,7 +1273,7 @@ def import_fcpxml(xml: str, internal: bool = True) -> str:
         return f"Error: {r.get('error', r)}"
     return _fmt(r)
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("import_url"))
 def import_url(url: str, mode: str = "import_only", target_event: str = "",
                title: str = "", wait_until_complete: bool = True) -> str:
     """Download a remote media URL, import it into Final Cut Pro, and optionally
@@ -1286,7 +1304,7 @@ def import_url(url: str, mode: str = "import_only", target_event: str = "",
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("import_url_status"))
 def import_url_status(job_id: str) -> str:
     """Check the current status of a URL import job."""
     r = bridge.call("urlImport.status", job_id=job_id)
@@ -1295,7 +1313,7 @@ def import_url_status(job_id: str) -> str:
     return _fmt(r)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_tool_annotations("cancel_import_url"))
 def cancel_import_url(job_id: str) -> str:
     """Cancel an in-flight URL import job."""
     r = bridge.call("urlImport.cancel", job_id=job_id)
@@ -2068,6 +2086,112 @@ def search_transcript(query: str) -> str:
     return "\n".join(lines)
 
 
+@mcp.tool(annotations=_tool_annotations("transcript_grep_analyze"))
+def transcript_grep_analyze(query: str,
+                            scope: str = "timeline",
+                            search_mode: str = "text",
+                            match_mode: str = "fragment",
+                            case_sensitive: bool = False,
+                            whole_word: bool = False,
+                            padding_before: float = 0.0,
+                            padding_after: float = 0.0,
+                            merge_nearby: bool = False,
+                            merge_gap: float = 0.25,
+                            dedupe_identical: bool = False) -> str:
+    """Analyze transcript matches without mutating the timeline.
+
+    Trusted v1 scopes:
+    - "timeline"
+    - "selected"
+
+    Trusted v1 actions:
+    - Analyze only. No timeline mutation occurs here.
+
+    Args:
+        query: Plain text or regex pattern to search for.
+        scope: "timeline" or "selected". Library-wide search is intentionally not supported in trusted v1.
+        search_mode: "text" or "regex".
+        match_mode: "fragment" or "sentence".
+        case_sensitive: When true, preserve case in matching.
+        whole_word: When true, require whole-word matches.
+        padding_before: Seconds to expand before each match, bounded at clip edges.
+        padding_after: Seconds to expand after each match, bounded at clip edges.
+        merge_nearby: When true, merge overlapping/adjacent matches from the same clip.
+        merge_gap: Maximum gap in seconds for merge_nearby.
+        dedupe_identical: When true, collapse repeated identical matched lines per clip.
+    """
+    return _call_or_error(
+        "transcriptGrep.analyze",
+        query=query,
+        scope=scope,
+        searchMode=search_mode,
+        matchMode=match_mode,
+        caseSensitive=case_sensitive,
+        wholeWord=whole_word,
+        paddingBefore=padding_before,
+        paddingAfter=padding_after,
+        mergeNearby=merge_nearby,
+        mergeGap=merge_gap,
+        dedupeIdentical=dedupe_identical,
+    )
+
+
+@mcp.tool(annotations=_tool_annotations("transcript_grep_jump"))
+def transcript_grep_jump(analysis_id: str,
+                         match_id: str = "",
+                         index: int = -1,
+                         to_edit_start: bool = False,
+                         set_range: bool = False,
+                         play_around: bool = False) -> str:
+    """Jump to a previously analyzed Transcript Grep match.
+
+    This is a navigation helper, not an apply step. It seeks the playhead
+    and can optionally set the timeline range around the planned edit span.
+    """
+    params = {
+        "analysisId": analysis_id,
+        "toEditStart": to_edit_start,
+        "setRange": set_range,
+        "playAround": play_around,
+    }
+    if match_id:
+        params["matchId"] = match_id
+    elif index >= 0:
+        params["index"] = index
+    return _call_or_error("transcriptGrep.jump", **params)
+
+
+@mcp.tool(annotations=_tool_annotations("transcript_grep_apply"))
+def transcript_grep_apply(analysis_id: str,
+                          action: str,
+                          project_name: str = "",
+                          marker_kind: str = "standard",
+                          open_project_after: bool = True,
+                          allow_repeated_apply: bool = False,
+                          allow_experimental_connected_insert: bool = False) -> str:
+    """Apply a previously analyzed Transcript Grep plan.
+
+    Trusted v1 apply actions:
+    - "markers"
+    - "build_selects_project"
+
+    Quarantined path:
+    - "insert_connected" stays behind allow_experimental_connected_insert=True
+      because anchor/lane behavior is not yet proven trustworthy enough.
+    """
+    params = {
+        "analysisId": analysis_id,
+        "action": action,
+        "markerKind": marker_kind,
+        "openProject": open_project_after,
+        "allowRepeatedApply": allow_repeated_apply,
+        "allowExperimentalConnectedInsert": allow_experimental_connected_insert,
+    }
+    if project_name:
+        params["projectName"] = project_name
+    return _call_or_error("transcriptGrep.apply", **params)
+
+
 @mcp.tool(annotations=_tool_annotations("delete_transcript_silences"))
 def delete_transcript_silences(min_duration: float = 0.0) -> str:
     """Delete all detected silences/pauses from the timeline.
@@ -2306,6 +2430,33 @@ def hide_command_palette() -> str:
     if _err(r):
         return f"Error: {r.get('error', r)}"
     return "Command palette closed."
+
+
+@mcp.tool(annotations=_tool_annotations("open_livecam"))
+def open_livecam() -> str:
+    """Open the LiveCam panel inside Final Cut Pro."""
+    r = bridge.call("liveCam.show")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("close_livecam"))
+def close_livecam() -> str:
+    """Close the LiveCam panel."""
+    r = bridge.call("liveCam.hide")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("get_livecam_status"))
+def get_livecam_status() -> str:
+    """Get the current LiveCam panel state, selected devices, recording flags, and destination."""
+    r = bridge.call("liveCam.status")
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+    return _fmt(r)
 
 
 @mcp.tool(annotations=_tool_annotations("search_commands"))

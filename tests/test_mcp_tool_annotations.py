@@ -85,6 +85,12 @@ class MCPToolAnnotationTests(unittest.TestCase):
             "timeline_navigation_action",
             "timeline_edit_action",
             "timeline_destructive_action",
+            "transcript_grep_analyze",
+            "transcript_grep_jump",
+            "transcript_grep_apply",
+            "open_livecam",
+            "close_livecam",
+            "get_livecam_status",
         }
         self.assertTrue(expected.issubset(self.tools.keys()))
 
@@ -102,6 +108,12 @@ class MCPToolAnnotationTests(unittest.TestCase):
             "call_method": {"readOnlyHint": False, "destructiveHint": True},
             "manage_handles": {"readOnlyHint": False, "destructiveHint": False},
             "list_handles": {"readOnlyHint": True, "destructiveHint": False},
+            "transcript_grep_analyze": {"readOnlyHint": True, "destructiveHint": False},
+            "transcript_grep_jump": {"readOnlyHint": False, "destructiveHint": False},
+            "transcript_grep_apply": {"readOnlyHint": False, "destructiveHint": True},
+            "open_livecam": {"readOnlyHint": False, "destructiveHint": False},
+            "close_livecam": {"readOnlyHint": False, "destructiveHint": False},
+            "get_livecam_status": {"readOnlyHint": True, "destructiveHint": False},
         }
         for name, expected in checks.items():
             annotations = self.tools[name]["annotations"]
@@ -216,6 +228,110 @@ class MCPToolAnnotationTests(unittest.TestCase):
     def test_background_render_control_rejects_invalid_inputs(self):
         self.assertIn("action must be", self.module.background_render_control("pause", 1.0))
         self.assertIn("seconds must be > 0", self.module.background_render_control("hold_off", 0))
+
+    def test_transcript_grep_wrappers_forward_expected_bridge_calls(self):
+        calls = []
+
+        def fake_call(method, **params):
+            calls.append((method, params))
+            return {"method": method, "params": params}
+
+        self.module.bridge.call = fake_call
+
+        self.module.transcript_grep_analyze(
+            query="banana",
+            scope="selected",
+            search_mode="regex",
+            match_mode="sentence",
+            case_sensitive=True,
+            whole_word=True,
+            padding_before=0.25,
+            padding_after=0.5,
+            merge_nearby=True,
+            merge_gap=0.4,
+            dedupe_identical=True,
+        )
+        self.module.transcript_grep_jump(
+            analysis_id="analysis-1",
+            match_id="match-9",
+            to_edit_start=True,
+            set_range=True,
+            play_around=True,
+        )
+        self.module.transcript_grep_apply(
+            analysis_id="analysis-1",
+            action="build_selects_project",
+            project_name="Transcript Grep - banana",
+            open_project_after=False,
+            allow_repeated_apply=False,
+            allow_experimental_connected_insert=False,
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "transcriptGrep.analyze",
+                    {
+                        "query": "banana",
+                        "scope": "selected",
+                        "searchMode": "regex",
+                        "matchMode": "sentence",
+                        "caseSensitive": True,
+                        "wholeWord": True,
+                        "paddingBefore": 0.25,
+                        "paddingAfter": 0.5,
+                        "mergeNearby": True,
+                        "mergeGap": 0.4,
+                        "dedupeIdentical": True,
+                    },
+                ),
+                (
+                    "transcriptGrep.jump",
+                    {
+                        "analysisId": "analysis-1",
+                        "toEditStart": True,
+                        "setRange": True,
+                        "playAround": True,
+                        "matchId": "match-9",
+                    },
+                ),
+                (
+                    "transcriptGrep.apply",
+                    {
+                        "analysisId": "analysis-1",
+                        "action": "build_selects_project",
+                        "markerKind": "standard",
+                        "openProject": False,
+                        "allowRepeatedApply": False,
+                        "allowExperimentalConnectedInsert": False,
+                        "projectName": "Transcript Grep - banana",
+                    },
+                ),
+            ],
+        )
+
+    def test_livecam_wrappers_forward_expected_bridge_calls(self):
+        calls = []
+
+        def fake_call(method, **params):
+            calls.append((method, params))
+            return {"method": method, "params": params}
+
+        self.module.bridge.call = fake_call
+
+        self.module.open_livecam()
+        self.module.close_livecam()
+        self.module.get_livecam_status()
+
+        self.assertEqual(
+            calls,
+            [
+                ("liveCam.show", {}),
+                ("liveCam.hide", {}),
+                ("liveCam.status", {}),
+            ],
+        )
 
 
 if __name__ == "__main__":

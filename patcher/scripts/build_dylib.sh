@@ -14,6 +14,7 @@ if [ -n "${BUILT_PRODUCTS_DIR:-}" ]; then
 else
     BUILD_OUT="$REPO_DIR/build/SpliceKit_prebuilt"
 fi
+CANONICAL_DYLIB_OUT="$REPO_DIR/build/SpliceKit"
 
 mkdir -p "$BUILD_OUT"
 
@@ -42,13 +43,20 @@ SOURCES=(
     "$REPO_DIR/Sources/SpliceKitRuntime.m"
     "$REPO_DIR/Sources/SpliceKitSwizzle.m"
     "$REPO_DIR/Sources/SpliceKitServer.m"
+    "$REPO_DIR/Sources/SpliceKitURLImport.m"
     "$REPO_DIR/Sources/SpliceKitLogPanel.m"
     "$REPO_DIR/Sources/SpliceKitTranscriptPanel.m"
+    "$REPO_DIR/Sources/SpliceKitTranscriptGrep.m"
     "$REPO_DIR/Sources/SpliceKitCaptionPanel.m"
     "$REPO_DIR/Sources/SpliceKitCommandPalette.m"
     "$REPO_DIR/Sources/SpliceKitDebugUI.m"
+    "$REPO_DIR/Sources/SpliceKitStructureBlocks.m"
+    "$REPO_DIR/Sources/SpliceKitSectionsBar.m"
+    "$REPO_DIR/Sources/SpliceKitLiveCam.m"
+    "$REPO_DIR/Sources/SpliceKitUprezzer.m"
     "$REPO_DIR/Sources/SpliceKitLua.m"
     "$REPO_DIR/Sources/SpliceKitLuaPanel.m"
+    "$REPO_DIR/Sources/SpliceKitPlugins.m"
 )
 
 LUA_FLAGS=""
@@ -58,12 +66,22 @@ fi
 
 echo "Building SpliceKit dylib..."
 clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
-    -framework Foundation -framework AppKit -framework AVFoundation \
+    -framework Foundation -framework AppKit -framework AVFoundation -framework CoreServices \
+    -framework CoreImage -framework Metal -framework MetalKit -framework QuartzCore -framework Vision \
     -fobjc-arc -fmodules -Wno-deprecated-declarations \
     -undefined dynamic_lookup -dynamiclib \
     -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
     -I "$REPO_DIR/Sources" \
     "${SOURCES[@]}" $LUA_FLAGS -o "$BUILD_OUT/SpliceKit"
+
+# Keep the repo's canonical deploy target in sync when the script is run directly.
+# This prevents `make deploy` from accidentally shipping a stale dylib after a
+# successful standalone build.
+if [ -z "${BUILT_PRODUCTS_DIR:-}" ]; then
+    mkdir -p "$(dirname "$CANONICAL_DYLIB_OUT")"
+    cp "$BUILD_OUT/SpliceKit" "$CANONICAL_DYLIB_OUT"
+    echo "Synced canonical dylib: $CANONICAL_DYLIB_OUT"
+fi
 
 echo "Building silence-detector..."
 SILENCE_SRC="$REPO_DIR/tools/silence-detector.swift"

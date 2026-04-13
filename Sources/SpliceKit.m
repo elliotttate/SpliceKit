@@ -13,6 +13,8 @@
 #import "SpliceKitPlugins.h"
 #import "SpliceKitCommandPalette.h"
 #import "SpliceKitDebugUI.h"
+#import "SpliceKitLiveCam.h"
+#import "SpliceKitUprezzer.h"
 #import <AppKit/AppKit.h>
 #import <time.h>
 
@@ -192,6 +194,8 @@ static void SpliceKit_checkCompatibility(void) {
 + (instancetype)shared;
 - (void)toggleTranscriptPanel:(id)sender;
 - (void)toggleCaptionPanel:(id)sender;
+- (void)toggleLiveCamPanel:(id)sender;
+- (void)toggleUprezzerPanel:(id)sender;
 - (void)toggleSections:(id)sender;
 - (void)toggleCommandPalette:(id)sender;
 - (void)toggleLuaPanel:(id)sender;
@@ -217,8 +221,10 @@ static void SpliceKit_checkCompatibility(void) {
 - (void)toggleSecondaryAudioMeters:(id)sender;
 - (void)toggleSecondaryEffectsBrowser:(id)sender;
 - (void)toggleSecondaryTransitionsBrowser:(id)sender;
+- (void)updateLiveCamToolbarButtonState:(BOOL)active;
 @property (nonatomic, weak) NSButton *toolbarButton;
 @property (nonatomic, weak) NSButton *paletteToolbarButton;
+@property (nonatomic, weak) NSButton *liveCamToolbarButton;
 @property (nonatomic, strong) NSMenu *luaScriptsMenu;
 @end
 
@@ -262,6 +268,27 @@ static void SpliceKit_checkCompatibility(void) {
     } else {
         ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
     }
+}
+
+- (void)toggleLiveCamPanel:(id)sender {
+    Class panelClass = objc_getClass("SpliceKitLiveCamPanel");
+    if (!panelClass) {
+        SpliceKit_log(@"SpliceKitLiveCamPanel class not found");
+        return;
+    }
+    id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
+    BOOL visible = ((BOOL (*)(id, SEL))objc_msgSend)(panel, @selector(isVisible));
+    if (visible) {
+        ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
+    } else {
+        ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
+    }
+    [self updateLiveCamToolbarButtonState:!visible];
+}
+
+- (void)toggleUprezzerPanel:(id)sender {
+    (void)sender;
+    [[SpliceKitUprezzerPanel sharedPanel] togglePanel];
 }
 
 - (void)toggleCommandPalette:(id)sender {
@@ -675,6 +702,19 @@ static NSArray<NSNumber *> *SpliceKit_parseLadderString(NSString *str) {
     }
 }
 
+- (void)updateLiveCamToolbarButtonState:(BOOL)active {
+    NSButton *btn = self.liveCamToolbarButton;
+    if (!btn) return;
+    btn.state = active ? NSControlStateValueOn : NSControlStateValueOff;
+    if (active) {
+        btn.contentTintColor = [NSColor controlAccentColor];
+        btn.bezelColor = [NSColor colorWithWhite:0.0 alpha:0.5];
+    } else {
+        btn.contentTintColor = nil;
+        btn.bezelColor = nil;
+    }
+}
+
 @end
 
 static void SpliceKit_installMenu(void) {
@@ -702,6 +742,21 @@ static void SpliceKit_installMenu(void) {
     captionItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
     captionItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:captionItem];
+
+    NSMenuItem *liveCamItem = [[NSMenuItem alloc]
+        initWithTitle:@"LiveCam"
+               action:@selector(toggleLiveCamPanel:)
+        keyEquivalent:@""];
+    liveCamItem.target = [SpliceKitMenuController shared];
+    [bridgeMenu addItem:liveCamItem];
+
+    NSMenuItem *uprezzerItem = [[NSMenuItem alloc]
+        initWithTitle:@"Uprezzer"
+               action:@selector(toggleUprezzerPanel:)
+        keyEquivalent:@"u"];
+    uprezzerItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
+    uprezzerItem.target = [SpliceKitMenuController shared];
+    [bridgeMenu addItem:uprezzerItem];
 
     NSMenuItem *paletteItem = [[NSMenuItem alloc]
         initWithTitle:@"Command Palette"
@@ -952,6 +1007,7 @@ static void SpliceKit_installMenu(void) {
     SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T Transcript, Ctrl+Option+C Captions, Cmd+Shift+P Palette, Ctrl+Option+L Lua REPL)");
 }
 
+static NSString * const kSpliceKitLiveCamToolbarID = @"SpliceKitLiveCamItemID";
 static NSString * const kSpliceKitTranscriptToolbarID = @"SpliceKitTranscriptItemID";
 static NSString * const kSpliceKitPaletteToolbarID = @"SpliceKitPaletteItemID";
 static IMP sOriginalToolbarItemForIdentifier = NULL;
@@ -961,6 +1017,33 @@ static IMP sOriginalToolbarItemForIdentifier = NULL;
 // return our buttons. Everything else passes through to the original handler.
 static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *toolbar,
                                                    NSString *identifier, BOOL willInsert) {
+    if ([identifier isEqualToString:kSpliceKitLiveCamToolbarID]) {
+        NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:kSpliceKitLiveCamToolbarID];
+        item.label = @"LiveCam";
+        item.paletteLabel = @"Open LiveCam";
+        item.toolTip = @"LiveCam";
+
+        NSImage *icon = [NSImage imageWithSystemSymbolName:@"camera.viewfinder"
+                                  accessibilityDescription:@"LiveCam"];
+        if (!icon) icon = [NSImage imageNamed:NSImageNameQuickLookTemplate];
+        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration
+            configurationWithPointSize:13 weight:NSFontWeightMedium];
+        icon = [icon imageWithSymbolConfiguration:config];
+
+        NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 32, 25)];
+        [button setButtonType:NSButtonTypePushOnPushOff];
+        button.bezelStyle = NSBezelStyleTexturedRounded;
+        button.bordered = YES;
+        button.image = icon;
+        button.alternateImage = icon;
+        button.imagePosition = NSImageOnly;
+        button.target = [SpliceKitMenuController shared];
+        button.action = @selector(toggleLiveCamPanel:);
+
+        [SpliceKitMenuController shared].liveCamToolbarButton = button;
+        item.view = button;
+        return item;
+    }
     if ([identifier isEqualToString:kSpliceKitTranscriptToolbarID]) {
         NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:kSpliceKitTranscriptToolbarID];
         item.label = @"Transcript";
@@ -1090,10 +1173,18 @@ static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
 
         // Guard against double-insertion — can happen if both the notification
         // and the polling fallback fire. Also clean up stale items (no view).
-        BOOL hasTranscript = NO, hasPalette = NO;
+        BOOL hasLiveCam = NO, hasTranscript = NO, hasPalette = NO;
         for (NSInteger i = (NSInteger)toolbar.items.count - 1; i >= 0; i--) {
             NSToolbarItem *ti = toolbar.items[(NSUInteger)i];
-            if ([ti.itemIdentifier isEqualToString:kSpliceKitTranscriptToolbarID]) {
+            if ([ti.itemIdentifier isEqualToString:kSpliceKitLiveCamToolbarID]) {
+                if (ti.view) {
+                    if ([ti.view isKindOfClass:[NSButton class]])
+                        [SpliceKitMenuController shared].liveCamToolbarButton = (NSButton *)ti.view;
+                    hasLiveCam = YES;
+                } else {
+                    [toolbar removeItemAtIndex:(NSUInteger)i];
+                }
+            } else if ([ti.itemIdentifier isEqualToString:kSpliceKitTranscriptToolbarID]) {
                 if (ti.view) {
                     if ([ti.view isKindOfClass:[NSButton class]])
                         [SpliceKitMenuController shared].toolbarButton = (NSButton *)ti.view;
@@ -1111,8 +1202,8 @@ static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
                 }
             }
         }
-        if (hasTranscript && hasPalette) {
-            SpliceKit_log(@"Both toolbar buttons already present — skipping");
+        if (hasLiveCam && hasTranscript && hasPalette) {
+            SpliceKit_log(@"All toolbar buttons already present — skipping");
             return;
         }
 
@@ -1125,6 +1216,11 @@ static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
                 insertIdx = i;
                 break;
             }
+        }
+        if (!hasLiveCam) {
+            [toolbar insertItemWithItemIdentifier:kSpliceKitLiveCamToolbarID atIndex:insertIdx];
+            SpliceKit_log(@"LiveCam toolbar button inserted at index %lu", (unsigned long)insertIdx);
+            insertIdx++;
         }
         if (!hasPalette) {
             [toolbar insertItemWithItemIdentifier:kSpliceKitPaletteToolbarID atIndex:insertIdx];
@@ -1175,6 +1271,14 @@ static void SpliceKit_appDidLaunch(void) {
 
     // Install toolbar button in FCP's main window
     [SpliceKitMenuController installToolbarButton];
+
+    [[NSNotificationCenter defaultCenter] addObserverForName:SpliceKitLiveCamVisibilityDidChangeNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification *note) {
+        BOOL visible = [note.userInfo[@"visible"] boolValue];
+        [[SpliceKitMenuController shared] updateLiveCamToolbarButtonState:visible];
+    }];
 
     // Install transition freeze-extend swizzle (adds "Use Freeze Frames" button
     // to the "not enough extra media" dialog)

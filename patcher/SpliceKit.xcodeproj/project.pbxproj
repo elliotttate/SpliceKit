@@ -216,10 +216,14 @@
 				"$(PROJECT_DIR)/../Sources/SpliceKitServer.m",
 				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptPanel.m",
 				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptPanel.h",
+				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptGrep.m",
+				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptGrep.h",
 				"$(PROJECT_DIR)/../Sources/SpliceKitCommandPalette.m",
 				"$(PROJECT_DIR)/../Sources/SpliceKitCommandPalette.h",
 				"$(PROJECT_DIR)/../Sources/SpliceKitDebugUI.m",
 				"$(PROJECT_DIR)/../Sources/SpliceKitDebugUI.h",
+				"$(PROJECT_DIR)/../Sources/SpliceKitLiveCam.m",
+				"$(PROJECT_DIR)/../Sources/SpliceKitLiveCam.h",
 				"$(PROJECT_DIR)/../tools/silence-detector.swift",
 			);
 			name = "Build Dylib & Tools";

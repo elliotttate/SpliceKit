@@ -363,6 +363,64 @@ def test_transcript():
          "would modify transcript state")
 
 
+def test_transcript_grep():
+    print("\n[transcriptGrep.*]")
+    expect_error("analyze missing query", rpc("transcriptGrep.analyze", {}), "query")
+    expect_error("analyze bad scope", rpc("transcriptGrep.analyze", {
+        "query": "banana",
+        "scope": "library",
+    }), "scope")
+    expect_error("analyze bad searchMode", rpc("transcriptGrep.analyze", {
+        "query": "banana",
+        "searchMode": "semantic",
+    }), "searchMode")
+    expect_error("analyze bad matchMode", rpc("transcriptGrep.analyze", {
+        "query": "banana",
+        "matchMode": "word_cloud",
+    }), "matchMode")
+    expect_error("jump unknown analysis", rpc("transcriptGrep.jump", {
+        "analysisId": "missing-analysis",
+        "index": 0,
+    }), "analysisId")
+    expect_error("apply unknown analysis", rpc("transcriptGrep.apply", {
+        "analysisId": "missing-analysis",
+        "action": "markers",
+    }), "analysisId")
+
+    state = rpc("transcript.getState")
+    status = _res(state).get("status")
+    if status != "ready":
+        skip("analyze zero-hit regex", f"transcript not ready (status={status})")
+        return
+
+    r = rpc("transcriptGrep.analyze", {
+        "query": r"\\bsplicekit_transcript_grep_zero_hit_sentinel\\b",
+        "scope": "timeline",
+        "searchMode": "regex",
+    })
+    ok("analyze zero-hit regex", r, lambda resp: _res(resp).get("matchCount") == 0 and "analysisId" in _res(resp))
+
+
+def test_livecam():
+    print("\n[liveCam.*]")
+    status = rpc("liveCam.status")
+    ok("status", status, lambda resp: isinstance(_res(resp), dict))
+
+    show = rpc("liveCam.show")
+    ok("show", show, lambda resp: isinstance(_res(resp), dict) and "visible" in _res(resp))
+
+    status_after_show = rpc("liveCam.status")
+    ok("status after show", status_after_show,
+       lambda resp: isinstance(_res(resp), dict) and _res(resp).get("visible") is True)
+
+    hide = rpc("liveCam.hide")
+    ok("hide", hide, lambda resp: isinstance(_res(resp), dict) and "visible" in _res(resp))
+
+    status_after_hide = rpc("liveCam.status")
+    ok("status after hide", status_after_hide,
+       lambda resp: isinstance(_res(resp), dict) and _res(resp).get("visible") is False)
+
+
 def test_options():
     print("\n[options.*]")
     ok("get", rpc("options.get"))
@@ -615,6 +673,8 @@ TEST_GROUPS = {
     "titles": test_titles,
     "stabilize": test_stabilize,
     "transcript": test_transcript,
+    "transcript_grep": test_transcript_grep,
+    "livecam": test_livecam,
     "options": test_options,
     "flexmusic": test_flexmusic,
     "montage": test_montage,
