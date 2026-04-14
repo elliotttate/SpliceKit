@@ -475,11 +475,14 @@ static double sliderPosToDB(double pos) {
 - (void)startPolling {
     [self stopPolling];
     self.isPolling = NO; // Reset re-entrancy guard
-    self.pollTimer = [NSTimer scheduledTimerWithTimeInterval:0.05
-                                                     target:self
-                                                   selector:@selector(pollTimerFired:)
-                                                   userInfo:nil
-                                                    repeats:YES];
+    self.pollTimer = [NSTimer timerWithTimeInterval:0.05
+                                            target:self
+                                          selector:@selector(pollTimerFired:)
+                                          userInfo:nil
+                                           repeats:YES];
+    // Add to NSRunLoopCommonModes so the timer keeps firing during slider/fader
+    // drags (NSEventTrackingRunLoopMode), not just in NSDefaultRunLoopMode.
+    [[NSRunLoop mainRunLoop] addTimer:self.pollTimer forMode:NSRunLoopCommonModes];
 }
 
 - (void)stopPolling {
@@ -527,12 +530,23 @@ static double sliderPosToDB(double pos) {
 
     for (NSInteger i = 0; i < 10; i++) {
         SpliceKitFaderView *fv = self.faderViews[i];
-        if (fv.state.isDragging) continue;
 
         if (i < (NSInteger)faderData.count) {
             NSDictionary *info = faderData[i];
-            fv.state.isActive = YES; // All role faders are always active
-            fv.state.isPlaying = [info[@"playing"] boolValue]; // Playing = clip at playhead
+
+            // Always update meter data (even during drag)
+            fv.state.meterDB = [info[@"meterDB"] doubleValue];
+            fv.state.meterLinear = [info[@"meterLinear"] doubleValue];
+            fv.state.meterPeak = [info[@"meterPeak"] doubleValue];
+            fv.state.isPlaying = [info[@"playing"] boolValue];
+
+            if (fv.state.isDragging) {
+                // During drag: only update meters, skip volume/slider state
+                [fv updateFromState];
+                continue;
+            }
+
+            fv.state.isActive = YES;
             fv.state.clipName = info[@"name"] ?: @"";
             fv.state.lane = [info[@"lane"] integerValue];
             fv.state.volumeDB = [info[@"volumeDB"] doubleValue];
@@ -542,10 +556,11 @@ static double sliderPosToDB(double pos) {
             fv.state.audioEffectStackHandle = info[@"audioEffectStackHandle"];
             fv.state.role = info[@"role"];
             fv.state.roleColorHex = info[@"roleColor"];
-            fv.state.meterDB = [info[@"meterDB"] doubleValue];
-            fv.state.meterLinear = [info[@"meterLinear"] doubleValue];
-            fv.state.meterPeak = [info[@"meterPeak"] doubleValue];
         } else {
+            if (fv.state.isDragging) {
+                [fv updateFromState];
+                continue;
+            }
             fv.state.isActive = NO;
             fv.state.isPlaying = NO;
             fv.state.clipName = nil;
