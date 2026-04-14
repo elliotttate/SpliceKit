@@ -2756,7 +2756,12 @@ static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
 // handful of swizzles and class lookups crash at `appDidLaunch` time.
 // Track which host we are running on so we can skip the offending
 // install functions until a proper fix lands upstream.
-// See GitHub issue #50 for the bisection details.
+//
+// Root crash: SpliceKit_getActiveTimelineModule +16 — TLKTimelineView
+// accessor changed shape in macOS 26.3 + FCP 12.2 build 447037.
+// Bisection in issue #50.
+//
+// See GitHub issue #50 for the full bisection details.
 static BOOL SpliceKit_isMacOS26OrLater(void) {
     static BOOL result = NO;
     static dispatch_once_t once;
