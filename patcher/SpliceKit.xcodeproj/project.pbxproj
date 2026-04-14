@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		226FB5362F823A28004BCB44 /* Configuration.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = 22D74E232F8235FE00A9252B /* Configuration.xcconfig */; };
 		22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 22D74E1E2F81FBD900A9252B /* Credits.rtf */; };
 		BB0000000000000000000001 /* SpliceKitApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* SpliceKitApp.swift */; };
 		BB0000000000000000000002 /* PatcherModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000002 /* PatcherModel.swift */; };
@@ -196,7 +195,6 @@
 			files = (
 				BB0000000000000000000008 /* Assets.xcassets in Resources */,
 				22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */,
-				226FB5362F823A28004BCB44 /* Configuration.xcconfig in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -205,27 +203,14 @@
 /* Begin PBXShellScriptBuildPhase section */
 		DD0000000000000000000005 /* Build Dylib & Tools */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
-				"$(PROJECT_DIR)/../Sources/SpliceKit.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKit.h",
-				"$(PROJECT_DIR)/../Sources/SpliceKitRuntime.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitSwizzle.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitServer.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptPanel.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptPanel.h",
-				"$(PROJECT_DIR)/../Sources/SpliceKitCommandPalette.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitCommandPalette.h",
-				"$(PROJECT_DIR)/../Sources/SpliceKitDebugUI.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitDebugUI.h",
-				"$(PROJECT_DIR)/../tools/silence-detector.swift",
 			);
 			name = "Build Dylib & Tools";
 			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/SpliceKit_prebuilt/SpliceKit",
-				"$(BUILT_PRODUCTS_DIR)/SpliceKit_prebuilt/silence-detector",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;

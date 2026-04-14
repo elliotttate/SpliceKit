@@ -13,16 +13,16 @@ if [ -f "$PREBUILT/SpliceKit" ]; then
 fi
 
 # Copy Sources for from-source builds
-mkdir -p "$APP_RESOURCES/Sources"
-rsync -a --delete "$REPO_DIR/Sources/" "$APP_RESOURCES/Sources/"
-echo "Bundled Sources/"
+#mkdir -p "$APP_RESOURCES/Sources"
+#rsync -a --delete "$REPO_DIR/Sources/" "$APP_RESOURCES/Sources/"
+#echo "Bundled Sources/"
 
 # Copy Lua vendor sources (for from-source builds)
-if [ -d "$REPO_DIR/vendor/lua-5.4.7" ]; then
-    mkdir -p "$APP_RESOURCES/vendor/lua-5.4.7/src"
-    rsync -a "$REPO_DIR/vendor/lua-5.4.7/src/" "$APP_RESOURCES/vendor/lua-5.4.7/src/"
-    echo "Bundled vendor/lua-5.4.7/"
-fi
+#if [ -d "$REPO_DIR/vendor/lua-5.4.7" ]; then
+#    mkdir -p "$APP_RESOURCES/vendor/lua-5.4.7/src"
+#    rsync -a "$REPO_DIR/vendor/lua-5.4.7/src/" "$APP_RESOURCES/vendor/lua-5.4.7/src/"
+#    echo "Bundled vendor/lua-5.4.7/"
+#fi
 
 # Copy MCP server
 mkdir -p "$APP_RESOURCES/mcp"
@@ -38,10 +38,12 @@ fi
 
 # Copy tools
 mkdir -p "$APP_RESOURCES/tools"
-if [ -f "$PREBUILT/silence-detector" ]; then
-    cp "$PREBUILT/silence-detector" "$APP_RESOURCES/tools/silence-detector"
-    echo "Bundled silence-detector"
-fi
+for tool in silence-detector structure-analyzer SpliceKitMixer; do
+    if [ -f "$PREBUILT/$tool" ]; then
+        cp "$PREBUILT/$tool" "$APP_RESOURCES/tools/$tool"
+        echo "Bundled $tool"
+    fi
+done
 if [ -f "$REPO_DIR/tools/silence-detector.swift" ]; then
     cp "$REPO_DIR/tools/silence-detector.swift" "$APP_RESOURCES/tools/silence-detector.swift"
 fi
