@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.1.14</title>
+      <sparkle:version>3.1.14</sparkle:version>
+      <sparkle:shortVersionString>3.1.14</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 14 Apr 2026 18:58:31 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.1.14</h2>
+        <p>All-new Audio Mixer UI: role-colored faders with gradient strips, segmented LED meters with clipping detection, per-fader automation arming, real-time volume during playback, keyframe management</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.14/SpliceKit-v3.1.14.dmg"
+        sparkle:edSignature="fqnxhNn3GzSK4g+HdRZcl8ajwF9QXlcaeiMBQJdQSvEQF1eROsvyg9VynjljBG6PABbpN1Ckhnz0g1b549ABBw=="
+        length="14461121"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.1.13</title>
       <sparkle:version>3.1.13</sparkle:version>
       <sparkle:shortVersionString>3.1.13</sparkle:shortVersionString>
