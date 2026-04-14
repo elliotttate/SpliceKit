@@ -13,6 +13,7 @@
 
 // Forward declarations from SpliceKitServer.m
 extern id SpliceKit_getActiveTimelineModule(void);
+extern id SpliceKit_getMasterAudioDest(void);
 extern id SpliceKit_storeHandle(id obj);
 extern id SpliceKit_resolveHandle(NSString *handle);
 extern double SpliceKit_channelValue(id channel);
@@ -97,11 +98,15 @@ static const char kMeterRoleUIDKey = 0; // associated object key
 @property (nonatomic, assign) double meterPeak; // visual peak ratio from FCP meters (0..1)
 @property (nonatomic, assign) BOOL isActive;
 @property (nonatomic, assign) BOOL isPlaying; // clip with this role is at playhead
+@property (nonatomic, assign) BOOL isMaster;
 @property (nonatomic, assign) BOOL isDragging;
 @property (nonatomic, assign) BOOL isRecordingAutomation;
 @property (nonatomic, assign) BOOL didRecordAutomationInDrag;
+@property (nonatomic, assign) BOOL didPrepareAutomationInDrag;
 @property (nonatomic, assign) double lastAutomationPlayheadSeconds;
 @property (nonatomic, assign) double lastAutomationLinear;
+@property (nonatomic, assign) double minDB;
+@property (nonatomic, assign) double maxDB;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *openEffectStackHandlesByPointer;
 @end
 
@@ -126,21 +131,42 @@ static const char kMeterRoleUIDKey = 0; // associated object key
 - (void)updateFromState;
 @end
 
-// dB <-> slider position (0..100) with perceptual curve
-static double dbToSliderPos(double db) {
-    if (db <= -96) return 0;
-    if (db >= 12) return 100;
-    if (db >= 0) return 75.0 + (db / 12.0) * 25.0;
-    double norm = (db + 96.0) / 96.0;
-    return sqrt(norm) * 75.0;
+// dB <-> slider position (0..100) with perceptual curve.
+// Clip faders reserve the top quarter for positive gain; the master spans -96..0 dB.
+static double dbToSliderPos(double db, double minDB, double maxDB) {
+    if (db <= minDB) return 0;
+    if (db >= maxDB) return 100;
+
+    double positiveHeadroom = fmax(0.0, maxDB);
+    if (positiveHeadroom > 0.0 && db >= 0.0) {
+        return 75.0 + (db / positiveHeadroom) * 25.0;
+    }
+
+    double upperBound = (positiveHeadroom > 0.0) ? 0.0 : maxDB;
+    double span = upperBound - minDB;
+    if (span <= 0.0) return 0.0;
+
+    double norm = (db - minDB) / span;
+    double sliderTop = (positiveHeadroom > 0.0) ? 75.0 : 100.0;
+    return sqrt(fmax(0.0, norm)) * sliderTop;
 }
 
-static double sliderPosToDB(double pos) {
-    if (pos <= 0) return -96;
-    if (pos >= 100) return 12;
-    if (pos >= 75) return ((pos - 75.0) / 25.0) * 12.0;
-    double norm = pos / 75.0;
-    return (norm * norm) * 96.0 - 96.0;
+static double sliderPosToDB(double pos, double minDB, double maxDB) {
+    if (pos <= 0) return minDB;
+    if (pos >= 100) return maxDB;
+
+    double positiveHeadroom = fmax(0.0, maxDB);
+    if (positiveHeadroom > 0.0 && pos >= 75.0) {
+        return ((pos - 75.0) / 25.0) * positiveHeadroom;
+    }
+
+    double sliderTop = (positiveHeadroom > 0.0) ? 75.0 : 100.0;
+    double upperBound = (positiveHeadroom > 0.0) ? 0.0 : maxDB;
+    double span = upperBound - minDB;
+    if (span <= 0.0) return minDB;
+
+    double norm = pos / sliderTop;
+    return (norm * norm) * span + minDB;
 }
 
 @implementation SpliceKitFaderView {
@@ -157,9 +183,13 @@ static double sliderPosToDB(double pos) {
 
         _state = [[SpliceKitFaderState alloc] init];
         _state.index = idx;
+        _state.isMaster = (idx < 0);
+        _state.minDB = -96.0;
+        _state.maxDB = _state.isMaster ? 0.0 : 12.0;
 
         // Index label at top
-        _indexLabel = [self makeLabel:[NSString stringWithFormat:@"%ld", (long)idx + 1]
+        NSString *indexTitle = _state.isMaster ? @"M" : [NSString stringWithFormat:@"%ld", (long)idx + 1];
+        _indexLabel = [self makeLabel:indexTitle
                                  size:11 bold:YES];
         _indexLabel.textColor = [NSColor secondaryLabelColor];
 
@@ -172,7 +202,7 @@ static double sliderPosToDB(double pos) {
         _slider.vertical = YES;
         _slider.minValue = 0;
         _slider.maxValue = 100;
-        _slider.doubleValue = dbToSliderPos(0);
+        _slider.doubleValue = dbToSliderPos(0, _state.minDB, _state.maxDB);
         _slider.target = self;
         _slider.action = @selector(sliderChanged:);
         _slider.continuous = YES;
@@ -255,7 +285,7 @@ static double sliderPosToDB(double pos) {
     BOOL starting = !_tracking;
     _tracking = YES;
 
-    double db = sliderPosToDB(sender.doubleValue);
+    double db = sliderPosToDB(sender.doubleValue, _state.minDB, _state.maxDB);
     _state.volumeDB = db;
     _state.isDragging = YES;
     [self updateDBLabel];
@@ -280,31 +310,41 @@ static double sliderPosToDB(double pos) {
     self.layer.borderWidth = _state.isRecordingAutomation ? 1.0 : 0.5;
 
     if (active && !_state.isDragging) {
-        _slider.doubleValue = dbToSliderPos(_state.volumeDB);
+        _slider.doubleValue = dbToSliderPos(_state.volumeDB, _state.minDB, _state.maxDB);
     }
 
     [self updateDBLabel];
 
-    // Role label — always show for active faders, use FCP's actual role color
-    NSString *role = active ? (_state.role ?: @"") : @"";
-    _roleLabel.stringValue = role;
-    NSColor *roleColor = [NSColor secondaryLabelColor];
-    NSString *hex = _state.roleColorHex;
-    if (hex && hex.length == 7) {
-        unsigned int r = 0, g = 0, b = 0;
-        sscanf([hex UTF8String], "#%02x%02x%02x", &r, &g, &b);
-        roleColor = [NSColor colorWithRed:r/255.0 green:g/255.0 blue:b/255.0 alpha:1.0];
+    if (_state.isMaster) {
+        _roleLabel.stringValue = active ? @"MASTER" : @"";
+        NSColor *masterColor = [NSColor systemOrangeColor];
+        _roleLabel.textColor = playing ? masterColor : [masterColor colorWithAlphaComponent:0.6];
+        _laneLabel.stringValue = active ? @"OUTPUT" : @"";
+        _nameLabel.stringValue = active ? (_state.clipName.length > 0 ? _state.clipName : @"Playback") : @"--";
+    } else {
+        // Role label — always show for active faders, use FCP's actual role color
+        NSString *role = active ? (_state.role ?: @"") : @"";
+        _roleLabel.stringValue = role;
+        NSColor *roleColor = [NSColor secondaryLabelColor];
+        NSString *hex = _state.roleColorHex;
+        if (hex && hex.length == 7) {
+            unsigned int r = 0, g = 0, b = 0;
+            sscanf([hex UTF8String], "#%02x%02x%02x", &r, &g, &b);
+            roleColor = [NSColor colorWithRed:r/255.0 green:g/255.0 blue:b/255.0 alpha:1.0];
+        }
+        _roleLabel.textColor = playing ? roleColor : [roleColor colorWithAlphaComponent:0.5];
+        _laneLabel.stringValue = active ? [NSString stringWithFormat:@"L%ld", (long)_state.lane] : @"";
+        _nameLabel.stringValue = active ? (_state.clipName ?: @"") : @"--";
     }
-    _roleLabel.textColor = playing ? roleColor : [roleColor colorWithAlphaComponent:0.5];
-
-    // Lane and name — always show
-    _laneLabel.stringValue = active ? [NSString stringWithFormat:@"L%ld", (long)_state.lane] : @"";
-    _nameLabel.stringValue = active ? (_state.clipName ?: @"") : @"--";
     _nameLabel.textColor = playing ? [NSColor labelColor] : [NSColor tertiaryLabelColor];
 
     // Slightly darker background when playing at playhead
     if (_state.isRecordingAutomation) {
         self.layer.backgroundColor = [[NSColor systemRedColor] colorWithAlphaComponent:0.14].CGColor;
+    } else if (_state.isMaster && playing) {
+        self.layer.backgroundColor = [[NSColor systemOrangeColor] colorWithAlphaComponent:0.12].CGColor;
+    } else if (_state.isMaster && active) {
+        self.layer.backgroundColor = [[NSColor controlAccentColor] colorWithAlphaComponent:0.08].CGColor;
     } else if (playing) {
         self.layer.backgroundColor = [[NSColor controlAccentColor] colorWithAlphaComponent:0.15].CGColor;
     } else if (active) {
@@ -354,7 +394,7 @@ static double sliderPosToDB(double pos) {
         _dbLabel.textColor = [NSColor tertiaryLabelColor];
         return;
     }
-    if (_state.volumeDB <= -96) {
+    if (_state.volumeDB <= _state.minDB) {
         _dbLabel.stringValue = @"-inf";
     } else {
         _dbLabel.stringValue = [NSString stringWithFormat:@"%.1f", _state.volumeDB];
@@ -368,18 +408,24 @@ static double sliderPosToDB(double pos) {
 
 @interface SpliceKitMixerPanel : NSObject <NSWindowDelegate>
 @property (nonatomic, strong) NSPanel *panel;
+@property (nonatomic, strong) SpliceKitFaderView *masterFaderView;
 @property (nonatomic, strong) NSMutableArray<SpliceKitFaderView *> *faderViews;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) NSView *statusDot;
+@property (nonatomic, strong) NSButton *automationButton;
 @property (nonatomic, strong) NSTimer *pollTimer;
 @property (nonatomic, assign) BOOL isPolling;
 @property (nonatomic, assign) BOOL transportPlaying;
 @property (nonatomic, assign) double playheadSeconds;
 @property (nonatomic, assign) double frameRate;
+@property (nonatomic, assign) BOOL automationArmed;
 + (instancetype)sharedPanel;
 - (void)showPanel;
 - (void)hidePanel;
 - (BOOL)isVisible;
+- (void)beginMasterVolumeChange;
+- (void)setMasterVolumeDB:(double)db;
+- (void)endMasterVolumeChange;
 @end
 
 @implementation SpliceKitMixerPanel
@@ -423,7 +469,7 @@ static double sliderPosToDB(double pos) {
 - (void)setupPanelIfNeeded {
     if (self.panel) return;
 
-    NSRect frame = NSMakeRect(200, 200, 700, 380);
+    NSRect frame = NSMakeRect(200, 200, 780, 410);
     NSUInteger styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                            NSWindowStyleMaskResizable | NSWindowStyleMaskUtilityWindow;
 
@@ -436,7 +482,7 @@ static double sliderPosToDB(double pos) {
     self.panel.becomesKeyOnlyIfNeeded = NO;
     self.panel.hidesOnDeactivate = NO;
     self.panel.level = NSFloatingWindowLevel;
-    self.panel.minSize = NSMakeSize(500, 320);
+    self.panel.minSize = NSMakeSize(640, 350);
     self.panel.delegate = self;
     self.panel.releasedWhenClosed = NO;
     self.panel.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
@@ -448,13 +494,96 @@ static double sliderPosToDB(double pos) {
 }
 
 - (void)buildUI:(NSView *)content {
-    // Fader container — fills the entire content area
+    self.automationArmed = NO;
+
+    NSView *header = [[NSView alloc] init];
+    header.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:header];
+
+    NSStackView *statusRow = [[NSStackView alloc] init];
+    statusRow.translatesAutoresizingMaskIntoConstraints = NO;
+    statusRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    statusRow.alignment = NSLayoutAttributeCenterY;
+    statusRow.distribution = NSStackViewDistributionFill;
+    statusRow.spacing = 8;
+    [header addSubview:statusRow];
+
+    self.statusDot = [[NSView alloc] init];
+    self.statusDot.translatesAutoresizingMaskIntoConstraints = NO;
+    self.statusDot.wantsLayer = YES;
+    self.statusDot.layer.cornerRadius = 5;
+    [statusRow addArrangedSubview:self.statusDot];
+
+    self.statusLabel = [NSTextField labelWithString:@"Automation Off"];
+    self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.statusLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+    self.statusLabel.textColor = [NSColor secondaryLabelColor];
+    [statusRow addArrangedSubview:self.statusLabel];
+
+    NSView *statusSpacer = [[NSView alloc] init];
+    statusSpacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [statusSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                             forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [statusSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [statusRow addArrangedSubview:statusSpacer];
+
+    self.automationButton = [NSButton buttonWithTitle:@"Arm Automation"
+                                               target:self
+                                               action:@selector(toggleAutomationArm:)];
+    self.automationButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.automationButton.bordered = NO;
+    self.automationButton.focusRingType = NSFocusRingTypeNone;
+    self.automationButton.wantsLayer = YES;
+    self.automationButton.layer.cornerRadius = 9.0;
+    self.automationButton.layer.masksToBounds = YES;
+    self.automationButton.layer.borderWidth = 1.0;
+    if (@available(macOS 10.15, *)) {
+        self.automationButton.layer.cornerCurve = kCACornerCurveContinuous;
+    }
+    [statusRow addArrangedSubview:self.automationButton];
+
+    NSTextField *hintLabel = [NSTextField labelWithString:@"Arm, then press play and move a fader to record keyframes."];
+    hintLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    hintLabel.font = [NSFont systemFontOfSize:10];
+    hintLabel.textColor = [NSColor tertiaryLabelColor];
+    [header addSubview:hintLabel];
+
+    NSStackView *mainStack = [[NSStackView alloc] init];
+    mainStack.translatesAutoresizingMaskIntoConstraints = NO;
+    mainStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    mainStack.distribution = NSStackViewDistributionFill;
+    mainStack.alignment = NSLayoutAttributeTop;
+    mainStack.spacing = 6;
+    [content addSubview:mainStack];
+
+    self.masterFaderView = [[SpliceKitFaderView alloc] initWithFrame:NSMakeRect(0, 0, 64, 300) index:-1];
+    __weak SpliceKitMixerPanel *weakSelf = self;
+    self.masterFaderView.onDragStart = ^{
+        [weakSelf beginMasterVolumeChange];
+    };
+    self.masterFaderView.onDragChange = ^(double db) {
+        [weakSelf setMasterVolumeDB:db];
+    };
+    self.masterFaderView.onDragEnd = ^{
+        [weakSelf endMasterVolumeChange];
+    };
+    [mainStack addArrangedSubview:self.masterFaderView];
+    [[self.masterFaderView.widthAnchor constraintEqualToConstant:72] setActive:YES];
+
+    NSView *separator = [[NSView alloc] initWithFrame:NSZeroRect];
+    separator.translatesAutoresizingMaskIntoConstraints = NO;
+    separator.wantsLayer = YES;
+    separator.layer.backgroundColor = [NSColor.separatorColor CGColor];
+    [mainStack addArrangedSubview:separator];
+    [[separator.widthAnchor constraintEqualToConstant:1] setActive:YES];
+
     NSStackView *faderStack = [[NSStackView alloc] init];
     faderStack.translatesAutoresizingMaskIntoConstraints = NO;
     faderStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     faderStack.distribution = NSStackViewDistributionFillEqually;
     faderStack.spacing = 1;
-    [content addSubview:faderStack];
+    [mainStack addArrangedSubview:faderStack];
 
     // Create 10 faders
     self.faderViews = [NSMutableArray array];
@@ -462,7 +591,6 @@ static double sliderPosToDB(double pos) {
         SpliceKitFaderView *fv = [[SpliceKitFaderView alloc]
             initWithFrame:NSMakeRect(0, 0, 60, 300) index:i];
 
-        __weak SpliceKitMixerPanel *weakSelf = self;
         NSInteger idx = i;
         fv.onDragStart = ^{
             [weakSelf beginVolumeChange:idx];
@@ -480,11 +608,32 @@ static double sliderPosToDB(double pos) {
 
     // Layout — faders fill the whole window
     [NSLayoutConstraint activateConstraints:@[
-        [faderStack.topAnchor constraintEqualToAnchor:content.topAnchor constant:4],
-        [faderStack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:4],
-        [faderStack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-4],
-        [faderStack.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-4],
+        [header.topAnchor constraintEqualToAnchor:content.topAnchor constant:10],
+        [header.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:10],
+        [header.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-10],
+
+        [statusRow.topAnchor constraintEqualToAnchor:header.topAnchor],
+        [statusRow.leadingAnchor constraintEqualToAnchor:header.leadingAnchor],
+        [statusRow.trailingAnchor constraintEqualToAnchor:header.trailingAnchor],
+
+        [self.statusDot.widthAnchor constraintEqualToConstant:10],
+        [self.statusDot.heightAnchor constraintEqualToConstant:10],
+
+        [self.automationButton.heightAnchor constraintEqualToConstant:30],
+        [self.automationButton.widthAnchor constraintGreaterThanOrEqualToConstant:104],
+
+        [hintLabel.topAnchor constraintEqualToAnchor:statusRow.bottomAnchor constant:6],
+        [hintLabel.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:2],
+        [hintLabel.trailingAnchor constraintLessThanOrEqualToAnchor:header.trailingAnchor],
+        [hintLabel.bottomAnchor constraintEqualToAnchor:header.bottomAnchor],
+
+        [mainStack.topAnchor constraintEqualToAnchor:header.bottomAnchor constant:8],
+        [mainStack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:4],
+        [mainStack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-4],
+        [mainStack.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-4],
     ]];
+
+    [self updateAutomationUI];
 }
 
 #pragma mark - Polling
@@ -492,11 +641,12 @@ static double sliderPosToDB(double pos) {
 - (void)startPolling {
     [self stopPolling];
     self.isPolling = NO; // Reset re-entrancy guard
-    self.pollTimer = [NSTimer scheduledTimerWithTimeInterval:0.05
-                                                     target:self
-                                                   selector:@selector(pollTimerFired:)
-                                                   userInfo:nil
-                                                    repeats:YES];
+    self.pollTimer = [NSTimer timerWithTimeInterval:0.05
+                                             target:self
+                                           selector:@selector(pollTimerFired:)
+                                           userInfo:nil
+                                            repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:self.pollTimer forMode:NSRunLoopCommonModes];
 }
 
 - (void)stopPolling {
@@ -536,7 +686,32 @@ static double sliderPosToDB(double pos) {
     self.playheadSeconds = [result[@"playheadSeconds"] doubleValue];
     self.frameRate = [result[@"frameRate"] doubleValue];
 
+    NSDictionary *masterInfo = [result[@"masterFader"] isKindOfClass:[NSDictionary class]] ? result[@"masterFader"] : nil;
     NSArray *faderData = result[@"faders"];
+
+    BOOL masterDragging = self.masterFaderView.state.isDragging;
+    if (masterInfo) {
+        self.masterFaderView.state.isActive = YES;
+        self.masterFaderView.state.isPlaying = [masterInfo[@"playing"] boolValue];
+        self.masterFaderView.state.clipName = masterInfo[@"name"] ?: @"Playback";
+        self.masterFaderView.state.role = masterInfo[@"role"] ?: @"Master";
+        self.masterFaderView.state.meterPeak = [masterInfo[@"meterPeak"] doubleValue];
+        self.masterFaderView.state.minDB = [masterInfo[@"minDB"] doubleValue];
+        self.masterFaderView.state.maxDB = [masterInfo[@"maxDB"] doubleValue];
+        if (!masterDragging) {
+            self.masterFaderView.state.volumeDB = [masterInfo[@"volumeDB"] doubleValue];
+            self.masterFaderView.state.volumeLinear = [masterInfo[@"volumeLinear"] doubleValue];
+        }
+    } else {
+        self.masterFaderView.state.isActive = NO;
+        self.masterFaderView.state.isPlaying = NO;
+        self.masterFaderView.state.clipName = nil;
+        self.masterFaderView.state.role = @"Master";
+        self.masterFaderView.state.meterPeak = 0;
+        self.masterFaderView.state.minDB = -96.0;
+        self.masterFaderView.state.maxDB = 0.0;
+    }
+    [self.masterFaderView updateFromState];
 
     for (NSInteger i = 0; i < 10; i++) {
         SpliceKitFaderView *fv = self.faderViews[i];
@@ -578,9 +753,20 @@ static double sliderPosToDB(double pos) {
     }
 
     [self recordAutomationSamplesIfNeeded];
+    [self updateAutomationUI];
 }
 
 - (void)clearAllFaders {
+    self.masterFaderView.state.isActive = NO;
+    self.masterFaderView.state.isPlaying = NO;
+    self.masterFaderView.state.isDragging = NO;
+    self.masterFaderView.state.clipName = nil;
+    self.masterFaderView.state.role = @"Master";
+    self.masterFaderView.state.meterPeak = 0;
+    self.masterFaderView.state.minDB = -96.0;
+    self.masterFaderView.state.maxDB = 0.0;
+    [self.masterFaderView updateFromState];
+
     for (SpliceKitFaderView *fv in self.faderViews) {
         [self finishUndoTransactionsForFader:fv];
         fv.state.isActive = NO;
@@ -593,6 +779,7 @@ static double sliderPosToDB(double pos) {
         fv.state.effectStackHandle = nil;
         [fv updateFromState];
     }
+    [self updateAutomationUI];
 }
 
 - (BOOL)isTransportPlayingNow {
@@ -608,6 +795,72 @@ static double sliderPosToDB(double pos) {
     return playing;
 }
 
+- (BOOL)anyFaderRecordingAutomation {
+    for (SpliceKitFaderView *fv in self.faderViews) {
+        if (fv.state.isRecordingAutomation) return YES;
+    }
+    return NO;
+}
+
+- (void)updateAutomationButtonWithTitle:(NSString *)title
+                             textColor:(NSColor *)textColor
+                        backgroundColor:(NSColor *)backgroundColor
+                            borderColor:(NSColor *)borderColor {
+    NSDictionary *attrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold],
+        NSForegroundColorAttributeName: textColor
+    };
+    self.automationButton.attributedTitle =
+        [[NSAttributedString alloc] initWithString:title attributes:attrs];
+    self.automationButton.layer.backgroundColor = backgroundColor.CGColor;
+    self.automationButton.layer.borderColor = borderColor.CGColor;
+}
+
+- (void)updateAutomationUI {
+    BOOL recording = [self anyFaderRecordingAutomation];
+    if (recording) {
+        self.statusDot.layer.backgroundColor = [NSColor systemRedColor].CGColor;
+        self.statusLabel.stringValue = @"Recording Automation";
+        self.statusLabel.textColor = [NSColor systemRedColor];
+    } else if (self.automationArmed) {
+        self.statusDot.layer.backgroundColor = [NSColor systemOrangeColor].CGColor;
+        self.statusLabel.stringValue = @"Automation Armed";
+        self.statusLabel.textColor = [NSColor systemOrangeColor];
+    } else {
+        self.statusDot.layer.backgroundColor = [NSColor tertiaryLabelColor].CGColor;
+        self.statusLabel.stringValue = @"Automation Off";
+        self.statusLabel.textColor = [NSColor secondaryLabelColor];
+    }
+
+    NSString *buttonTitle = self.automationArmed ? @"Disarm" : @"Arm";
+    NSColor *buttonTextColor = nil;
+    NSColor *buttonBackgroundColor = nil;
+    NSColor *buttonBorderColor = nil;
+    if (recording) {
+        buttonTextColor = [NSColor colorWithSRGBRed:1.00 green:0.86 blue:0.86 alpha:1.0];
+        buttonBackgroundColor = [NSColor colorWithSRGBRed:0.36 green:0.15 blue:0.15 alpha:1.0];
+        buttonBorderColor = [NSColor colorWithSRGBRed:0.77 green:0.27 blue:0.27 alpha:1.0];
+    } else if (self.automationArmed) {
+        buttonTextColor = [NSColor colorWithSRGBRed:1.00 green:0.89 blue:0.73 alpha:1.0];
+        buttonBackgroundColor = [NSColor colorWithSRGBRed:0.34 green:0.25 blue:0.10 alpha:1.0];
+        buttonBorderColor = [NSColor colorWithSRGBRed:0.90 green:0.58 blue:0.18 alpha:1.0];
+    } else {
+        buttonTextColor = [NSColor labelColor];
+        buttonBackgroundColor = [NSColor colorWithWhite:1.0 alpha:0.08];
+        buttonBorderColor = [NSColor colorWithWhite:1.0 alpha:0.12];
+    }
+
+    [self updateAutomationButtonWithTitle:buttonTitle
+                                textColor:buttonTextColor
+                           backgroundColor:buttonBackgroundColor
+                               borderColor:buttonBorderColor];
+}
+
+- (void)toggleAutomationArm:(id)sender {
+    self.automationArmed = !self.automationArmed;
+    [self updateAutomationUI];
+}
+
 - (NSString *)currentUndoEffectStackHandleForFader:(SpliceKitFaderView *)fv {
     return fv.state.effectStackHandle ?: fv.state.audioEffectStackHandle;
 }
@@ -615,6 +868,7 @@ static double sliderPosToDB(double pos) {
 - (void)resetDragSessionForFader:(SpliceKitFaderView *)fv {
     fv.state.isRecordingAutomation = NO;
     fv.state.didRecordAutomationInDrag = NO;
+    fv.state.didPrepareAutomationInDrag = NO;
     fv.state.lastAutomationPlayheadSeconds = -DBL_MAX;
     fv.state.lastAutomationLinear = NAN;
     if (!fv.state.openEffectStackHandlesByPointer) {
@@ -681,7 +935,11 @@ static double sliderPosToDB(double pos) {
     id channel = SpliceKit_resolveHandle(fv.state.volumeChannelHandle);
     if (!clip || !channel) return NO;
 
-    [self ensureUndoTransactionForFader:fv effectStackHandle:[self currentUndoEffectStackHandleForFader:fv]];
+    if (!fv.state.didPrepareAutomationInDrag) {
+        // Treat a fresh drag as a replacement pass for this fader's automation.
+        SpliceKit_removeChannelKeyframes(channel);
+        fv.state.didPrepareAutomationInDrag = YES;
+    }
 
     BOOL ok = SpliceKit_mixerWriteAutomationPoint(clip, channel, linear);
     if (ok) {
@@ -690,6 +948,7 @@ static double sliderPosToDB(double pos) {
         fv.state.lastAutomationPlayheadSeconds = self.playheadSeconds;
         fv.state.lastAutomationLinear = linear;
         [fv updateFromState];
+        [self updateAutomationUI];
     }
     return ok;
 }
@@ -697,13 +956,14 @@ static double sliderPosToDB(double pos) {
 - (void)recordAutomationSamplesIfNeeded {
     for (SpliceKitFaderView *fv in self.faderViews) {
         if (!fv.state.isDragging) continue;
-        if (self.transportPlaying) {
+        if (self.transportPlaying && self.automationArmed) {
             [self recordAutomationSampleForFader:fv force:NO];
         } else if (fv.state.isRecordingAutomation) {
             fv.state.isRecordingAutomation = NO;
             [fv updateFromState];
         }
     }
+    [self updateAutomationUI];
 }
 
 #pragma mark - Debug
@@ -726,17 +986,52 @@ static double sliderPosToDB(double pos) {
             @"sliderValue": @(fv.slider.doubleValue),
         }];
     }
+    NSDictionary *masterState = self.masterFaderView ? @{
+        @"active": @(self.masterFaderView.state.isActive),
+        @"playing": @(self.masterFaderView.state.isPlaying),
+        @"dragging": @(self.masterFaderView.state.isDragging),
+        @"name": self.masterFaderView.state.clipName ?: @"",
+        @"volumeDB": @(self.masterFaderView.state.volumeDB),
+        @"sliderValue": @(self.masterFaderView.slider.doubleValue),
+    } : @{};
     return @{
         @"panelVisible": @(self.panel.isVisible),
         @"isPolling": @(self.isPolling),
         @"timerValid": @(self.pollTimer.isValid),
         @"transportPlaying": @(self.transportPlaying),
         @"playheadSeconds": @(self.playheadSeconds),
+        @"master": masterState,
         @"faders": faderStates,
     };
 }
 
 #pragma mark - Volume Control
+
+- (void)beginMasterVolumeChange {
+    self.masterFaderView.state.isDragging = YES;
+}
+
+- (void)setMasterVolumeDB:(double)db {
+    double linear = (db <= -96.0) ? 0.0 : pow(10.0, db / 20.0);
+    if (linear < 0.0) linear = 0.0;
+    if (linear > 1.0) linear = 1.0;
+
+    self.masterFaderView.state.volumeDB = db;
+    self.masterFaderView.state.volumeLinear = linear;
+
+    id audioDest = SpliceKit_getMasterAudioDest();
+    if (!audioDest) return;
+
+    SEL setVolumeSel = NSSelectorFromString(@"setOutputVolume:");
+    if ([audioDest respondsToSelector:setVolumeSel]) {
+        ((BOOL (*)(id, SEL, float))objc_msgSend)(audioDest, setVolumeSel, (float)linear);
+    }
+}
+
+- (void)endMasterVolumeChange {
+    self.masterFaderView.state.isDragging = NO;
+    [self.masterFaderView updateFromState];
+}
 
 - (void)beginVolumeChange:(NSInteger)faderIndex {
     SpliceKitFaderView *fv = self.faderViews[faderIndex];
@@ -744,9 +1039,8 @@ static double sliderPosToDB(double pos) {
 
     if (![self isTransportPlayingNow]) {
         [self ensureUndoTransactionForFader:fv effectStackHandle:[self currentUndoEffectStackHandleForFader:fv]];
-    } else {
-        [self recordAutomationSampleForFader:fv force:YES];
     }
+    [self updateAutomationUI];
 }
 
 - (void)setVolume:(NSInteger)faderIndex db:(double)db {
@@ -758,7 +1052,9 @@ static double sliderPosToDB(double pos) {
     fv.state.volumeLinear = linear;
 
     if ([self isTransportPlayingNow]) {
-        [self recordAutomationSampleForFader:fv force:YES];
+        if (self.automationArmed) {
+            [self recordAutomationSampleForFader:fv force:NO];
+        }
         return;
     }
 
@@ -794,18 +1090,20 @@ static double sliderPosToDB(double pos) {
 
 - (void)endVolumeChange:(NSInteger)faderIndex {
     SpliceKitFaderView *fv = self.faderViews[faderIndex];
-    if ([self isTransportPlayingNow]) {
-        [self recordAutomationSampleForFader:fv force:YES];
+    if ([self isTransportPlayingNow] && self.automationArmed) {
+        [self recordAutomationSampleForFader:fv force:NO];
     }
 
     [self finishUndoTransactionsForFader:fv];
     fv.state.isRecordingAutomation = NO;
     fv.state.didRecordAutomationInDrag = NO;
+    fv.state.didPrepareAutomationInDrag = NO;
     fv.state.lastAutomationPlayheadSeconds = -DBL_MAX;
     fv.state.lastAutomationLinear = NAN;
 
     fv.state.isDragging = NO;
     [fv updateFromState];
+    [self updateAutomationUI];
 }
 
 @end

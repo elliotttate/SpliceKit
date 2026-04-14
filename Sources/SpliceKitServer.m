@@ -62,6 +62,22 @@ static NSDictionary *SpliceKit_sendPlayerAction(NSString *selectorName);
 id SpliceKit_getActiveTimelineModule(void);
 static id SpliceKit_getEditorContainer(void);
 
+static void SpliceKit_searchLayerTreeForMeterPeak(CALayer *layer,
+                                                  Class meterLayerClass,
+                                                  ptrdiff_t maskRatioOffset,
+                                                  double *maxPeak) {
+    if (!layer || !meterLayerClass || !maxPeak) return;
+
+    if ([layer isKindOfClass:meterLayerClass]) {
+        double ratio = *(double *)((char *)(__bridge void *)layer + maskRatioOffset);
+        if (ratio > *maxPeak) *maxPeak = ratio;
+    }
+
+    for (CALayer *subLayer in layer.sublayers) {
+        SpliceKit_searchLayerTreeForMeterPeak(subLayer, meterLayerClass, maskRatioOffset, maxPeak);
+    }
+}
+
 #pragma mark - Object Handle System
 //
 // JSON can't hold ObjC object pointers, so we assign each object a string handle
@@ -3753,24 +3769,179 @@ NSDictionary *SpliceKit_handleDirectTimelineAction(NSDictionary *params) {
     return result;
 }
 
+static id SpliceKit_getAppDelegate(void) {
+    id app = ((id (*)(id, SEL))objc_msgSend)(
+        objc_getClass("NSApplication"), @selector(sharedApplication));
+    return app ? ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate)) : nil;
+}
+
+static id SpliceKit_getCompareViewerContainer(void) {
+    id delegate = SpliceKit_getAppDelegate();
+    SEL compareSel = NSSelectorFromString(@"compareViewer");
+    if (delegate && [delegate respondsToSelector:compareSel]) {
+        id viewer = ((id (*)(id, SEL))objc_msgSend)(delegate, compareSel);
+        if (viewer) return viewer;
+    }
+    return nil;
+}
+
+static id SpliceKit_getContextFromPlayerContainer(id container) {
+    if (!container) return nil;
+
+    SEL contextSel = NSSelectorFromString(@"context");
+    if ([container respondsToSelector:contextSel]) {
+        id context = ((id (*)(id, SEL))objc_msgSend)(container, contextSel);
+        if (context) return context;
+    }
+
+    for (NSString *playerSelName in @[@"viewerPlayerModule", @"canvasPlayerModule", @"_activePlayerModule"]) {
+        SEL playerSel = NSSelectorFromString(playerSelName);
+        if (![container respondsToSelector:playerSel]) continue;
+
+        id playerModule = ((id (*)(id, SEL))objc_msgSend)(container, playerSel);
+        if (!playerModule) continue;
+        if (![playerModule respondsToSelector:contextSel]) continue;
+
+        id context = ((id (*)(id, SEL))objc_msgSend)(playerModule, contextSel);
+        if (context) return context;
+    }
+
+    return nil;
+}
+
+static id SpliceKit_getPlayerModuleFromPlayerContainer(id container) {
+    if (!container) return nil;
+
+    for (NSString *selName in @[@"viewerPlayerModule", @"canvasPlayerModule", @"_activePlayerModule"]) {
+        SEL sel = NSSelectorFromString(selName);
+        if (![container respondsToSelector:sel]) continue;
+
+        id playerModule = ((id (*)(id, SEL))objc_msgSend)(container, sel);
+        if (playerModule) return playerModule;
+    }
+
+    SEL modulesSel = NSSelectorFromString(@"playerModules");
+    if ([container respondsToSelector:modulesSel]) {
+        id modules = ((id (*)(id, SEL))objc_msgSend)(container, modulesSel);
+        SEL firstSel = NSSelectorFromString(@"firstObject");
+        if (modules && [modules respondsToSelector:firstSel]) {
+            id firstPlayerModule = ((id (*)(id, SEL))objc_msgSend)(modules, firstSel);
+            if (firstPlayerModule) return firstPlayerModule;
+        }
+    }
+
+    return nil;
+}
+
 // Get the FFPlayerModule from editor container
 static id SpliceKit_getPlayerModule(void) {
     id container = SpliceKit_getEditorContainer();
-    if (!container) return nil;
 
     // Try playerModule or editorModule.playerModule
     SEL pmSel = NSSelectorFromString(@"playerModule");
-    if ([container respondsToSelector:pmSel]) {
+    if (container && [container respondsToSelector:pmSel]) {
         return ((id (*)(id, SEL))objc_msgSend)(container, pmSel);
     }
     // Try through editorModule
     SEL emSel = NSSelectorFromString(@"editorModule");
-    if ([container respondsToSelector:emSel]) {
+    if (container && [container respondsToSelector:emSel]) {
         id editor = ((id (*)(id, SEL))objc_msgSend)(container, emSel);
         if (editor && [editor respondsToSelector:pmSel]) {
             return ((id (*)(id, SEL))objc_msgSend)(editor, pmSel);
         }
     }
+
+    id compareViewer = SpliceKit_getCompareViewerContainer();
+    id compareViewerPlayer = SpliceKit_getPlayerModuleFromPlayerContainer(compareViewer);
+    if (compareViewerPlayer) return compareViewerPlayer;
+
+    return nil;
+}
+
+// Resolve the playback context used by the active timeline/player.
+id SpliceKit_getPlaybackContext(void) {
+    id timeline = SpliceKit_getActiveTimelineModule();
+    SEL contextSel = NSSelectorFromString(@"context");
+    if (timeline && [timeline respondsToSelector:contextSel]) {
+        id context = ((id (*)(id, SEL))objc_msgSend)(timeline, contextSel);
+        if (context) return context;
+    }
+
+    SEL selectionContextSel = NSSelectorFromString(@"selectionContext");
+    if (timeline && [timeline respondsToSelector:selectionContextSel]) {
+        id context = ((id (*)(id, SEL))objc_msgSend)(timeline, selectionContextSel);
+        if (context) return context;
+    }
+
+    id playerModule = SpliceKit_getPlayerModule();
+    if (playerModule && [playerModule respondsToSelector:contextSel]) {
+        id context = ((id (*)(id, SEL))objc_msgSend)(playerModule, contextSel);
+        if (context) return context;
+    }
+
+    id compareViewer = SpliceKit_getCompareViewerContainer();
+    id compareViewerContext = SpliceKit_getContextFromPlayerContainer(compareViewer);
+    if (compareViewerContext) return compareViewerContext;
+
+    return nil;
+}
+
+static id SpliceKit_getAudioDestFromContext(id context) {
+    if (!context) return nil;
+
+    SEL audioDestSel = NSSelectorFromString(@"audioDest");
+    if ([context respondsToSelector:audioDestSel]) {
+        id audioDest = ((id (*)(id, SEL))objc_msgSend)(context, audioDestSel);
+        if (audioDest) return audioDest;
+    }
+
+    Ivar ivar = class_getInstanceVariable([context class], "_audioDest");
+    if (ivar) {
+        id audioDest = object_getIvar(context, ivar);
+        if (audioDest) return audioDest;
+    }
+
+    @try {
+        id audioDest = [context valueForKey:@"audioDest"];
+        if (audioDest) return audioDest;
+    } @catch (NSException *e) {}
+
+    return nil;
+}
+
+// The playback context owns the program-output audio destination.
+id SpliceKit_getMasterAudioDest(void) {
+    id timeline = SpliceKit_getActiveTimelineModule();
+    SEL contextSel = NSSelectorFromString(@"context");
+    if (timeline && [timeline respondsToSelector:contextSel]) {
+        id context = ((id (*)(id, SEL))objc_msgSend)(timeline, contextSel);
+        id audioDest = SpliceKit_getAudioDestFromContext(context);
+        if (audioDest) return audioDest;
+    }
+
+    SEL selectionContextSel = NSSelectorFromString(@"selectionContext");
+    if (timeline && [timeline respondsToSelector:selectionContextSel]) {
+        id context = ((id (*)(id, SEL))objc_msgSend)(timeline, selectionContextSel);
+        id audioDest = SpliceKit_getAudioDestFromContext(context);
+        if (audioDest) return audioDest;
+    }
+
+    id playerModule = SpliceKit_getPlayerModule();
+    if (playerModule && [playerModule respondsToSelector:contextSel]) {
+        id context = ((id (*)(id, SEL))objc_msgSend)(playerModule, contextSel);
+        id audioDest = SpliceKit_getAudioDestFromContext(context);
+        if (audioDest) return audioDest;
+    }
+
+    id compareViewer = SpliceKit_getCompareViewerContainer();
+    id compareViewerContext = SpliceKit_getContextFromPlayerContainer(compareViewer);
+    id compareViewerAudioDest = SpliceKit_getAudioDestFromContext(compareViewerContext);
+    if (compareViewerAudioDest) return compareViewerAudioDest;
+
+    id fallbackContext = SpliceKit_getPlaybackContext();
+    id fallbackAudioDest = SpliceKit_getAudioDestFromContext(fallbackContext);
+    if (fallbackAudioDest) return fallbackAudioDest;
+
     return nil;
 }
 
@@ -12410,17 +12581,21 @@ BOOL SpliceKit_removeChannelKeyframes(id channel) {
     return NO;
 }
 
-BOOL SpliceKit_setChannelValueAtTime(id channel, double value, SpliceKit_CMTime time) {
+static BOOL SpliceKit_setChannelValueAtTimeWithOptions(id channel, double value, SpliceKit_CMTime time, unsigned int options) {
     if (!channel) return NO;
     @try {
         SEL sel = NSSelectorFromString(@"setCurveDoubleValue:atTime:options:");
         if ([channel respondsToSelector:sel]) {
             ((void (*)(id, SEL, double, SpliceKit_CMTime, unsigned int))objc_msgSend)(
-                channel, sel, value, time, 0);
+                channel, sel, value, time, options);
             return YES;
         }
     } @catch (NSException *e) {}
     return NO;
+}
+
+BOOL SpliceKit_setChannelValueAtTime(id channel, double value, SpliceKit_CMTime time) {
+    return SpliceKit_setChannelValueAtTimeWithOptions(channel, value, time, 0);
 }
 
 // Helper: set a double on a channel
@@ -13005,6 +13180,42 @@ static id SpliceKit_getClipEffectStack(id clip) {
 static SpliceKit_CMTime sMixerPlayheadTime = {0, 0, 17, 0}; // default: kCMTimeIndefinite
 static id sMixerContainer = nil; // primaryObject for containerToLocalTime conversion
 
+static BOOL SpliceKit_refreshMixerTimelineState(void) {
+    id timeline = SpliceKit_getActiveTimelineModule();
+    if (!timeline) return NO;
+
+    id sequence = nil;
+    @try {
+        SEL seqSel = @selector(sequence);
+        if ([timeline respondsToSelector:seqSel]) {
+            sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, seqSel);
+        }
+    } @catch (NSException *e) {}
+    if (!sequence) return NO;
+
+    SpliceKit_CMTime playhead = {0, 1, 0, 0};
+    @try {
+        SEL playheadSel = @selector(playheadTime);
+        if ([timeline respondsToSelector:playheadSel]) {
+            playhead = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(timeline, playheadSel);
+        }
+    } @catch (NSException *e) {}
+
+    id primaryObj = nil;
+    @try {
+        SEL primarySel = @selector(primaryObject);
+        if ([sequence respondsToSelector:primarySel]) {
+            primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, primarySel);
+        }
+    } @catch (NSException *e) {}
+
+    if (!primaryObj || playhead.timescale <= 0) return NO;
+
+    sMixerPlayheadTime = playhead;
+    sMixerContainer = primaryObj;
+    return YES;
+}
+
 // Convert absolute timeline time to clip-local time for keyframe reads
 static SpliceKit_CMTime SpliceKit_clipLocalTime(id clip, SpliceKit_CMTime absTime, id container) {
     if (!clip || !container) return absTime;
@@ -13018,10 +13229,11 @@ static SpliceKit_CMTime SpliceKit_clipLocalTime(id clip, SpliceKit_CMTime absTim
     return absTime;
 }
 
-// Write one automation point to the mixer's volume channel at the current playhead.
-// mixer.getState seeds the shared playhead/container state used for local-time conversion.
+// Write one automation point to the mixer's volume channel at the live playhead.
+// The current timeline state is refreshed here so drag writes do not depend on UI poll cadence.
 BOOL SpliceKit_mixerWriteAutomationPoint(id clip, id channel, double value) {
-    if (!clip || !channel || !sMixerContainer || sMixerPlayheadTime.timescale <= 0) return NO;
+    if (!clip || !channel) return NO;
+    if (!SpliceKit_refreshMixerTimelineState()) return NO;
 
     SpliceKit_CMTime localTime = SpliceKit_clipLocalTime(clip, sMixerPlayheadTime, sMixerContainer);
     BOOL beganOperation = NO;
@@ -13034,7 +13246,10 @@ BOOL SpliceKit_mixerWriteAutomationPoint(id clip, id channel, double value) {
         }
     } @catch (NSException *e) {}
 
-    BOOL ok = SpliceKit_setChannelValueAtTime(channel, value, localTime);
+    // Match FCP's inspector/slider behavior: read current value first, then write
+    // a timed curve value with the auto-keyframe option enabled.
+    (void)SpliceKit_channelValueAtTime(channel, localTime);
+    BOOL ok = SpliceKit_setChannelValueAtTimeWithOptions(channel, value, localTime, 1);
 
     @try {
         SEL endSel = NSSelectorFromString(@"operationEnd");
@@ -13512,21 +13727,14 @@ NSDictionary *SpliceKit_handleMixerGetState(NSDictionary *params) {
                     Ivar mrIvar = mlc ? class_getInstanceVariable(mlc, "_maskRatio") : NULL;
                     if (mlc && mrIvar) {
                         ptrdiff_t off = ivar_getOffset(mrIvar);
-                        __block double maxPeak = 0;
-
-                        // Recursively search CALayer trees for PEMeterLayer instances
-                        void (^__block searchLayers)(CALayer *) = ^(CALayer *layer) {
-                            if ([layer isKindOfClass:mlc]) {
-                                double r = *(double *)((char *)(__bridge void *)layer + off);
-                                if (r > maxPeak) maxPeak = r;
-                            }
-                            for (CALayer *sub in layer.sublayers) searchLayers(sub);
-                        };
+                        double maxPeak = 0;
 
                         for (NSWindow *win in [NSApp windows]) {
                             if (!win.contentView) continue;
                             CALayer *rootLayer = win.contentView.layer;
-                            if (rootLayer) searchLayers(rootLayer);
+                            if (rootLayer) {
+                                SpliceKit_searchLayerTreeForMeterPeak(rootLayer, mlc, off, &maxPeak);
+                            }
                             if (maxPeak > 0.001) break; // Found active meters
                         }
 
@@ -13545,7 +13753,39 @@ NSDictionary *SpliceKit_handleMixerGetState(NSDictionary *params) {
                 }
             } @catch (NSException *e) {}
 
-            result = @{
+            NSMutableDictionary *masterFader = nil;
+            @try {
+                id audioDest = SpliceKit_getMasterAudioDest();
+                SEL outputVolumeSel = NSSelectorFromString(@"outputVolume");
+                if (audioDest && [audioDest respondsToSelector:outputVolumeSel]) {
+                    double masterLinear = ((float (*)(id, SEL))objc_msgSend)(audioDest, outputVolumeSel);
+                    if (!isfinite(masterLinear) || masterLinear < 0.0) masterLinear = 0.0;
+                    if (masterLinear > 1.0) masterLinear = 1.0;
+
+                    double masterDB = (masterLinear > 0.000001) ? 20.0 * log10(masterLinear) : -96.0;
+                    if (!isfinite(masterDB) || masterDB < -96.0) masterDB = -96.0;
+
+                    double masterPeak = 0.0;
+                    for (NSDictionary *fader in indexed) {
+                        double peak = [fader[@"meterPeak"] doubleValue];
+                        if (peak > masterPeak) masterPeak = peak;
+                    }
+
+                    masterFader = [@{
+                        @"handle": SpliceKit_storeHandle(audioDest) ?: @"",
+                        @"name": @"Playback",
+                        @"role": @"Master",
+                        @"volumeLinear": @(masterLinear),
+                        @"volumeDB": @(masterDB),
+                        @"minDB": @(-96.0),
+                        @"maxDB": @(0.0),
+                        @"meterPeak": @(masterPeak),
+                        @"playing": @(transportPlaying)
+                    } mutableCopy];
+                }
+            } @catch (NSException *e) {}
+
+            NSMutableDictionary *payload = [@{
                 @"playheadSeconds": @(playheadSec),
                 @"playheadTime": SpliceKit_serializeCMTime(playhead),
                 @"isPlaying": @(transportPlaying),
@@ -13555,7 +13795,9 @@ NSDictionary *SpliceKit_handleMixerGetState(NSDictionary *params) {
                 @"count": @(indexed.count),
                 @"totalRoles": @(roleOrder.count),
                 @"roles": [roleOrder array]
-            };
+            } mutableCopy];
+            if (masterFader) payload[@"masterFader"] = masterFader;
+            result = payload;
         } @catch (NSException *e) {
             result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
         }
@@ -13616,6 +13858,64 @@ static NSDictionary *SpliceKit_handleMixerSetVolume(NSDictionary *params) {
             } else {
                 result = @{@"error": @"Failed to set channel value"};
             }
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+    return result;
+}
+
+// mixer.setMasterVolume — set the playback/output master level
+static NSDictionary *SpliceKit_handleMixerSetMasterVolume(NSDictionary *params) {
+    NSNumber *dbVal = params[@"volumeDB"];
+    NSNumber *linearVal = params[@"volumeLinear"];
+    if (!dbVal && !linearVal) return @{@"error": @"volumeDB or volumeLinear parameter required"};
+
+    double linear;
+    if (linearVal) {
+        linear = [linearVal doubleValue];
+    } else {
+        double db = [dbVal doubleValue];
+        linear = (db <= -96.0) ? 0.0 : pow(10.0, db / 20.0);
+    }
+
+    if (!isfinite(linear)) linear = 0.0;
+    if (linear < 0.0) linear = 0.0;
+    if (linear > 1.0) linear = 1.0;
+
+    __block NSDictionary *result = nil;
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            id audioDest = SpliceKit_getMasterAudioDest();
+            if (!audioDest) {
+                result = @{@"error": @"No master audio output found"};
+                return;
+            }
+
+            SEL setVolumeSel = NSSelectorFromString(@"setOutputVolume:");
+            SEL outputVolumeSel = NSSelectorFromString(@"outputVolume");
+            if (![audioDest respondsToSelector:setVolumeSel] || ![audioDest respondsToSelector:outputVolumeSel]) {
+                result = @{@"error": @"Master audio destination does not expose volume controls"};
+                return;
+            }
+
+            ((BOOL (*)(id, SEL, float))objc_msgSend)(audioDest, setVolumeSel, (float)linear);
+
+            double readback = ((float (*)(id, SEL))objc_msgSend)(audioDest, outputVolumeSel);
+            if (!isfinite(readback) || readback < 0.0) readback = 0.0;
+            if (readback > 1.0) readback = 1.0;
+
+            double readbackDB = (readback > 0.000001) ? 20.0 * log10(readback) : -96.0;
+            if (!isfinite(readbackDB) || readbackDB < -96.0) readbackDB = -96.0;
+
+            result = @{
+                @"ok": @YES,
+                @"handle": SpliceKit_storeHandle(audioDest) ?: @"",
+                @"volumeLinear": @(readback),
+                @"volumeDB": @(readbackDB),
+                @"minDB": @(-96.0),
+                @"maxDB": @(0.0)
+            };
         } @catch (NSException *e) {
             result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
         }
@@ -20424,6 +20724,8 @@ NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleMixerGetState(params);
     } else if ([method isEqualToString:@"mixer.setVolume"]) {
         result = SpliceKit_handleMixerSetVolume(params);
+    } else if ([method isEqualToString:@"mixer.setMasterVolume"]) {
+        result = SpliceKit_handleMixerSetMasterVolume(params);
     } else if ([method isEqualToString:@"mixer.volumeBegin"]) {
         result = SpliceKit_handleMixerVolumeBegin(params);
     } else if ([method isEqualToString:@"mixer.volumeEnd"]) {

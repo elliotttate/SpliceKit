@@ -1161,6 +1161,37 @@ typedef NS_ENUM(NSInteger, SBDragMode) {
 static BOOL sSectionsBarInstalled = NO;
 static NSPanel *sSectionsPanel = nil;
 
+static BOOL SpliceKit_findTimelineContextInView(NSView *view,
+                                                NSInteger depth,
+                                                NSView **timelineViewOut,
+                                                NSClipView **clipViewOut,
+                                                NSView **scrollViewOut) {
+    if (!view || depth > 20) return NO;
+
+    NSString *className = NSStringFromClass([view class]);
+    if ([className isEqualToString:@"FFProTimelineView"]) {
+        if (timelineViewOut) *timelineViewOut = view;
+        if ([view.superview isKindOfClass:[NSClipView class]]) {
+            NSClipView *clipView = (NSClipView *)view.superview;
+            if (clipViewOut) *clipViewOut = clipView;
+            if (scrollViewOut) *scrollViewOut = clipView.superview;
+        }
+        return YES;
+    }
+
+    for (NSView *subview in view.subviews) {
+        if (SpliceKit_findTimelineContextInView(subview,
+                                                depth + 1,
+                                                timelineViewOut,
+                                                clipViewOut,
+                                                scrollViewOut)) {
+            return YES;
+        }
+    }
+
+    return NO;
+}
+
 static void SpliceKit_updateSectionsPanelPosition(void) {
     if (!sSectionsPanel || !sSectionsBarInstalled) return;
 
@@ -1174,19 +1205,12 @@ static void SpliceKit_updateSectionsPanelPosition(void) {
     if (!parentWindow) return;
 
     // Find the scroll view containing the timeline
-    __block NSView *scrollView = nil;
-    void (^__block find)(NSView *, int) = ^(NSView *view, int depth) {
-        if (scrollView || depth > 20) return;
-        NSString *cls = NSStringFromClass([view class]);
-        if ([cls isEqualToString:@"FFProTimelineView"]) {
-            if ([view.superview isKindOfClass:[NSClipView class]]) {
-                scrollView = view.superview.superview; // LKScrollView
-            }
-            return;
-        }
-        for (NSView *sub in view.subviews) find(sub, depth + 1);
-    };
-    find(parentWindow.contentView, 0);
+    NSView *scrollView = nil;
+    SpliceKit_findTimelineContextInView(parentWindow.contentView,
+                                        0,
+                                        NULL,
+                                        NULL,
+                                        &scrollView);
     if (!scrollView) return;
 
     // Position the panel at the top of the scroll view in screen coordinates
@@ -1219,24 +1243,14 @@ static void SpliceKit_installSectionsBar(void) {
         }
 
         // Find FFProTimelineView
-        __block NSView *timelineView = nil;
-        __block NSClipView *clipView = nil;
-        __block NSView *scrollView = nil;
-
-        void (^__block findTimeline)(NSView *, int) = ^(NSView *view, int depth) {
-            if (timelineView || depth > 20) return;
-            NSString *cls = NSStringFromClass([view class]);
-            if ([cls isEqualToString:@"FFProTimelineView"]) {
-                timelineView = view;
-                if ([view.superview isKindOfClass:[NSClipView class]]) {
-                    clipView = (NSClipView *)view.superview;
-                    scrollView = clipView.superview;
-                }
-                return;
-            }
-            for (NSView *sub in view.subviews) findTimeline(sub, depth + 1);
-        };
-        findTimeline(parentWindow.contentView, 0);
+        NSView *timelineView = nil;
+        NSClipView *clipView = nil;
+        NSView *scrollView = nil;
+        SpliceKit_findTimelineContextInView(parentWindow.contentView,
+                                            0,
+                                            &timelineView,
+                                            &clipView,
+                                            &scrollView);
 
         if (!timelineView || !scrollView) {
             SpliceKit_log(@"[Sections] FFProTimelineView not found");
