@@ -2752,6 +2752,21 @@ static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
 // point — you'll get nil back from objc_getClass for anything in Flexo.framework.
 //
 
+// macOS 26 (Darwin 25) restructured several private FCP classes so a
+// handful of swizzles and class lookups crash at `appDidLaunch` time.
+// Track which host we are running on so we can skip the offending
+// install functions until a proper fix lands upstream.
+// See GitHub issue #50 for the bisection details.
+static BOOL SpliceKit_isMacOS26OrLater(void) {
+    static BOOL result = NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSOperatingSystemVersion v = [[NSProcessInfo processInfo] operatingSystemVersion];
+        result = (v.majorVersion >= 26);
+    });
+    return result;
+}
+
 static void SpliceKit_appDidLaunch(void) {
     SpliceKit_log(@"================================================");
     SpliceKit_log(@"App launched. Starting control server...");
@@ -2760,11 +2775,19 @@ static void SpliceKit_appDidLaunch(void) {
     // Run compatibility check now that all frameworks are loaded
     SpliceKit_checkCompatibility();
 
+    if (SpliceKit_isMacOS26OrLater()) {
+        SpliceKit_log(@"[compat] macOS 26+ detected — some features disabled (see issue #50)");
+    }
+
     // Install focused editor routing before commands and menus start querying
     // activeEditorContainer, so the secondary timeline can participate in the
     // normal responder path.
-    SpliceKit_installDualTimeline();
-    SpliceKit_installDualTimelineCrossWindowDrag();
+    if (!SpliceKit_isMacOS26OrLater()) {
+        SpliceKit_installDualTimeline();
+        SpliceKit_installDualTimelineCrossWindowDrag();
+    } else {
+        SpliceKit_log(@"[DualTimeline] Skipped on macOS 26+ (class restructure — issue #50)");
+    }
 
     // Count total loaded classes
     unsigned int classCount = 0;
@@ -2784,7 +2807,11 @@ static void SpliceKit_appDidLaunch(void) {
 
     // Install effect-drag-as-adjustment-clip swizzle (allows dragging effects
     // to empty timeline space to create adjustment clips)
-    SpliceKit_installEffectDragAsAdjustmentClip();
+    if (!SpliceKit_isMacOS26OrLater()) {
+        SpliceKit_installEffectDragAsAdjustmentClip();
+    } else {
+        SpliceKit_log(@"[EffectDrag] Skipped on macOS 26+ (block dispatch crash — issue #50)");
+    }
 
     // Install viewer pinch-to-zoom if previously enabled
     if (SpliceKit_isViewerPinchZoomEnabled()) {
@@ -2847,7 +2874,11 @@ static void SpliceKit_appDidLaunch(void) {
     SpliceKit_installDebugMenuBar();
 
     // Install right-click context menu for structure block color changes
-    SpliceKit_installStructureBlockContextMenu();
+    if (!SpliceKit_isMacOS26OrLater()) {
+        SpliceKit_installStructureBlockContextMenu();
+    } else {
+        SpliceKit_log(@"[Structure] Skipped on macOS 26+ (TLKTimelineView restructure — issue #50)");
+    }
 
     // Start the control server on a background thread
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -2855,10 +2886,14 @@ static void SpliceKit_appDidLaunch(void) {
     });
 
     // Initialize Lua scripting VM
-    SpliceKitLua_initialize();
-
-    // Load plugins from ~/Library/Application Support/SpliceKit/plugins/
-    SpliceKitPlugins_loadAll();
+    if (!SpliceKit_isMacOS26OrLater()) {
+        SpliceKitLua_initialize();
+        // Load plugins from ~/Library/Application Support/SpliceKit/plugins/
+        SpliceKitPlugins_loadAll();
+    } else {
+        SpliceKit_log(@"[Lua] VM init skipped on macOS 26+ (issue #50)");
+        SpliceKit_log(@"[Plugins] Load skipped on macOS 26+ (depends on Lua VM)");
+    }
 }
 
 #pragma mark - Crash Prevention & Startup Fixes
