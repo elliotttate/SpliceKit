@@ -62,8 +62,21 @@ static NSDictionary *SpliceKit_sendAppAction(NSString *selectorName);
 static NSDictionary *SpliceKit_sendPlayerAction(NSString *selectorName);
 id SpliceKit_getActiveTimelineModule(void);
 static id SpliceKit_getEditorContainer(void);
+static id SpliceKit_getSelectedTimelineItem(id timeline);
+static id SpliceKit_getClipEffectStack(id clip);
 static id SpliceKit_getSelectedClipEffectStack(id timeline, id *outClip);
 static id SpliceKit_getClipAudioEffectStack(id clip);
+static void SpliceKit_addInspectableKeyframeTargets(id owner,
+                                                    NSMutableArray *targets,
+                                                    NSMutableSet<NSString *> *seenTargets,
+                                                    NSString *ownerLabel);
+static NSArray *SpliceKit_childClipsForKeyframeTraversal(id clip);
+static void SpliceKit_collectKeyframeTargetsForClipRecursive(id clip,
+                                                            NSMutableArray *targets,
+                                                            NSMutableSet<NSString *> *seenTargets,
+                                                            NSMutableSet<NSString *> *seenClips,
+                                                            NSString *clipLabel);
+static NSArray<id> *SpliceKit_keyframeTargetsForClip(id clip);
 static NSDictionary *SpliceKit_removeAllKeyframesFromEffectStack(id effectStack, NSString *actionName);
 
 static void SpliceKit_searchLayerTreeForMeterPeak(CALayer *layer,
@@ -2732,8 +2745,7 @@ NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
                 }
 
                 BOOL autoSelected = NO;
-                id clip = nil;
-                id effectStack = SpliceKit_getSelectedClipEffectStack(timelineModule, &clip);
+                id clip = SpliceKit_getSelectedTimelineItem(timelineModule);
                 if (!clip) {
                     SEL selectAtPlayhead = NSSelectorFromString(@"selectClipAtPlayhead:");
                     if ([timelineModule respondsToSelector:selectAtPlayhead]) {
@@ -2744,7 +2756,7 @@ NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
                     autoSelected = YES;
                     [[NSRunLoop currentRunLoop] runUntilDate:
                         [NSDate dateWithTimeIntervalSinceNow:0.05]];
-                    effectStack = SpliceKit_getSelectedClipEffectStack(timelineModule, &clip);
+                    clip = SpliceKit_getSelectedTimelineItem(timelineModule);
                 }
 
                 if (!clip) {
@@ -2752,19 +2764,17 @@ NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
                     return;
                 }
 
-                id audioEffectStack = SpliceKit_getClipAudioEffectStack(clip);
-                NSDictionary *videoResult = SpliceKit_removeAllKeyframesFromEffectStack(
-                    effectStack, @"Remove All Keyframes");
-                NSDictionary *audioResult = nil;
-                if (audioEffectStack && audioEffectStack != effectStack) {
-                    audioResult = SpliceKit_removeAllKeyframesFromEffectStack(
-                        audioEffectStack, @"Remove All Keyframes");
+                NSUInteger channelsCleared = 0;
+                NSUInteger keyframesRemoved = 0;
+                NSMutableArray *targetResults = [NSMutableArray array];
+                for (id target in SpliceKit_keyframeTargetsForClip(clip)) {
+                    NSDictionary *targetResult = SpliceKit_removeAllKeyframesFromEffectStack(
+                        target, @"Remove All Keyframes");
+                    if (!targetResult) continue;
+                    channelsCleared += [targetResult[@"channelsCleared"] unsignedIntegerValue];
+                    keyframesRemoved += [targetResult[@"keyframesRemoved"] unsignedIntegerValue];
+                    [targetResults addObject:targetResult];
                 }
-
-                NSUInteger channelsCleared = [videoResult[@"channelsCleared"] unsignedIntegerValue]
-                    + [audioResult[@"channelsCleared"] unsignedIntegerValue];
-                NSUInteger keyframesRemoved = [videoResult[@"keyframesRemoved"] unsignedIntegerValue]
-                    + [audioResult[@"keyframesRemoved"] unsignedIntegerValue];
 
                 NSMutableDictionary *payload = [@{
                     @"action": @"removeAllKeyframesFromClip",
@@ -2772,20 +2782,24 @@ NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
                     @"channelsCleared": @(channelsCleared),
                     @"keyframesRemoved": @(keyframesRemoved),
                     @"autoSelected": @(autoSelected),
-                    @"video": videoResult ?: @{},
                 } mutableCopy];
 
-                if (audioResult) payload[@"audio"] = audioResult;
+                if (targetResults.count > 0) payload[@"targets"] = targetResults;
                 @try {
                     if ([clip respondsToSelector:@selector(displayName)]) {
                         id name = ((id (*)(id, SEL))objc_msgSend)(clip, @selector(displayName));
                         if (name) payload[@"clipName"] = [name description];
                     }
                 } @catch (NSException *e) {}
+                payload[@"selectedClass"] = NSStringFromClass([clip class]);
 
                 if (channelsCleared == 0) {
                     payload[@"note"] = @"No keyframed channels found on the selected clip";
                 }
+                SpliceKit_log(@"[Keyframes] removeAllKeyframesFromClip class=%@ channels=%lu keyframes=%lu",
+                              NSStringFromClass([clip class]),
+                              (unsigned long)channelsCleared,
+                              (unsigned long)keyframesRemoved);
                 clearResult = payload;
             } @catch (NSException *e) {
                 clearResult = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
@@ -12475,7 +12489,7 @@ static NSDictionary *SpliceKit_handleMenuList(NSDictionary *params) {
 //
 
 // Get the selected clip's effect stack, creating it if needed
-static id SpliceKit_getSelectedClipEffectStack(id timeline, id *outClip) {
+static id SpliceKit_getSelectedTimelineItem(id timeline) {
     if (!timeline) return nil;
 
     // Get selected items
@@ -12485,9 +12499,21 @@ static id SpliceKit_getSelectedClipEffectStack(id timeline, id *outClip) {
         id r = ((id (*)(id, SEL, BOOL, BOOL))objc_msgSend)(timeline, selSel, NO, YES);
         if ([r isKindOfClass:[NSArray class]]) selected = (NSArray *)r;
     }
+    if ((!selected || selected.count == 0) && [timeline respondsToSelector:@selector(selectedItems)]) {
+        id r = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(selectedItems));
+        if ([r isKindOfClass:[NSArray class]]) selected = (NSArray *)r;
+    }
     if (!selected || selected.count == 0) return nil;
 
-    id clip = selected[0];
+    return selected[0];
+}
+
+static id SpliceKit_getSelectedClipEffectStack(id timeline, id *outClip) {
+    if (!timeline) return nil;
+
+    id clip = SpliceKit_getSelectedTimelineItem(timeline);
+    if (!clip) return nil;
+
     if (outClip) *outClip = clip;
 
     // If clip is a collection (compound/storyline), get the first media component's effectStack
@@ -12522,11 +12548,194 @@ static id SpliceKit_getClipAudioEffectStack(id clip) {
     return nil;
 }
 
+static void SpliceKit_addUniqueKeyframeTarget(id target,
+                                              NSMutableArray *targets,
+                                              NSMutableSet<NSString *> *seen,
+                                              NSString *label) {
+    if (!target) return;
+    NSString *key = [NSString stringWithFormat:@"%p", (__bridge void *)target];
+    if ([seen containsObject:key]) return;
+    [seen addObject:key];
+    NSMutableDictionary *entry = [NSMutableDictionary dictionaryWithObject:target forKey:@"target"];
+    if (label.length > 0) entry[@"label"] = label;
+    [targets addObject:entry];
+}
+
+static void SpliceKit_addKeyframeTargetsFromOwner(id owner,
+                                                  NSArray<NSString *> *selectors,
+                                                  NSMutableArray *targets,
+                                                  NSMutableSet<NSString *> *seen,
+                                                  NSString *ownerLabel) {
+    if (!owner) return;
+    for (NSString *selName in selectors) {
+        @try {
+            SEL sel = NSSelectorFromString(selName);
+            if (![owner respondsToSelector:sel]) continue;
+            id value = ((id (*)(id, SEL))objc_msgSend)(owner, sel);
+            if (!value) continue;
+            NSString *label = ownerLabel.length > 0
+                ? [NSString stringWithFormat:@"%@.%@", ownerLabel, selName]
+                : selName;
+            SpliceKit_addUniqueKeyframeTarget(value, targets, seen, label);
+        } @catch (NSException *e) {}
+    }
+}
+
+static void SpliceKit_addInspectableKeyframeTargets(id owner,
+                                                    NSMutableArray *targets,
+                                                    NSMutableSet<NSString *> *seenTargets,
+                                                    NSString *ownerLabel) {
+    if (!owner) return;
+
+    @try {
+        SEL idsSel = NSSelectorFromString(@"inspectorTabIdentifiers");
+        SEL channelsSel = NSSelectorFromString(@"inspectableChannelsForIdentifier:");
+        if (![owner respondsToSelector:idsSel] || ![owner respondsToSelector:channelsSel]) return;
+
+        id identifiers = ((id (*)(id, SEL))objc_msgSend)(owner, idsSel);
+        if (![identifiers isKindOfClass:[NSArray class]]) return;
+
+        for (id identifier in (NSArray *)identifiers) {
+            if (!identifier) continue;
+            id inspectable = ((id (*)(id, SEL, id))objc_msgSend)(owner, channelsSel, identifier);
+            if ([inspectable isKindOfClass:[NSArray class]]) {
+                NSUInteger idx = 0;
+                for (id channel in (NSArray *)inspectable) {
+                    NSString *label = [NSString stringWithFormat:@"%@.inspectable[%@][%lu]",
+                                       ownerLabel ?: @"clip",
+                                       [identifier description],
+                                       (unsigned long)idx++];
+                    SpliceKit_addUniqueKeyframeTarget(channel, targets, seenTargets, label);
+                }
+            } else if (inspectable) {
+                NSString *label = [NSString stringWithFormat:@"%@.inspectable[%@]",
+                                   ownerLabel ?: @"clip",
+                                   [identifier description]];
+                SpliceKit_addUniqueKeyframeTarget(inspectable, targets, seenTargets, label);
+            }
+        }
+    } @catch (NSException *e) {}
+}
+
+static NSArray *SpliceKit_childClipsForKeyframeTraversal(id clip) {
+    if (!clip) return @[];
+
+    for (NSString *selName in @[@"descendentCompositedObjects", @"containedItems", @"allContainedItems"]) {
+        @try {
+            SEL sel = NSSelectorFromString(selName);
+            if (![clip respondsToSelector:sel]) continue;
+            id value = ((id (*)(id, SEL))objc_msgSend)(clip, sel);
+            if ([value isKindOfClass:[NSArray class]]) return value;
+            if ([value isKindOfClass:[NSSet class]]) return [(NSSet *)value allObjects];
+        } @catch (NSException *e) {}
+    }
+    return @[];
+}
+
+static void SpliceKit_collectKeyframeTargetsForClipRecursive(id clip,
+                                                            NSMutableArray *targets,
+                                                            NSMutableSet<NSString *> *seenTargets,
+                                                            NSMutableSet<NSString *> *seenClips,
+                                                            NSString *clipLabel) {
+    if (!clip) return;
+
+    NSString *clipKey = [NSString stringWithFormat:@"%p", (__bridge void *)clip];
+    if ([seenClips containsObject:clipKey]) return;
+    [seenClips addObject:clipKey];
+
+    NSString *baseLabel = clipLabel.length > 0 ? clipLabel : @"clip";
+
+    id videoTarget = SpliceKit_effectDragVideoEffectsTarget(clip);
+    SpliceKit_addUniqueKeyframeTarget(
+        videoTarget, targets, seenTargets, [baseLabel stringByAppendingString:@".videoEffects"]);
+
+    id clipEffectStack = SpliceKit_getClipEffectStack(clip);
+    SpliceKit_addUniqueKeyframeTarget(
+        clipEffectStack, targets, seenTargets, [baseLabel stringByAppendingString:@".effectStack"]);
+
+    id clipAudioEffectStack = SpliceKit_getClipAudioEffectStack(clip);
+    SpliceKit_addUniqueKeyframeTarget(
+        clipAudioEffectStack,
+        targets,
+        seenTargets,
+        [baseLabel stringByAppendingString:@".audioEffectsForIdentifier"]);
+
+    SpliceKit_addKeyframeTargetsFromOwner(
+        clip,
+        @[@"videoEffects", @"audioEffects", @"localAudioEffects", @"effectStack"],
+        targets,
+        seenTargets,
+        baseLabel);
+    SpliceKit_addInspectableKeyframeTargets(clip, targets, seenTargets, baseLabel);
+
+    id toolObj = nil;
+    @try {
+        SEL toolSel = NSSelectorFromString(@"representedToolObject");
+        if ([clip respondsToSelector:toolSel]) {
+            toolObj = ((id (*)(id, SEL))objc_msgSend)(clip, toolSel);
+        }
+    } @catch (NSException *e) {}
+    if (toolObj && toolObj != clip) {
+        SpliceKit_addKeyframeTargetsFromOwner(
+            toolObj,
+            @[@"videoEffects", @"audioEffects", @"localAudioEffects", @"effectStack"],
+            targets,
+            seenTargets,
+            [baseLabel stringByAppendingString:@".representedToolObject"]);
+        SpliceKit_addInspectableKeyframeTargets(
+            toolObj,
+            targets,
+            seenTargets,
+            [baseLabel stringByAppendingString:@".representedToolObject"]);
+    }
+
+    NSArray *children = SpliceKit_childClipsForKeyframeTraversal(clip);
+    for (NSUInteger idx = 0; idx < children.count; idx++) {
+        id child = children[idx];
+        NSString *childLabel = [NSString stringWithFormat:@"%@.containedItems[%lu]",
+                                baseLabel,
+                                (unsigned long)idx];
+        SpliceKit_collectKeyframeTargetsForClipRecursive(
+            child, targets, seenTargets, seenClips, childLabel);
+    }
+}
+
+static NSArray<id> *SpliceKit_keyframeTargetsForClip(id clip) {
+    NSMutableArray *entries = [NSMutableArray array];
+    NSMutableSet<NSString *> *seenTargets = [NSMutableSet set];
+    NSMutableSet<NSString *> *seenClips = [NSMutableSet set];
+    if (!clip) return @[];
+
+    SpliceKit_collectKeyframeTargetsForClipRecursive(
+        clip, entries, seenTargets, seenClips, @"clip");
+
+    NSMutableArray *targets = [NSMutableArray arrayWithCapacity:entries.count];
+    for (NSDictionary *entry in entries) {
+        id target = entry[@"target"];
+        if (!target) continue;
+        [targets addObject:target];
+    }
+    return targets;
+}
+
 static void SpliceKit_collectKeyframedChannelsFromNode(id obj,
                                                        NSMutableArray *channels,
                                                        NSMutableSet<NSString *> *seen,
                                                        NSInteger depth) {
     if (!obj || depth > 10) return;
+
+    if ([obj isKindOfClass:[NSArray class]]) {
+        for (id child in (NSArray *)obj) {
+            SpliceKit_collectKeyframedChannelsFromNode(child, channels, seen, depth + 1);
+        }
+        return;
+    }
+    if ([obj isKindOfClass:[NSSet class]]) {
+        for (id child in [(NSSet *)obj allObjects]) {
+            SpliceKit_collectKeyframedChannelsFromNode(child, channels, seen, depth + 1);
+        }
+        return;
+    }
 
     NSString *nodeKey = [NSString stringWithFormat:@"%p", (__bridge void *)obj];
     if ([seen containsObject:nodeKey]) return;
@@ -12540,7 +12749,7 @@ static void SpliceKit_collectKeyframedChannelsFromNode(id obj,
         }
     } @catch (NSException *e) {}
 
-    NSArray<NSString *> *arraySelectors = @[@"channels", @"visibleEffects"];
+    NSArray<NSString *> *arraySelectors = @[@"channels", @"children", @"visibleEffects"];
     for (NSString *selName in arraySelectors) {
         @try {
             SEL sel = NSSelectorFromString(selName);
@@ -12554,6 +12763,12 @@ static void SpliceKit_collectKeyframedChannelsFromNode(id obj,
     }
 
     NSArray<NSString *> *childSelectors = @[
+        @"rootChannel",
+        @"effectChannels",
+        @"propertyChannels",
+        @"objectChannels",
+        @"stackPropertyChannels",
+        @"audioPropertyChannels",
         @"intrinsicChannels",
         @"intrinsicCompositeEffect",
         @"xform3DEffect",
@@ -20068,6 +20283,84 @@ static NSDictionary *SpliceKit_handleDebugThreads(NSDictionary *params) {
 // "NSApp.delegate._targetLibrary.displayName" and returns the result.
 //
 
+static id SpliceKit_debugEvalInvokeZeroArgSelector(id target, SEL selector, NSString **errorOut) {
+    if (!target || !selector) {
+        if (errorOut) *errorOut = @"Missing target or selector";
+        return nil;
+    }
+
+    NSMethodSignature *sig = [target methodSignatureForSelector:selector];
+    if (!sig) {
+        if (errorOut) {
+            *errorOut = [NSString stringWithFormat:@"%@ has no signature for %@",
+                         NSStringFromClass([target class]), NSStringFromSelector(selector)];
+        }
+        return nil;
+    }
+
+    if (sig.numberOfArguments != 2) {
+        if (errorOut) {
+            *errorOut = [NSString stringWithFormat:@"%@ expects arguments and cannot be used in debug.eval",
+                         NSStringFromSelector(selector)];
+        }
+        return nil;
+    }
+
+    const char *returnType = sig.methodReturnType;
+    switch (returnType[0]) {
+        case '@':
+        case '#':
+            return ((id (*)(id, SEL))objc_msgSend)(target, selector);
+        case 'v':
+            ((void (*)(id, SEL))objc_msgSend)(target, selector);
+            return @"<void>";
+        case 'B':
+            return @(((BOOL (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'c':
+            return @(((char (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'C':
+            return @(((unsigned char (*)(id, SEL))objc_msgSend)(target, selector));
+        case 's':
+            return @(((short (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'S':
+            return @(((unsigned short (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'i':
+            return @(((int (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'I':
+            return @(((unsigned int (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'l':
+            return @(((long (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'L':
+            return @(((unsigned long (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'q':
+            return @(((long long (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'Q':
+            return @(((unsigned long long (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'f':
+            return @(((float (*)(id, SEL))objc_msgSend)(target, selector));
+        case 'd':
+            return @(((double (*)(id, SEL))objc_msgSend)(target, selector));
+        case ':': {
+            SEL value = ((SEL (*)(id, SEL))objc_msgSend)(target, selector);
+            return value ? NSStringFromSelector(value) : @"(null selector)";
+        }
+        case '*': {
+            const char *value = ((const char *(*)(id, SEL))objc_msgSend)(target, selector);
+            return value ? [NSString stringWithUTF8String:value] : @"(null cstring)";
+        }
+        case '^': {
+            void *value = ((void *(*)(id, SEL))objc_msgSend)(target, selector);
+            return [NSString stringWithFormat:@"%p", value];
+        }
+        default:
+            if (errorOut) {
+                *errorOut = [NSString stringWithFormat:@"%@ returns unsupported type '%s' for debug.eval",
+                             NSStringFromSelector(selector), returnType];
+            }
+            return nil;
+    }
+}
+
 // debug.eval - Evaluate an ObjC expression chain in FCP's process
 // {"method":"debug.eval","params":{"expression":"[NSApp delegate]"}}
 // {"method":"debug.eval","params":{"expression":"[[NSApp delegate] _targetLibrary]","storeResult":true}}
@@ -20109,7 +20402,12 @@ static NSDictionary *SpliceKit_handleDebugEval(NSDictionary *params) {
                             break;
                         }
                     } else {
-                        obj = ((id (*)(id, SEL))objc_msgSend)(obj, sel);
+                        NSString *invokeError = nil;
+                        obj = SpliceKit_debugEvalInvokeZeroArgSelector(obj, sel, &invokeError);
+                        if (!obj && invokeError) {
+                            [steps addObject:@{@"step": step, @"error": invokeError}];
+                            break;
+                        }
                     }
                     NSString *desc = obj ? [obj description] : @"nil";
                     if (desc.length > 500) desc = [desc substringToIndex:500];
@@ -20188,7 +20486,12 @@ static NSDictionary *SpliceKit_handleDebugEval(NSDictionary *params) {
 
                 SEL sel = NSSelectorFromString(prop);
                 if ([obj respondsToSelector:sel]) {
-                    obj = ((id (*)(id, SEL))objc_msgSend)(obj, sel);
+                    NSString *invokeError = nil;
+                    obj = SpliceKit_debugEvalInvokeZeroArgSelector(obj, sel, &invokeError);
+                    if (!obj && invokeError) {
+                        result = @{@"error": invokeError};
+                        return;
+                    }
                 } else {
                     @try { obj = [obj valueForKey:prop]; }
                     @catch (NSException *e) {
