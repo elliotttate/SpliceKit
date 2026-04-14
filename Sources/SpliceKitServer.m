@@ -1174,7 +1174,7 @@ NSDictionary *SpliceKit_handleSpineGetItems(NSDictionary *params) {
 // from both the input indices and the output. Only clips are reordered.
 // Helper: get the library document's NSUndoManager.
 // Path: PEAppController -> _targetLibrary -> libraryDocument -> undoManager
-static double SpliceKit_channelValue(id channel);  // forward declaration
+double SpliceKit_channelValue(id channel);  // forward declaration
 
 static id SpliceKit_getUndoManager(void) {
     id app = ((id (*)(id, SEL))objc_msgSend)(
@@ -13515,6 +13515,19 @@ static NSDictionary *SpliceKit_handleMixerSetVolume(NSDictionary *params) {
 
             BOOL ok = SpliceKit_setChannelValue(channel, linear);
             if (ok) {
+                // Notify FCP that effect parameters changed
+                NSString *esHandle = params[@"effectStackHandle"];
+                if (!esHandle) esHandle = params[@"audioEffectStackHandle"];
+                if (esHandle) {
+                    id es = SpliceKit_resolveHandle(esHandle);
+                    if (es) {
+                        SEL sel = NSSelectorFromString(@"postEffectsChangedNotification");
+                        if ([es respondsToSelector:sel]) {
+                            ((void (*)(id, SEL))objc_msgSend)(es, sel);
+                        }
+                    }
+                }
+
                 double readback = SpliceKit_channelValue(channel);
                 result = @{
                     @"ok": @YES,
@@ -13550,11 +13563,11 @@ static NSDictionary *SpliceKit_handleMixerVolumeBegin(NSDictionary *params) {
                 return;
             }
 
-            // Open undo transaction
+            // Open undo transaction (deferUpdates:NO so audio engine sees changes immediately)
             SEL beginSel = NSSelectorFromString(@"actionBegin:animationHint:deferUpdates:");
             if ([effectStack respondsToSelector:beginSel]) {
                 ((void (*)(id, SEL, id, id, BOOL))objc_msgSend)(
-                    effectStack, beginSel, @"Adjust Volume", nil, YES);
+                    effectStack, beginSel, @"Adjust Volume", nil, NO);
             }
 
             // Track this transaction
@@ -13589,6 +13602,11 @@ static NSDictionary *SpliceKit_handleMixerVolumeEnd(NSDictionary *params) {
             if ([effectStack respondsToSelector:endSel]) {
                 ((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(
                     effectStack, endSel, @"Adjust Volume", YES, nil);
+            }
+            // Ensure the final volume is propagated to the audio engine
+            SEL notifySel = NSSelectorFromString(@"postEffectsChangedNotification");
+            if ([effectStack respondsToSelector:notifySel]) {
+                ((void (*)(id, SEL))objc_msgSend)(effectStack, notifySel);
             }
 
             // Remove from tracking
@@ -13644,6 +13662,18 @@ static NSDictionary *SpliceKit_handleMixerSetAllVolumes(NSDictionary *params) {
                     @"volumeLinear": @(readback),
                     @"volumeDB": (readback > 0) ? @(20.0 * log10(readback)) : @(-INFINITY)
                 }];
+            }
+            // Notify FCP that effect parameters changed
+            NSString *esHandle = params[@"effectStackHandle"];
+            if (!esHandle) esHandle = params[@"audioEffectStackHandle"];
+            if (esHandle) {
+                id es = SpliceKit_resolveHandle(esHandle);
+                if (es) {
+                    SEL sel = NSSelectorFromString(@"postEffectsChangedNotification");
+                    if ([es respondsToSelector:sel]) {
+                        ((void (*)(id, SEL))objc_msgSend)(es, sel);
+                    }
+                }
             }
             result = @{@"ok": @YES, @"results": results};
         } @catch (NSException *e) {

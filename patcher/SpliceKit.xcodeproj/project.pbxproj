@@ -205,27 +205,14 @@
 /* Begin PBXShellScriptBuildPhase section */
 		DD0000000000000000000005 /* Build Dylib & Tools */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
-				"$(PROJECT_DIR)/../Sources/SpliceKit.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKit.h",
-				"$(PROJECT_DIR)/../Sources/SpliceKitRuntime.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitSwizzle.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitServer.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptPanel.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitTranscriptPanel.h",
-				"$(PROJECT_DIR)/../Sources/SpliceKitCommandPalette.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitCommandPalette.h",
-				"$(PROJECT_DIR)/../Sources/SpliceKitDebugUI.m",
-				"$(PROJECT_DIR)/../Sources/SpliceKitDebugUI.h",
-				"$(PROJECT_DIR)/../tools/silence-detector.swift",
 			);
 			name = "Build Dylib & Tools";
 			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/SpliceKit_prebuilt/SpliceKit",
-				"$(BUILT_PRODUCTS_DIR)/SpliceKit_prebuilt/silence-detector",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;

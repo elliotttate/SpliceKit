@@ -93,6 +93,7 @@ static const char kMeterRoleUIDKey = 0; // associated object key
 @property (nonatomic, assign) BOOL isActive;
 @property (nonatomic, assign) BOOL isPlaying; // clip with this role is at playhead
 @property (nonatomic, assign) BOOL isDragging;
+@property (nonatomic, assign) double dragStartLinear; // initial value for undo
 @end
 
 @implementation SpliceKitFaderState
@@ -598,19 +599,15 @@ static double sliderPosToDB(double pos) {
 
 - (void)beginVolumeChange:(NSInteger)faderIndex {
     SpliceKitFaderView *fv = self.faderViews[faderIndex];
-    NSString *esHandle = fv.state.audioEffectStackHandle;
-    if (!esHandle) return;
-
-    id effectStack = SpliceKit_resolveHandle(esHandle);
-    if (!effectStack) return;
-
-    @try {
-        SEL beginSel = NSSelectorFromString(@"actionBegin:animationHint:deferUpdates:");
-        if ([effectStack respondsToSelector:beginSel]) {
-            ((void (*)(id, SEL, id, id, BOOL))objc_msgSend)(
-                effectStack, beginSel, @"Adjust Volume", nil, YES);
+    // Save the initial value for undo — no undo transaction opened here so that
+    // postEffectsChangedNotification can propagate immediately during drag.
+    NSString *handle = fv.state.volumeChannelHandle;
+    if (handle) {
+        id channel = SpliceKit_resolveHandle(handle);
+        if (channel) {
+            fv.state.dragStartLinear = SpliceKit_channelValue(channel);
         }
-    } @catch (NSException *e) {}
+    }
 }
 
 - (void)setVolume:(NSInteger)faderIndex db:(double)db {
@@ -626,21 +623,60 @@ static double sliderPosToDB(double pos) {
     if (linear > 3.98) linear = 3.98;
 
     SpliceKit_setChannelValue(channel, linear);
+
+    // Notify FCP that effect parameters changed so the audio engine re-reads them.
+    // beginVolumeChange: sets deferUpdates:NO, so this propagates immediately
+    // during drag rather than being coalesced until actionEnd:.
+    NSString *esHandle = fv.state.audioEffectStackHandle;
+    if (esHandle) {
+        id effectStack = SpliceKit_resolveHandle(esHandle);
+        if (effectStack) {
+            SEL sel = NSSelectorFromString(@"postEffectsChangedNotification");
+            if ([effectStack respondsToSelector:sel]) {
+                ((void (*)(id, SEL))objc_msgSend)(effectStack, sel);
+            }
+        }
+    }
 }
 
 - (void)endVolumeChange:(NSInteger)faderIndex {
     SpliceKitFaderView *fv = self.faderViews[faderIndex];
     NSString *esHandle = fv.state.audioEffectStackHandle;
-    if (!esHandle) return;
+    NSString *chHandle = fv.state.volumeChannelHandle;
+    if (!esHandle || !chHandle) { fv.state.isDragging = NO; return; }
 
     id effectStack = SpliceKit_resolveHandle(esHandle);
-    if (!effectStack) return;
+    id channel = SpliceKit_resolveHandle(chHandle);
+    if (!effectStack || !channel) { fv.state.isDragging = NO; return; }
 
     @try {
+        // Read the final value the user dragged to
+        double finalLinear = SpliceKit_channelValue(channel);
+
+        // Restore the initial value so actionBegin: snapshots the pre-drag state
+        SpliceKit_setChannelValue(channel, fv.state.dragStartLinear);
+
+        // Open undo transaction (captures initial state)
+        SEL beginSel = NSSelectorFromString(@"actionBegin:animationHint:deferUpdates:");
+        if ([effectStack respondsToSelector:beginSel]) {
+            ((void (*)(id, SEL, id, id, BOOL))objc_msgSend)(
+                effectStack, beginSel, @"Adjust Volume", nil, YES);
+        }
+
+        // Apply the final value (undo system records the delta)
+        SpliceKit_setChannelValue(channel, finalLinear);
+
+        // Close undo transaction
         SEL endSel = NSSelectorFromString(@"actionEnd:save:error:");
         if ([effectStack respondsToSelector:endSel]) {
             ((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(
                 effectStack, endSel, @"Adjust Volume", YES, nil);
+        }
+
+        // Final notification to ensure audio engine has the committed value
+        SEL notifySel = NSSelectorFromString(@"postEffectsChangedNotification");
+        if ([effectStack respondsToSelector:notifySel]) {
+            ((void (*)(id, SEL))objc_msgSend)(effectStack, notifySel);
         }
     } @catch (NSException *e) {}
 

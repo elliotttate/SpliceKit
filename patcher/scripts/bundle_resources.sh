@@ -38,10 +38,12 @@ fi
 
 # Copy tools
 mkdir -p "$APP_RESOURCES/tools"
-if [ -f "$PREBUILT/silence-detector" ]; then
-    cp "$PREBUILT/silence-detector" "$APP_RESOURCES/tools/silence-detector"
-    echo "Bundled silence-detector"
-fi
+for tool in silence-detector structure-analyzer SpliceKitMixer; do
+    if [ -f "$PREBUILT/$tool" ]; then
+        cp "$PREBUILT/$tool" "$APP_RESOURCES/tools/$tool"
+        echo "Bundled $tool"
+    fi
+done
 if [ -f "$REPO_DIR/tools/silence-detector.swift" ]; then
     cp "$REPO_DIR/tools/silence-detector.swift" "$APP_RESOURCES/tools/silence-detector.swift"
 fi

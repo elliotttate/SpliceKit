@@ -858,7 +858,7 @@ class PatcherModel: ObservableObject {
                         """)
                     parakeetPkgDir = parakeetCacheDir
                 }
-                let parakeetResult = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
+                _ = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
                 let parakeetBuilt = parakeetPkgDir + "/.build/release/parakeet-transcriber"
                 if FileManager.default.fileExists(atPath: parakeetBuilt) {
                     shell("cp '\(parakeetBuilt)' '\(parakeetBin)'")
