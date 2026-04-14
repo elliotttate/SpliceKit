@@ -13344,80 +13344,124 @@ NSDictionary *SpliceKit_handleMixerGetState(NSDictionary *params) {
                 faderIdx++;
             }
 
-            // Audio metering: read live peak levels from FCP's own PEMeterLayer instances.
-            // FCP's built-in audio meters use PEAudioLayeredMeterView → PEMeterLayer._maskRatio
-            // which stores a normalized 0..1 visual ratio updated at ~15Hz during playback.
-            // We find these layers in the view hierarchy and read directly.
-            double maxPeak = 0;
+            // Audio metering: call FFPlayer.meterAudioLevelsForRole: directly.
+            // The C++ FFAudioPlayer has a metering enable byte at offset 291 that gates
+            // all level reporting. We flip it to 1 so metering works without the Audio
+            // Meters panel being visible. Peak values are returned as linear amplitudes.
             @try {
-                static __weak id sCachedMeterView = nil;
-                id meterView = sCachedMeterView;
-                Class meterViewClass = NSClassFromString(@"PEAudioLayeredMeterView");
+                id player = nil;
+                if ([timeline respondsToSelector:@selector(player)])
+                    player = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(player));
 
-                // Find meter view if not cached (recursive subview search)
-                if (meterViewClass && (!meterView || ![meterView isKindOfClass:meterViewClass])) {
-                    meterView = nil;
-                    for (NSWindow *win in [NSApp windows]) {
-                        if (!win.contentView) continue;
-                        // Recursive block to find view by class
-                        __block id found = nil;
-                        void (^__block searchView)(NSView *) = ^(NSView *view) {
-                            if (found) return;
-                            if ([view isKindOfClass:meterViewClass]) { found = view; return; }
-                            for (NSView *sub in view.subviews) { searchView(sub); if (found) return; }
-                        };
-                        searchView(win.contentView);
-                        if (found) { meterView = found; break; }
-                    }
-                    sCachedMeterView = meterView;
-                }
-
-                if (meterView) {
-                    // Read _maskRatio from PEMeterLayer instances (the instantaneous level, not peak hold).
-                    // _maskRatio = current meter fill ratio (0..1), bounces with audio in real time.
-                    // _peak = peak hold indicator (stays high, decays slowly) — NOT what we want.
-                    NSArray *layers = nil;
-                    @try { layers = [meterView valueForKey:@"meterLayers"]; } @catch (NSException *e) {}
-                    if (!layers) {
-                        @try {
-                            id backingLayer = [(NSView *)meterView layer];
-                            SEL mlSel = NSSelectorFromString(@"meterLayers");
-                            if ([backingLayer respondsToSelector:mlSel])
-                                layers = ((id (*)(id, SEL))objc_msgSend)(backingLayer, mlSel);
-                        } @catch (NSException *e) {}
+                if (player) {
+                    // Enable metering on the C++ FFAudioPlayer (byte at offset 291)
+                    Ivar apIvar = class_getInstanceVariable([player class], "_audioPlayer");
+                    void *audioPlayer = NULL;
+                    uint8_t enableBefore = 0;
+                    uint64_t hooksMapPtr = 0;
+                    if (apIvar) {
+                        audioPlayer = *(void **)((char *)(__bridge void *)player + ivar_getOffset(apIvar));
+                        if (audioPlayer) {
+                            enableBefore = *(uint8_t *)((char *)audioPlayer + 291);
+                            hooksMapPtr = *(uint64_t *)((char *)audioPlayer + 216);
+                            *(uint8_t *)((char *)audioPlayer + 291) = 1;
+                        }
                     }
 
-                    maxPeak = 0;
-                    if ([layers isKindOfClass:[NSArray class]] && [layers count] > 0) {
-                        // Read _maskRatio via runtime ivar access on PEMeterLayer instances.
-                        // _maskRatio = instantaneous meter fill (0..1), bounces with audio.
-                        // _peak = peak hold (stays high, decays slowly) — not used.
-                        Class meterLayerClass = NSClassFromString(@"PEMeterLayer");
-                        Ivar maskRatioIvar = meterLayerClass ? class_getInstanceVariable(meterLayerClass, "_maskRatio") : NULL;
-                        if (maskRatioIvar) {
-                            ptrdiff_t offset = ivar_getOffset(maskRatioIvar);
-                            for (id layer in layers) {
-                                if (![layer isKindOfClass:meterLayerClass]) continue;
-                                double ratio = *(double *)((char *)(__bridge void *)layer + offset);
-                                if (ratio > maxPeak) maxPeak = ratio;
+                    // Call meterAudioLevelsForRole: for each playing fader's role
+                    SEL meterSel = NSSelectorFromString(@"meterAudioLevelsForRole:channels:peakValues:loudnessValues:");
+                    typedef struct { float a, b, c, d; } LoudnessValues;
+
+                    if ([player respondsToSelector:meterSel]) {
+                        for (NSMutableDictionary *fader in indexed) {
+                            if (![fader[@"playing"] boolValue]) continue;
+
+                            // Get the clip's audioRoleIdentifier — this is the string FCP uses
+                            id clipHandle = fader[@"clipHandle"];
+                            id clip = clipHandle ? SpliceKit_resolveHandle(clipHandle) : nil;
+                            if (!clip) continue;
+
+                            // Try multiple role identifier formats
+                            NSMutableArray *candidates = [NSMutableArray array];
+                            @try {
+                                SEL ariSel = NSSelectorFromString(@"audioRoleIdentifier");
+                                if ([clip respondsToSelector:ariSel]) {
+                                    id ari = ((id (*)(id, SEL))objc_msgSend)(clip, ariSel);
+                                    if (ari) [candidates addObject:ari];
+                                }
+                            } @catch (NSException *e) {}
+                            // Also try the display role name
+                            NSString *roleName = fader[@"role"];
+                            if (roleName) [candidates addObject:roleName];
+
+                            float maxPeak = 0;
+                            NSString *matchedUID = nil;
+                            unsigned int matchedCh = 0;
+                            for (id roleUID in candidates) {
+                                if (maxPeak > 0) break;
+                                float peakValues[32] = {0};
+                                LoudnessValues loudness = {0, 0, 0, 0};
+                                @try {
+                                    unsigned int filled = ((unsigned int (*)(id, SEL, id, unsigned int, float *, LoudnessValues *))objc_msgSend)(
+                                        player, meterSel, roleUID, 32, peakValues, &loudness);
+                                    matchedCh = filled;
+                                    matchedUID = roleUID;
+                                    for (unsigned int ch = 0; ch < filled && ch < 32; ch++) {
+                                        if (peakValues[ch] > maxPeak) maxPeak = peakValues[ch];
+                                    }
+                                } @catch (NSException *e) {}
+                            }
+
+                            if (maxPeak > 0.0001) {
+                                double dB = 20.0 * log10((double)maxPeak);
+                                double ratio = (dB + 96.0) / 102.0;
+                                if (ratio < 0) ratio = 0;
+                                if (ratio > 1) ratio = 1;
+                                fader[@"meterPeak"] = @(ratio);
                             }
                         }
                     }
+                }
+            } @catch (NSException *e) {}
 
-                    if (maxPeak > 0.001) {
-                        // Distribute overall meter level to playing faders, scaled by volume
-                        double totalVolume = 0;
-                        for (NSMutableDictionary *fader in indexed) {
-                            if ([fader[@"playing"] boolValue])
-                                totalVolume += [fader[@"volumeLinear"] doubleValue];
+            // Fallback: find PEMeterLayer instances anywhere in the CALayer tree.
+            // This finds the mini audio meters in the transport bar (always visible)
+            // as well as the full Audio Meters panel if open.
+            @try {
+                BOOL anyMeter = NO;
+                for (NSDictionary *f in indexed) { if (f[@"meterPeak"]) { anyMeter = YES; break; } }
+                if (!anyMeter) {
+                    Class mlc = NSClassFromString(@"PEMeterLayer");
+                    Ivar mrIvar = mlc ? class_getInstanceVariable(mlc, "_maskRatio") : NULL;
+                    if (mlc && mrIvar) {
+                        ptrdiff_t off = ivar_getOffset(mrIvar);
+                        __block double maxPeak = 0;
+
+                        // Recursively search CALayer trees for PEMeterLayer instances
+                        void (^__block searchLayers)(CALayer *) = ^(CALayer *layer) {
+                            if ([layer isKindOfClass:mlc]) {
+                                double r = *(double *)((char *)(__bridge void *)layer + off);
+                                if (r > maxPeak) maxPeak = r;
+                            }
+                            for (CALayer *sub in layer.sublayers) searchLayers(sub);
+                        };
+
+                        for (NSWindow *win in [NSApp windows]) {
+                            if (!win.contentView) continue;
+                            CALayer *rootLayer = win.contentView.layer;
+                            if (rootLayer) searchLayers(rootLayer);
+                            if (maxPeak > 0.001) break; // Found active meters
                         }
-                        for (NSMutableDictionary *fader in indexed) {
-                            if ([fader[@"playing"] boolValue]) {
-                                double vol = [fader[@"volumeLinear"] doubleValue];
-                                // Scale peak by this fader's share of total volume
-                                double share = (totalVolume > 0) ? vol / totalVolume : 1.0;
-                                double faderPeak = maxPeak * fmin(share * 1.5, 1.0);
-                                fader[@"meterPeak"] = @(faderPeak); // 0..1 visual ratio
+
+                        if (maxPeak > 0.001) {
+                            double totalVol = 0;
+                            for (NSMutableDictionary *f in indexed)
+                                if ([f[@"playing"] boolValue]) totalVol += [f[@"volumeLinear"] doubleValue];
+                            for (NSMutableDictionary *f in indexed) {
+                                if ([f[@"playing"] boolValue]) {
+                                    double share = (totalVol > 0) ? [f[@"volumeLinear"] doubleValue] / totalVol : 1.0;
+                                    f[@"meterPeak"] = @(maxPeak * fmin(share * 1.5, 1.0));
+                                }
                             }
                         }
                     }
