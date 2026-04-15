@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.1.145</title>
+      <sparkle:version>3.1.145</sparkle:version>
+      <sparkle:shortVersionString>3.1.145</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 15 Apr 2026 19:29:07 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.1.145</h2>
+        <p>Audio Mixer: managed role-bus effects, solo/mute controls, FX menu, state mirroring, diagnostics</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.145/SpliceKit-v3.1.145.dmg"
+        sparkle:edSignature="cwytAnd0J2r9Pp0zKlc+4DOOO3irUZWEGMH7mXLT26FzQ18lT90R8Aiw1Qg1fucz02sQceyzbBmWJmnotgn0BQ=="
+        length="14093236"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.1.144</title>
       <sparkle:version>3.1.144</sparkle:version>
       <sparkle:shortVersionString>3.1.144</sparkle:shortVersionString>
