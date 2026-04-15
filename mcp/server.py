@@ -315,6 +315,9 @@ DESTRUCTIVE_TOOLS = {
     "raw_call",
     "mixer_set_volume",
     "mixer_set_all_volumes",
+    "mixer_apply_bus_effect",
+    "mixer_set_bus_effect_enabled",
+    "mixer_remove_bus_effect",
 }
 
 IDEMPOTENT_LOCAL_WRITE_TOOLS = {
@@ -3269,7 +3272,11 @@ def mixer_get_state() -> str:
                      f"  {db_str} dB{role_str}{flag_str}")
         lines.append(f"    handles: clip={f.get('clipHandle','?')}"
                      f" vol={f.get('volumeChannelHandle','?')}"
-                     f" es={f.get('effectStackHandle','?')}")
+                     f" es={f.get('effectStackHandle','?')}"
+                     f" bus={f.get('busEffectStackHandle','?')}")
+        if f.get("busKind") and f.get("busKind") != "none":
+            lines.append(f"    bus: {f.get('busKind')} ({f.get('busObjectCount', 0)} object(s),"
+                         f" {f.get('busEffectCount', 0)} effect(s))")
     if r.get("totalClipsAtPlayhead", 0) > 10:
         lines.append(f"\n  ({r['totalClipsAtPlayhead']} total clips, showing first 10)")
     return "\n".join(lines)
@@ -3362,6 +3369,158 @@ def mixer_set_mute(index: int = -1, role: str = "", mode: str = "toggle",
     state = "muted" if r.get("muted") else "unmuted"
     target = r.get("role") or f"fader {r.get('index', index)}"
     return f"Mixer role {target}: {state} ({r.get('roleUIDCount', 0)} role UIDs)"
+
+
+@mcp.tool(annotations=_tool_annotations("mixer_apply_bus_effect"))
+def mixer_apply_bus_effect(effect_id: str = "", name: str = "",
+                           index: int = -1, role: str = "",
+                           dry_run: bool = False,
+                           allow_object_fallback: bool = False) -> str:
+    """Apply an audio effect to a mixer role's collection-backed bus.
+
+    The true bus path targets role-bearing compound/collection objects, so the
+    effect is inserted on the parent audio stack that all contained audio flows through.
+
+    Args:
+        effect_id: Exact FCP audio effect ID. Use this or name.
+        name: Audio effect display name, e.g. "Channel EQ". Used when effect_id is empty.
+        index: Mixer fader index from mixer_get_state. Use -1 when addressing by role.
+        role: Role name from mixer_get_state, used when index is not provided.
+        dry_run: Preview the bus targets without applying the effect.
+        allow_object_fallback: If true, target per-object audio stacks when no collection bus exists.
+    """
+    params = {"dryRun": dry_run, "allowObjectFallback": allow_object_fallback}
+    if effect_id:
+        params["effectID"] = effect_id
+    if name:
+        params["name"] = name
+    if index >= 0:
+        params["index"] = index
+    if role:
+        params["role"] = role
+
+    r = bridge.call("mixer.applyBusEffect", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    effect = r.get("effect", {})
+    effect_name = effect.get("name") or effect.get("effectID") or name or effect_id
+    target = r.get("role") or f"fader {r.get('index', index)}"
+    count = r.get("busObjectCount", 0)
+    if dry_run:
+        return f"Mixer bus preview: {effect_name} -> {target} ({count} bus object{'s' if count != 1 else ''})"
+    return f"Applied {effect_name} to mixer role {target} ({count} bus object{'s' if count != 1 else ''})"
+
+
+@mcp.tool(annotations=_tool_annotations("mixer_open_bus_effect"))
+def mixer_open_bus_effect(effect_index: int = -1, index: int = -1, role: str = "",
+                          effect_handle: str = "", effect_stack_handle: str = "",
+                          allow_object_fallback: bool = False) -> str:
+    """Open the native FCP editor window for an effect on a mixer role bus.
+
+    Args:
+        effect_index: Zero-based effect index from mixer_get_state busEffects.
+        index: Mixer fader index from mixer_get_state. Use -1 when addressing by role.
+        role: Role name from mixer_get_state, used when index is not provided.
+        effect_handle: Exact effect handle from mixer_get_state busEffects. Preferred when available.
+        effect_stack_handle: Exact effect stack handle from mixer_get_state busEffects.
+        allow_object_fallback: If true, target per-object audio stacks when no collection bus exists.
+    """
+    params = {"allowObjectFallback": allow_object_fallback}
+    if effect_index >= 0:
+        params["effectIndex"] = effect_index
+    if effect_handle:
+        params["effectHandle"] = effect_handle
+    if effect_stack_handle:
+        params["effectStackHandle"] = effect_stack_handle
+    if index >= 0:
+        params["index"] = index
+    if role:
+        params["role"] = role
+
+    r = bridge.call("mixer.openBusEffect", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    effect = r.get("effect", {})
+    effect_name = effect.get("name") or effect.get("effectID") or f"effect {effect_index}"
+    target = r.get("role") or f"fader {r.get('index', index)}"
+    return f"Opened {effect_name} editor for mixer role {target}"
+
+
+@mcp.tool(annotations=_tool_annotations("mixer_set_bus_effect_enabled"))
+def mixer_set_bus_effect_enabled(effect_index: int = -1, enabled: bool = True,
+                                 index: int = -1, role: str = "",
+                                 effect_handle: str = "", effect_stack_handle: str = "",
+                                 allow_object_fallback: bool = False) -> str:
+    """Enable or disable an effect on a mixer role's collection-backed bus.
+
+    Args:
+        effect_index: Zero-based effect index from mixer_get_state busEffects.
+        enabled: True to enable the effect, false to disable it.
+        index: Mixer fader index from mixer_get_state. Use -1 when addressing by role.
+        role: Role name from mixer_get_state, used when index is not provided.
+        effect_handle: Exact effect handle from mixer_get_state busEffects. Preferred when available.
+        effect_stack_handle: Exact effect stack handle from mixer_get_state busEffects.
+        allow_object_fallback: If true, target per-object audio stacks when no collection bus exists.
+    """
+    params = {
+        "enabled": enabled,
+        "allowObjectFallback": allow_object_fallback,
+    }
+    if effect_index >= 0:
+        params["effectIndex"] = effect_index
+    if effect_handle:
+        params["effectHandle"] = effect_handle
+    if effect_stack_handle:
+        params["effectStackHandle"] = effect_stack_handle
+    if index >= 0:
+        params["index"] = index
+    if role:
+        params["role"] = role
+
+    r = bridge.call("mixer.setBusEffectEnabled", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    target = r.get("role") or f"fader {r.get('index', index)}"
+    state = "enabled" if r.get("enabled") else "disabled"
+    return f"Mixer bus effect {effect_index} on {target}: {state}"
+
+
+@mcp.tool(annotations=_tool_annotations("mixer_remove_bus_effect"))
+def mixer_remove_bus_effect(effect_index: int = -1, index: int = -1, role: str = "",
+                            effect_handle: str = "", effect_stack_handle: str = "",
+                            allow_object_fallback: bool = False) -> str:
+    """Remove an effect from a mixer role's collection-backed bus.
+
+    Args:
+        effect_index: Zero-based effect index from mixer_get_state busEffects.
+        index: Mixer fader index from mixer_get_state. Use -1 when addressing by role.
+        role: Role name from mixer_get_state, used when index is not provided.
+        effect_handle: Exact effect handle from mixer_get_state busEffects. Preferred when available.
+        effect_stack_handle: Exact effect stack handle from mixer_get_state busEffects.
+        allow_object_fallback: If true, target per-object audio stacks when no collection bus exists.
+    """
+    params = {"allowObjectFallback": allow_object_fallback}
+    if effect_index >= 0:
+        params["effectIndex"] = effect_index
+    if effect_handle:
+        params["effectHandle"] = effect_handle
+    if effect_stack_handle:
+        params["effectStackHandle"] = effect_stack_handle
+    if index >= 0:
+        params["index"] = index
+    if role:
+        params["role"] = role
+
+    r = bridge.call("mixer.removeBusEffect", **params)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    target = r.get("role") or f"fader {r.get('index', index)}"
+    count = r.get("busObjectCount", 0)
+    return f"Removed mixer bus effect {effect_index} from {target} ({count} bus object{'s' if count != 1 else ''})"
 
 
 @mcp.tool(annotations=_tool_annotations("mixer_volume_begin"))

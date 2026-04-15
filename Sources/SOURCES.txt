@@ -7,6 +7,7 @@ SpliceKitDualTimeline.m
 SpliceKitDualTimelineDrag.m
 SpliceKitRuntime.m
 SpliceKitSwizzle.m
+SpliceKitAudioBusDiagnostics.m
 SpliceKitServer.m
 SpliceKitLogPanel.m
 SpliceKitTranscriptPanel.m

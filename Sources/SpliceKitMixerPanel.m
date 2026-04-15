@@ -21,6 +21,11 @@ extern BOOL SpliceKit_setChannelValue(id channel, double value);
 extern BOOL SpliceKit_mixerSetStaticChannelValue(id channel, double value);
 extern BOOL SpliceKit_removeChannelKeyframes(id channel);
 extern BOOL SpliceKit_mixerWriteAutomationPoint(id clip, id channel, double value);
+extern NSDictionary *SpliceKit_handleEffectsListAvailable(NSDictionary *params);
+extern NSDictionary *SpliceKit_handleMixerApplyBusEffect(NSDictionary *params);
+extern NSDictionary *SpliceKit_handleMixerOpenBusEffect(NSDictionary *params);
+extern NSDictionary *SpliceKit_handleMixerSetBusEffectEnabled(NSDictionary *params);
+extern NSDictionary *SpliceKit_handleMixerRemoveBusEffect(NSDictionary *params);
 
 // CMTime struct (matches FCP's internal layout)
 typedef struct { long long value; int timescale; unsigned int flags; long long epoch; } SKMixer_CMTime;
@@ -88,6 +93,12 @@ static const char kMeterRoleUIDKey = 0; // associated object key
 @property (nonatomic, strong) NSString *volumeChannelHandle;
 @property (nonatomic, strong) NSString *audioEffectStackHandle;
 @property (nonatomic, strong) NSString *effectStackHandle; // main effectStack (for undo transactions)
+@property (nonatomic, strong) NSString *busKind;
+@property (nonatomic, strong) NSString *busEffectStackHandle;
+@property (nonatomic, strong) NSArray<NSString *> *busEffectNames;
+@property (nonatomic, strong) NSArray<NSDictionary *> *busEffects;
+@property (nonatomic, assign) NSInteger busObjectCount;
+@property (nonatomic, assign) NSInteger busEffectCount;
 @property (nonatomic, strong) NSString *clipName;
 @property (nonatomic, assign) NSInteger lane;
 @property (nonatomic, assign) double volumeDB;
@@ -141,6 +152,7 @@ static const char kMeterRoleUIDKey = 0; // associated object key
 @property (nonatomic, strong) SpliceKitMouseOnlyButton *muteBadgeButton;
 @property (nonatomic, strong) SpliceKitMouseOnlyButton *soloBadgeButton;
 @property (nonatomic, strong) SpliceKitMouseOnlyButton *armBadgeButton;
+@property (nonatomic, strong) SpliceKitMouseOnlyButton *effectButton;
 @property (nonatomic, strong) NSView *trackView;
 @property (nonatomic, strong) NSView *fillView;
 @property (nonatomic, strong) NSView *knobView;
@@ -156,6 +168,7 @@ static const char kMeterRoleUIDKey = 0; // associated object key
 @property (nonatomic, copy) void (^onToggleArm)(void);
 @property (nonatomic, copy) void (^onToggleSolo)(void);
 @property (nonatomic, copy) void (^onToggleMute)(void);
+@property (nonatomic, copy) void (^onShowEffects)(void);
 - (void)updateFromState;
 @end
 
@@ -537,9 +550,11 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
         _muteBadgeButton = [self makeBadgeButtonWithAction:@selector(toggleMuteBadge:)];
         _soloBadgeButton = [self makeBadgeButtonWithAction:@selector(toggleSoloBadge:)];
         _armBadgeButton = [self makeBadgeButtonWithAction:@selector(toggleArmBadge:)];
+        _effectButton = [self makeBadgeButtonWithAction:@selector(showEffectsMenu:)];
         [self addSubview:_muteBadgeButton];
         [self addSubview:_soloBadgeButton];
         [self addSubview:_armBadgeButton];
+        [self addSubview:_effectButton];
 
         _iconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
         _iconView.imageScaling = NSImageScaleProportionallyUpOrDown;
@@ -610,6 +625,10 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
     if (self.onToggleArm) self.onToggleArm();
 }
 
+- (void)showEffectsMenu:(id)sender {
+    if (self.onShowEffects) self.onShowEffects();
+}
+
 - (void)layout {
     [super layout];
 
@@ -638,6 +657,7 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
     CGFloat firstBadgeRowY = NSMinY(self.displayCard.frame) - 14.0 - badgeHeight;
     CGFloat secondBadgeRowY = firstBadgeRowY - badgeSpacing - badgeHeight;
     CGFloat thirdBadgeRowY = secondBadgeRowY - badgeSpacing - badgeHeight;
+    CGFloat effectButtonY = thirdBadgeRowY - badgeSpacing - badgeHeight;
     for (NSInteger idx = 0; idx < self.statusBadges.count; idx++) {
         NSInteger row = idx / 2;
         NSInteger col = idx % 2;
@@ -665,10 +685,14 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
                                            thirdBadgeRowY,
                                            badgeWidth,
                                            badgeHeight);
+    self.effectButton.frame = NSMakeRect(NSMinX(self.displayCard.frame) + 8.0,
+                                         effectButtonY,
+                                         NSWidth(self.displayCard.frame) - 16.0,
+                                         badgeHeight);
 
     CGFloat bottomSectionTop = bottomInset + bottomSectionHeight;
     CGFloat faderSectionY = bottomSectionTop + 12.0;
-    CGFloat faderSectionHeight = MAX(220.0, thirdBadgeRowY - 18.0 - faderSectionY);
+    CGFloat faderSectionHeight = MAX(200.0, effectButtonY - 18.0 - faderSectionY);
     CGFloat controlHeight = MIN(270.0, faderSectionHeight - 12.0);
     CGFloat controlY = faderSectionY + floor((faderSectionHeight - controlHeight) / 2.0);
     CGFloat meterWidth = 22.0;
@@ -862,6 +886,30 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
                          roleControlEnabled,
                          _state.isMaster ? [NSColor systemOrangeColor] : [NSColor systemRedColor]);
 
+    BOOL hasSharedBus = ![_state.busKind isEqualToString:@"none"] && _state.busObjectCount > 0;
+    NSString *effectTitle = nil;
+    if (_state.busEffectCount <= 0) {
+        effectTitle = @"FX";
+    } else if (_state.busEffectNames.count == 1) {
+        effectTitle = _state.busEffectNames.firstObject;
+    } else {
+        NSString *firstName = _state.busEffectNames.firstObject ?: @"FX";
+        if (firstName.length > 6) firstName = [[firstName substringToIndex:6] stringByAppendingString:@"..."];
+        effectTitle = [NSString stringWithFormat:@"%@ +%ld", firstName, (long)MAX(0, _state.busEffectCount - 1)];
+    }
+    configureBadgeButton(self.effectButton,
+                         effectTitle,
+                         _state.busEffectCount > 0,
+                         roleControlEnabled && hasSharedBus,
+                         [NSColor systemBlueColor]);
+    if (hasSharedBus && _state.busEffectNames.count > 0) {
+        self.effectButton.toolTip = [_state.busEffectNames componentsJoinedByString:@", "];
+    } else {
+        self.effectButton.toolTip = hasSharedBus
+            ? @"Add an audio effect to this shared mixer bus"
+            : @"This fader has no shared audio bus";
+    }
+
     self.trackView.layer.backgroundColor = [SKMixerColor(0.10, 0.10, 0.12) colorWithAlphaComponent:(active ? 0.85 : 0.40)].CGColor;
     self.fillView.layer.backgroundColor = [accentColor colorWithAlphaComponent:(signalEnabled ? (playing ? 0.88 : 0.46) : (active ? 0.22 : 0.18))].CGColor;
     self.knobGradientLayer.colors = active
@@ -944,6 +992,7 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
 @property (nonatomic, assign) double playheadSeconds;
 @property (nonatomic, assign) double frameRate;
 @property (nonatomic, strong) NSDictionary *lastServerDebug;
+@property (nonatomic, strong) NSArray<NSDictionary *> *audioEffectCache;
 + (instancetype)sharedPanel;
 - (void)showPanel;
 - (void)hidePanel;
@@ -953,6 +1002,17 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
 - (void)endMasterVolumeChange;
 - (void)toggleSoloForFaderIndex:(NSInteger)faderIndex;
 - (void)toggleMuteForFaderIndex:(NSInteger)faderIndex;
+- (void)showAudioEffectsForFaderIndex:(NSInteger)faderIndex;
+- (NSArray<NSDictionary *> *)availableAudioEffects;
+- (void)addAudioEffectItems:(NSArray<NSDictionary *> *)effects
+                     toMenu:(NSMenu *)menu
+                 faderIndex:(NSInteger)faderIndex
+                       role:(NSString *)role;
+- (void)addCurrentBusEffectItemsForFader:(SpliceKitFaderView *)target toMenu:(NSMenu *)menu;
+- (void)applyAudioEffectFromMenu:(NSMenuItem *)sender;
+- (void)openAudioBusEffectFromMenu:(NSMenuItem *)sender;
+- (void)toggleAudioBusEffectFromMenu:(NSMenuItem *)sender;
+- (void)removeAudioBusEffectFromMenu:(NSMenuItem *)sender;
 @end
 
 @implementation SpliceKitMixerPanel
@@ -1093,6 +1153,9 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
         };
         fv.onToggleMute = ^{
             [weakSelf toggleMuteForFaderIndex:idx];
+        };
+        fv.onShowEffects = ^{
+            [weakSelf showAudioEffectsForFaderIndex:idx];
         };
 
         [faderStack addArrangedSubview:fv];
@@ -1245,6 +1308,16 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
             fv.state.volumeChannelHandle = info[@"volumeChannelHandle"];
             fv.state.audioEffectStackHandle = info[@"audioEffectStackHandle"];
             fv.state.effectStackHandle = info[@"effectStackHandle"];
+            fv.state.busKind = info[@"busKind"];
+            fv.state.busEffectStackHandle = info[@"busEffectStackHandle"];
+            fv.state.busObjectCount = [info[@"busObjectCount"] integerValue];
+            fv.state.busEffectCount = [info[@"busEffectCount"] integerValue];
+            fv.state.busEffectNames = [info[@"busEffectNames"] isKindOfClass:[NSArray class]]
+                ? info[@"busEffectNames"]
+                : @[];
+            fv.state.busEffects = [info[@"busEffects"] isKindOfClass:[NSArray class]]
+                ? info[@"busEffects"]
+                : @[];
             fv.state.role = info[@"role"];
             fv.state.roleColorHex = info[@"roleColor"];
             fv.state.meterDB = [info[@"meterDB"] doubleValue];
@@ -1278,6 +1351,12 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
             fv.state.volumeChannelHandle = nil;
             fv.state.audioEffectStackHandle = nil;
             fv.state.effectStackHandle = nil;
+            fv.state.busKind = nil;
+            fv.state.busEffectStackHandle = nil;
+            fv.state.busEffectNames = @[];
+            fv.state.busEffects = @[];
+            fv.state.busObjectCount = 0;
+            fv.state.busEffectCount = 0;
             fv.state.role = nil;
             fv.state.meterDB = -INFINITY;
             fv.state.meterLinear = 0;
@@ -1329,6 +1408,12 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
         fv.state.volumeChannelHandle = nil;
         fv.state.audioEffectStackHandle = nil;
         fv.state.effectStackHandle = nil;
+        fv.state.busKind = nil;
+        fv.state.busEffectStackHandle = nil;
+        fv.state.busEffectNames = @[];
+        fv.state.busEffects = @[];
+        fv.state.busObjectCount = 0;
+        fv.state.busEffectCount = 0;
         fv.state.meterDB = -INFINITY;
         fv.state.meterLinear = 0;
         fv.state.meterPeak = 0;
@@ -1420,6 +1505,274 @@ static double SKMixerDisplayedPeakForUpdate(double currentPeak,
     });
     if (result[@"error"]) {
         SpliceKit_log(@"[Mixer] Mute failed: %@", result[@"error"]);
+        return;
+    }
+    [self updateMixerState];
+}
+
+- (NSArray<NSDictionary *> *)availableAudioEffects {
+    if (self.audioEffectCache.count > 0) return self.audioEffectCache;
+
+    NSDictionary *result = SpliceKit_handleEffectsListAvailable(@{@"type": @"audio"});
+    if (result[@"error"]) {
+        SpliceKit_log(@"[Mixer] Audio effect list failed: %@", result[@"error"]);
+        self.audioEffectCache = @[];
+        return self.audioEffectCache;
+    }
+
+    NSArray *effects = [result[@"effects"] isKindOfClass:[NSArray class]] ? result[@"effects"] : @[];
+    self.audioEffectCache = effects;
+    return self.audioEffectCache;
+}
+
+- (void)addAudioEffectItems:(NSArray<NSDictionary *> *)effects
+                     toMenu:(NSMenu *)menu
+                 faderIndex:(NSInteger)faderIndex
+                       role:(NSString *)role {
+    for (NSDictionary *effect in effects) {
+        NSString *name = [effect[@"name"] isKindOfClass:[NSString class]] ? effect[@"name"] : @"Unknown";
+        NSString *effectID = [effect[@"effectID"] isKindOfClass:[NSString class]] ? effect[@"effectID"] : @"";
+        if (effectID.length == 0) continue;
+
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:name
+                                                      action:@selector(applyAudioEffectFromMenu:)
+                                               keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = @{
+            @"index": @(faderIndex),
+            @"role": role ?: @"",
+            @"effectID": effectID,
+            @"name": name,
+        };
+        [menu addItem:item];
+    }
+}
+
+- (void)addCurrentBusEffectItemsForFader:(SpliceKitFaderView *)target toMenu:(NSMenu *)menu {
+    if (target.state.busEffects.count == 0) return;
+
+    NSMenuItem *heading = [[NSMenuItem alloc] initWithTitle:@"Current Effects" action:nil keyEquivalent:@""];
+    heading.enabled = NO;
+    [menu addItem:heading];
+
+    for (NSDictionary *effect in target.state.busEffects) {
+        NSNumber *effectIndex = [effect[@"index"] isKindOfClass:[NSNumber class]] ? effect[@"index"] : nil;
+        if (!effectIndex) continue;
+
+        NSString *name = [effect[@"name"] isKindOfClass:[NSString class]] ? effect[@"name"] : @"Effect";
+        BOOL enabled = ![effect[@"enabled"] isKindOfClass:[NSNumber class]] || [effect[@"enabled"] boolValue];
+        NSString *title = enabled ? name : [NSString stringWithFormat:@"%@ (off)", name];
+        NSString *targetName = [effect[@"targetName"] isKindOfClass:[NSString class]] ? effect[@"targetName"] : @"";
+        if (target.state.busObjectCount > 1 && targetName.length > 0) {
+            title = [NSString stringWithFormat:@"%@ - %@", title, targetName];
+        }
+
+        NSMenuItem *effectItem = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+        NSMenu *effectMenu = [[NSMenu alloc] initWithTitle:title];
+        effectMenu.autoenablesItems = NO;
+        NSMutableDictionary *payload = [@{
+            @"index": @(target.state.index),
+            @"role": target.state.role ?: @"",
+            @"effectIndex": effectIndex,
+            @"name": name,
+            @"enabled": @(enabled),
+        } mutableCopy];
+        NSString *busEffectID = [effect[@"busEffectID"] isKindOfClass:[NSString class]] ? effect[@"busEffectID"] : @"";
+        NSString *effectHandle = [effect[@"handle"] isKindOfClass:[NSString class]] ? effect[@"handle"] : @"";
+        NSString *effectStackHandle = [effect[@"effectStackHandle"] isKindOfClass:[NSString class]] ? effect[@"effectStackHandle"] : @"";
+        if (busEffectID.length > 0) payload[@"busEffectID"] = busEffectID;
+        if (effectHandle.length > 0) payload[@"effectHandle"] = effectHandle;
+        if (effectStackHandle.length > 0) payload[@"effectStackHandle"] = effectStackHandle;
+
+        NSMenuItem *openItem = [[NSMenuItem alloc] initWithTitle:@"Open Editor"
+                                                          action:@selector(openAudioBusEffectFromMenu:)
+                                                   keyEquivalent:@""];
+        openItem.target = self;
+        openItem.representedObject = payload;
+        [effectMenu addItem:openItem];
+
+        NSMenuItem *toggleItem = [[NSMenuItem alloc] initWithTitle:(enabled ? @"Disable" : @"Enable")
+                                                            action:@selector(toggleAudioBusEffectFromMenu:)
+                                                     keyEquivalent:@""];
+        toggleItem.target = self;
+        toggleItem.representedObject = payload;
+        [effectMenu addItem:toggleItem];
+
+        [effectMenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *removeItem = [[NSMenuItem alloc] initWithTitle:@"Remove"
+                                                            action:@selector(removeAudioBusEffectFromMenu:)
+                                                     keyEquivalent:@""];
+        removeItem.target = self;
+        removeItem.representedObject = payload;
+        [effectMenu addItem:removeItem];
+
+        effectItem.submenu = effectMenu;
+        [menu addItem:effectItem];
+    }
+    [menu addItem:[NSMenuItem separatorItem]];
+}
+
+- (void)showAudioEffectsForFaderIndex:(NSInteger)faderIndex {
+    if (faderIndex < 0 || faderIndex >= (NSInteger)self.faderViews.count) return;
+    SpliceKitFaderView *target = self.faderViews[faderIndex];
+    if (!target.state.isActive || target.state.isMaster) return;
+
+    NSString *role = target.state.role ?: @"";
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Audio Effects"];
+    menu.autoenablesItems = NO;
+
+    BOOL hasSharedBus = ![target.state.busKind isEqualToString:@"none"] && target.state.busObjectCount > 0;
+    if (!hasSharedBus) {
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"No shared bus available for this fader"
+                                                      action:nil
+                                               keyEquivalent:@""];
+        item.enabled = NO;
+        [menu addItem:item];
+    } else {
+        [self addCurrentBusEffectItemsForFader:target toMenu:menu];
+
+        NSArray<NSDictionary *> *effects = [self availableAudioEffects];
+        if (effects.count == 0) {
+            NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"No audio effects found"
+                                                          action:nil
+                                                   keyEquivalent:@""];
+            item.enabled = NO;
+            [menu addItem:item];
+        } else {
+            NSMutableDictionary<NSString *, NSMutableArray<NSDictionary *> *> *effectsByCategory = [NSMutableDictionary dictionary];
+            for (NSDictionary *effect in effects) {
+                NSString *category = [effect[@"category"] isKindOfClass:[NSString class]] ? effect[@"category"] : @"";
+                if (category.length == 0) category = @"Audio";
+                NSMutableArray *bucket = effectsByCategory[category];
+                if (!bucket) {
+                    bucket = [NSMutableArray array];
+                    effectsByCategory[category] = bucket;
+                }
+                [bucket addObject:effect];
+            }
+
+            NSArray<NSString *> *categories = [[effectsByCategory allKeys] sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+            if (categories.count <= 1) {
+                [self addAudioEffectItems:effects toMenu:menu faderIndex:faderIndex role:role];
+            } else {
+                NSMenuItem *addItem = [[NSMenuItem alloc] initWithTitle:@"Add Audio Effect" action:nil keyEquivalent:@""];
+                NSMenu *addMenu = [[NSMenu alloc] initWithTitle:@"Add Audio Effect"];
+                addMenu.autoenablesItems = NO;
+                for (NSString *category in categories) {
+                    NSArray<NSDictionary *> *categoryEffects = effectsByCategory[category];
+                    NSMenuItem *categoryItem = [[NSMenuItem alloc] initWithTitle:category action:nil keyEquivalent:@""];
+                    NSMenu *submenu = [[NSMenu alloc] initWithTitle:category];
+                    submenu.autoenablesItems = NO;
+                    [self addAudioEffectItems:categoryEffects toMenu:submenu faderIndex:faderIndex role:role];
+                    categoryItem.submenu = submenu;
+                    [addMenu addItem:categoryItem];
+                }
+                addItem.submenu = addMenu;
+                [menu addItem:addItem];
+            }
+        }
+    }
+
+    [menu popUpMenuPositioningItem:nil
+                        atLocation:NSMakePoint(0, NSHeight(target.effectButton.bounds) + 2.0)
+                            inView:target.effectButton];
+}
+
+- (void)applyAudioEffectFromMenu:(NSMenuItem *)sender {
+    NSDictionary *payload = [sender.representedObject isKindOfClass:[NSDictionary class]]
+        ? sender.representedObject
+        : nil;
+    NSString *effectID = [payload[@"effectID"] isKindOfClass:[NSString class]] ? payload[@"effectID"] : @"";
+    NSString *role = [payload[@"role"] isKindOfClass:[NSString class]] ? payload[@"role"] : @"";
+    NSNumber *indexNumber = [payload[@"index"] isKindOfClass:[NSNumber class]] ? payload[@"index"] : nil;
+    if (effectID.length == 0 || (role.length == 0 && !indexNumber)) return;
+
+    NSMutableDictionary *params = [@{@"effectID": effectID} mutableCopy];
+    if (role.length > 0) {
+        params[@"role"] = role;
+    } else if (indexNumber) {
+        params[@"index"] = indexNumber;
+    }
+
+    NSDictionary *result = SpliceKit_handleMixerApplyBusEffect(params);
+    if (result[@"error"]) {
+        SpliceKit_log(@"[Mixer] Add audio bus effect failed: %@", result[@"error"]);
+        NSBeep();
+        return;
+    }
+
+    SpliceKit_log(@"[Mixer] Added audio bus effect %@ to %@",
+                  payload[@"name"] ?: effectID,
+                  role.length > 0 ? role : [NSString stringWithFormat:@"fader %@", indexNumber]);
+    [self updateMixerState];
+}
+
+- (NSMutableDictionary *)busEffectParamsFromMenuPayload:(NSDictionary *)payload {
+    NSString *role = [payload[@"role"] isKindOfClass:[NSString class]] ? payload[@"role"] : @"";
+    NSNumber *indexNumber = [payload[@"index"] isKindOfClass:[NSNumber class]] ? payload[@"index"] : nil;
+    NSNumber *effectIndex = [payload[@"effectIndex"] isKindOfClass:[NSNumber class]] ? payload[@"effectIndex"] : nil;
+    NSString *busEffectID = [payload[@"busEffectID"] isKindOfClass:[NSString class]] ? payload[@"busEffectID"] : @"";
+    NSString *effectHandle = [payload[@"effectHandle"] isKindOfClass:[NSString class]] ? payload[@"effectHandle"] : @"";
+    NSString *effectStackHandle = [payload[@"effectStackHandle"] isKindOfClass:[NSString class]] ? payload[@"effectStackHandle"] : @"";
+    if (!effectIndex && effectHandle.length == 0 && busEffectID.length == 0) return nil;
+    if (effectHandle.length == 0 && busEffectID.length == 0 && role.length == 0 && !indexNumber) return nil;
+
+    NSMutableDictionary *params = [NSMutableDictionary dictionary];
+    if (effectIndex) params[@"effectIndex"] = effectIndex;
+    if (busEffectID.length > 0) params[@"busEffectID"] = busEffectID;
+    if (effectHandle.length > 0) params[@"effectHandle"] = effectHandle;
+    if (effectStackHandle.length > 0) params[@"effectStackHandle"] = effectStackHandle;
+    if (role.length > 0) {
+        params[@"role"] = role;
+    } else if (indexNumber) {
+        params[@"index"] = indexNumber;
+    }
+    return params;
+}
+
+- (void)openAudioBusEffectFromMenu:(NSMenuItem *)sender {
+    NSDictionary *payload = [sender.representedObject isKindOfClass:[NSDictionary class]]
+        ? sender.representedObject
+        : nil;
+    NSMutableDictionary *params = [self busEffectParamsFromMenuPayload:payload];
+    if (!params) return;
+
+    NSDictionary *result = SpliceKit_handleMixerOpenBusEffect(params);
+    if (result[@"error"]) {
+        SpliceKit_log(@"[Mixer] Open audio bus effect failed: %@", result[@"error"]);
+        NSBeep();
+    }
+}
+
+- (void)toggleAudioBusEffectFromMenu:(NSMenuItem *)sender {
+    NSDictionary *payload = [sender.representedObject isKindOfClass:[NSDictionary class]]
+        ? sender.representedObject
+        : nil;
+    NSMutableDictionary *params = [self busEffectParamsFromMenuPayload:payload];
+    if (!params) return;
+
+    BOOL enabled = ![payload[@"enabled"] boolValue];
+    params[@"enabled"] = @(enabled);
+    NSDictionary *result = SpliceKit_handleMixerSetBusEffectEnabled(params);
+    if (result[@"error"]) {
+        SpliceKit_log(@"[Mixer] Toggle audio bus effect failed: %@", result[@"error"]);
+        NSBeep();
+        return;
+    }
+    [self updateMixerState];
+}
+
+- (void)removeAudioBusEffectFromMenu:(NSMenuItem *)sender {
+    NSDictionary *payload = [sender.representedObject isKindOfClass:[NSDictionary class]]
+        ? sender.representedObject
+        : nil;
+    NSMutableDictionary *params = [self busEffectParamsFromMenuPayload:payload];
+    if (!params) return;
+
+    NSDictionary *result = SpliceKit_handleMixerRemoveBusEffect(params);
+    if (result[@"error"]) {
+        SpliceKit_log(@"[Mixer] Remove audio bus effect failed: %@", result[@"error"]);
+        NSBeep();
         return;
     }
     [self updateMixerState];

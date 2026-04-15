@@ -101,6 +101,10 @@ class MCPToolAnnotationTests(unittest.TestCase):
             "timeline_destructive_action",
             "mixer_set_solo",
             "mixer_set_mute",
+            "mixer_apply_bus_effect",
+            "mixer_open_bus_effect",
+            "mixer_set_bus_effect_enabled",
+            "mixer_remove_bus_effect",
         }
         self.assertTrue(expected.issubset(self.tools.keys()))
 
@@ -172,20 +176,58 @@ class MCPToolAnnotationTests(unittest.TestCase):
             calls.append((method, params))
             if method == "mixer.setSolo":
                 return {"ok": True, "role": "Dialogue", "soloed": True, "soloObjectCount": 2}
-            return {"ok": True, "role": "Music", "muted": False, "roleUIDCount": 1}
+            if method == "mixer.setMute":
+                return {"ok": True, "role": "Music", "muted": False, "roleUIDCount": 1}
+            if method == "mixer.openBusEffect":
+                return {"ok": True, "role": "Music", "effect": {"name": "Channel EQ"}, "effectIndex": 0}
+            if method == "mixer.setBusEffectEnabled":
+                return {"ok": True, "role": "Music", "enabled": False, "effectIndex": 0}
+            if method == "mixer.removeBusEffect":
+                return {"ok": True, "role": "Music", "effectIndex": 0, "busObjectCount": 1}
+            return {"ok": True, "role": "Music", "effect": {"name": "Channel EQ"}, "busObjectCount": 1}
 
         self.module.bridge.call = fake_call
 
         solo_result = self.module.mixer_set_solo(index=0, mode="exclusive")
         mute_result = self.module.mixer_set_mute(role="Music", mode="unmute")
+        bus_result = self.module.mixer_apply_bus_effect(name="Channel EQ", role="Music", dry_run=True)
+        open_result = self.module.mixer_open_bus_effect(effect_index=0, role="Music")
+        disable_result = self.module.mixer_set_bus_effect_enabled(effect_index=0, enabled=False, role="Music")
+        remove_result = self.module.mixer_remove_bus_effect(effect_index=0, role="Music")
 
         self.assertIn("Dialogue: soloed", solo_result)
         self.assertIn("Music: unmuted", mute_result)
+        self.assertIn("Channel EQ -> Music", bus_result)
+        self.assertIn("Opened Channel EQ editor", open_result)
+        self.assertIn("Music: disabled", disable_result)
+        self.assertIn("Removed mixer bus effect 0 from Music", remove_result)
         self.assertEqual(
             calls,
             [
                 ("mixer.setSolo", {"mode": "exclusive", "index": 0}),
                 ("mixer.setMute", {"mode": "unmute", "role": "Music"}),
+                ("mixer.applyBusEffect", {
+                    "dryRun": True,
+                    "allowObjectFallback": False,
+                    "name": "Channel EQ",
+                    "role": "Music",
+                }),
+                ("mixer.openBusEffect", {
+                    "effectIndex": 0,
+                    "allowObjectFallback": False,
+                    "role": "Music",
+                }),
+                ("mixer.setBusEffectEnabled", {
+                    "effectIndex": 0,
+                    "enabled": False,
+                    "allowObjectFallback": False,
+                    "role": "Music",
+                }),
+                ("mixer.removeBusEffect", {
+                    "effectIndex": 0,
+                    "allowObjectFallback": False,
+                    "role": "Music",
+                }),
             ],
         )
 

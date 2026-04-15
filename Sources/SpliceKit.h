@@ -104,10 +104,12 @@ void SpliceKit_registerPluginManifest(NSString *pluginId, NSDictionary *manifest
 // Starts the TCP listener on port 9876 and the Unix domain socket.
 // Called once from the app-launch notification handler.
 void SpliceKit_startControlServer(void);
+id SpliceKit_getActiveTimelineModule(void);
 
 // Push a JSON-RPC notification to every connected client.
 // Used for things like playhead-moved events.
 void SpliceKit_broadcastEvent(NSDictionary *event);
+NSDictionary *SpliceKit_handleAudioBusDiagnostics(NSString *method, NSDictionary *params);
 
 #pragma mark - Feature Swizzles
 //
