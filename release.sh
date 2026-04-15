@@ -92,7 +92,9 @@ sed -i '' -E "s/MARKETING_VERSION = \"?[^\";]+\"?;/MARKETING_VERSION = ${VERSION
 sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = ${VERSION}/g" "${XCODE_PROJECT}/project.pbxproj"
 
 echo "[2/14] Building SpliceKit dylib + tools..."
-make clean && make && make tools
+make clean
+make
+make tools
 
 echo "[3/14] Building parakeet-transcriber..."
 PARAKEET_PKG_DIR="patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
