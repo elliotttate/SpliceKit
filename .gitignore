@@ -28,6 +28,9 @@ patcher/build/
 patcher/SpliceKit.xcodeproj/xcuserdata/
 patcher/SpliceKit.xcodeproj/project.xcworkspace/xcuserdata/
 
+# Pre-built patcher app (generate via release.sh, distribute via GitHub Releases)
+patcher/SpliceKitPatcher.app/
+
 # Keys and credentials
 *.pem
 *.key
@@ -39,8 +42,6 @@ credentials.json
 
 # Swift packages
 Package.resolved
-# But keep the copy embedded in the release patcher bundle
-!patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber/Package.resolved
 
 # Release binaries (use GitHub Releases instead)
 patcher/SpliceKitPatcher-v*.zip

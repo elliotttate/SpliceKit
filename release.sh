@@ -18,7 +18,7 @@ if [ -z "$NOTES" ]; then
 fi
 
 SIGN_ID="Developer ID Application: Brian Tate (RH4U5VJHM6)"
-KEYCHAIN_PROFILE="FCPBridge"  # legacy name; change to "SpliceKit" after: xcrun notarytool store-credentials "SpliceKit"
+KEYCHAIN_PROFILE="SpliceKit"
 XCODE_PROJECT="patcher/SpliceKit.xcodeproj"
 BUILD_DIR="patcher/build"
 BUILT_APP="${BUILD_DIR}/Build/Products/Release/SpliceKit.app"
@@ -101,19 +101,11 @@ echo "  Using app bundle: ${BUILT_APP}"
 
 echo "[5/14] Syncing bundled resources into app..."
 APP_RES="${BUILT_APP}/Contents/Resources"
-mkdir -p "${APP_RES}/Sources"
 mkdir -p "${APP_RES}/mcp"
 mkdir -p "${APP_RES}/tools"
 cp build/SpliceKit "${APP_RES}/SpliceKit"
 cp build/silence-detector "${APP_RES}/tools/silence-detector"
 cp mcp/server.py "${APP_RES}/mcp/server.py"
-rsync -a --delete Sources/ "${APP_RES}/Sources/"
-# Bundle Lua vendor sources (for from-source builds)
-if [ -d "vendor/lua-5.4.7" ]; then
-    mkdir -p "${APP_RES}/vendor/lua-5.4.7/src"
-    rsync -a vendor/lua-5.4.7/src/ "${APP_RES}/vendor/lua-5.4.7/src/"
-    echo "  Bundled vendor/lua-5.4.7/"
-fi
 # Bundle Lua scripts
 if [ -d "Scripts/lua" ]; then
     mkdir -p "${APP_RES}/Scripts/lua"

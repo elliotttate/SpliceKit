@@ -16,6 +16,7 @@
 		BB0000000000000000000006 /* StatusPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000006 /* StatusPanel.swift */; };
 		BB0000000000000000000007 /* LogPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000007 /* LogPanelView.swift */; };
 		BB0000000000000000000008 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000008 /* Assets.xcassets */; };
+		BB0000000000000000000009 /* ShellHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000C /* ShellHelpers.swift */; };
 		BB000000000000000000000A /* Sparkle.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000A /* Sparkle.framework */; };
 		BB000000000000000000000B /* Sparkle.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000A /* Sparkle.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
@@ -47,6 +48,7 @@
 		AA0000000000000000000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA0000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000000000000000000000A /* Sparkle.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Sparkle.framework; path = Frameworks/Sparkle.framework; sourceTree = "<group>"; };
+		AA000000000000000000000C /* ShellHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellHelpers.swift; sourceTree = "<group>"; };
 		FF0000000000000000000001 /* SpliceKit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpliceKit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -113,6 +115,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000000002 /* PatcherModel.swift */,
+				AA000000000000000000000C /* ShellHelpers.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -247,6 +250,7 @@
 				BB0000000000000000000005 /* PatchingPanel.swift in Sources */,
 				BB0000000000000000000006 /* StatusPanel.swift in Sources */,
 				BB0000000000000000000007 /* LogPanelView.swift in Sources */,
+				BB0000000000000000000009 /* ShellHelpers.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

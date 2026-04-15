@@ -537,8 +537,6 @@ typedef NS_ENUM(NSInteger, SBDragMode) {
 
     _lastClickX = loc.x;  // save for debug drawing
 
-    SpliceKit_log(@"[Sections][DOWN_DEBUG] tpp=%.6f leftPad=%.1f scrollX=%.1f",
-                  [self timePerPixelSeconds], [self leftPaddingPx], [self scrollOffsetX]);
     for (SpliceKitSection *sec in _sections) {
         CGFloat x1 = [self xForTime:sec.startTime];
         CGFloat x2 = [self xForTime:sec.endTime];

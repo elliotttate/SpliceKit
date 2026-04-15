@@ -1,0 +1,21 @@
+# Canonical list of SpliceKit source files.
+# All build scripts read this file — edit here, not in individual scripts.
+# One filename per line (relative to Sources/). Blank lines and # comments ignored.
+
+SpliceKit.m
+SpliceKitDualTimeline.m
+SpliceKitDualTimelineDrag.m
+SpliceKitRuntime.m
+SpliceKitSwizzle.m
+SpliceKitServer.m
+SpliceKitLogPanel.m
+SpliceKitTranscriptPanel.m
+SpliceKitCaptionPanel.m
+SpliceKitCommandPalette.m
+SpliceKitDebugUI.m
+SpliceKitStructureBlocks.m
+SpliceKitSectionsBar.m
+SpliceKitLua.m
+SpliceKitLuaPanel.m
+SpliceKitPlugins.m
+SpliceKitMixerPanel.m

@@ -190,37 +190,10 @@ class PatcherModel: ObservableObject {
         }
         destDir = NSHomeDirectory() + "/Applications/SpliceKit"
 
-        var found = ""
-
-        // 1. Embedded in app bundle (Resources/Sources/)
-        if let resourcePath = Bundle.main.resourcePath {
-            let embedded = resourcePath + "/Sources"
-            if fm.fileExists(atPath: embedded + "/SpliceKit.m") {
-                found = resourcePath
-            }
-        }
-
-        // 2. Development: derive repo root from source file path
-        #if DEBUG
-        if found.isEmpty {
-            let sourceFile = URL(fileURLWithPath: #filePath)
-            let repoRoot = sourceFile
-                .deletingLastPathComponent() // Models/
-                .deletingLastPathComponent() // SpliceKit/
-                .deletingLastPathComponent() // patcher/
-                .deletingLastPathComponent() // repo root
-                .path
-            if fm.fileExists(atPath: repoRoot + "/Sources/SpliceKit.m") {
-                found = repoRoot
-            }
-        }
-        #endif
-
-        // 3. Cache dir (will download into it during patch)
-        if found.isEmpty {
-            found = NSHomeDirectory() + "/Library/Caches/SpliceKit"
-        }
-        repoDir = found
+        // The app ships a pre-built dylib in Resources/. No source compilation needed.
+        // repoDir points to the app bundle's Resources, which contains the pre-built
+        // dylib and tools that get copied into the modded FCP during patching.
+        repoDir = Bundle.main.resourcePath ?? NSHomeDirectory() + "/Library/Caches/SpliceKit"
 
         // Defer shell calls -- waitUntilExit pumps the run loop, which crashes
         // if called during SwiftUI view graph initialization.
@@ -292,8 +265,8 @@ class PatcherModel: ObservableObject {
     /// changes, so the StatusPanel's indicator light reflects FCP's live state
     /// without the user having to hit Refresh.
     func pollBridgeStatus() async {
-        let connected: Bool = await Task.detached { [self] in
-            let r = self.shell("lsof -i :9876 2>/dev/null | grep LISTEN")
+        let connected: Bool = await Task.detached {
+            let r = shell("lsof -i :9876 2>/dev/null | grep LISTEN")
             return !r.isEmpty
         }.value
 
@@ -475,24 +448,6 @@ class PatcherModel: ObservableObject {
         }
         await logAsync("FCP \(fcpVersion): OK")
 
-        let repoSources = repoDir + "/Sources/SpliceKit.m"
-        if !FileManager.default.fileExists(atPath: repoSources) {
-            await logAsync("Downloading SpliceKit sources...")
-            let dlResult = shell("""
-                mkdir -p '\(repoDir)' && \
-                curl -sL https://github.com/elliotttate/SpliceKit/archive/refs/heads/main.zip \
-                    -o /tmp/splicekit_src.zip && \
-                unzip -qo /tmp/splicekit_src.zip -d /tmp/splicekit_extract && \
-                cp -R /tmp/splicekit_extract/SpliceKit-main/* '\(repoDir)/' && \
-                rm -rf /tmp/splicekit_src.zip /tmp/splicekit_extract 2>&1
-                """)
-            guard FileManager.default.fileExists(atPath: repoSources) else {
-                throw PatchError.msg("Failed to download SpliceKit sources. Make sure you have an internet connection.\n\(dlResult)")
-            }
-            await logAsync("Downloaded SpliceKit sources")
-        } else {
-            await logAsync("SpliceKit sources: OK")
-        }
         await completeStepAsync(.checkPrereqs)
 
         // Step 2: Copy FCP bundle, preserve MAS receipt, strip quarantine xattrs
@@ -516,87 +471,25 @@ class PatcherModel: ObservableObject {
         let buildDir = NSTemporaryDirectory() + "SpliceKit_build"
         shell("mkdir -p '\(buildDir)'")
 
+        // Use pre-built dylib from app bundle
         let bundledDylib = (Bundle.main.resourcePath ?? "") + "/SpliceKit"
-        if FileManager.default.fileExists(atPath: bundledDylib) {
-            await logAsync("Using pre-built SpliceKit dylib from app bundle")
-            shell("cp '\(bundledDylib)' '\(buildDir)/SpliceKit'")
-        } else {
-            await logAsync("Compiling SpliceKit dylib...")
-            let sources = ["SpliceKit.m", "SpliceKitRuntime.m", "SpliceKitSwizzle.m", "SpliceKitServer.m", "SpliceKitLogPanel.m", "SpliceKitTranscriptPanel.m", "SpliceKitCaptionPanel.m", "SpliceKitCommandPalette.m", "SpliceKitDebugUI.m"]
-                .map { "'\(repoDir)/Sources/\($0)'" }.joined(separator: " ")
-            let buildResult = shell("""
-                clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
-                -framework Foundation -framework AppKit -framework AVFoundation \
-                -fobjc-arc -fmodules -Wno-deprecated-declarations \
-                -undefined dynamic_lookup -dynamiclib \
-                -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
-                -I '\(repoDir)/Sources' \
-                \(sources) -o '\(buildDir)/SpliceKit' 2>&1
-                """)
-            guard FileManager.default.fileExists(atPath: buildDir + "/SpliceKit") else {
-                throw PatchError.msg("Build failed:\n\(buildResult)")
-            }
-            await logAsync("Built universal dylib (arm64 + x86_64)")
+        guard FileManager.default.fileExists(atPath: bundledDylib) else {
+            throw PatchError.msg("Pre-built SpliceKit dylib not found in app bundle. Please re-download the patcher app.")
         }
+        await logAsync("Using pre-built SpliceKit dylib")
+        shell("cp '\(bundledDylib)' '\(buildDir)/SpliceKit'")
 
-        // Build tools
+        // Copy pre-built tools from app bundle
         let silenceBin = buildDir + "/silence-detector"
         let bundledSilence = (Bundle.main.resourcePath ?? "") + "/tools/silence-detector"
         if FileManager.default.fileExists(atPath: bundledSilence) {
             shell("cp '\(bundledSilence)' '\(silenceBin)'")
-            await logAsync("Using pre-built silence-detector from app bundle")
-        } else {
-            let silenceSwift = repoDir + "/tools/silence-detector.swift"
-            if FileManager.default.fileExists(atPath: silenceSwift) {
-                _ = shell("swiftc -O -suppress-warnings -o '\(silenceBin)' '\(silenceSwift)' 2>&1")
-                if FileManager.default.fileExists(atPath: silenceBin) {
-                    await logAsync("Built silence-detector tool")
-                } else {
-                    await logAsync("Warning: silence-detector build failed (silence removal will be unavailable)")
-                }
-            }
         }
 
         let parakeetBin = buildDir + "/parakeet-transcriber"
         let bundledParakeet = (Bundle.main.resourcePath ?? "") + "/tools/parakeet-transcriber"
-        var bundledParakeetIsDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: bundledParakeet, isDirectory: &bundledParakeetIsDirectory),
-           !bundledParakeetIsDirectory.boolValue {
+        if FileManager.default.fileExists(atPath: bundledParakeet) {
             shell("cp '\(bundledParakeet)' '\(parakeetBin)'")
-            await logAsync("Using pre-built Parakeet transcriber from app bundle")
-        } else {
-            let bundledParakeetSources = bundledParakeetIsDirectory.boolValue ? bundledParakeet : ""
-            let parakeetSrcDir = FileManager.default.fileExists(atPath: bundledParakeetSources + "/Package.swift")
-                ? bundledParakeetSources
-                : repoDir + "/patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
-            if FileManager.default.fileExists(atPath: parakeetSrcDir + "/Package.swift") {
-                await logAsync("Building Parakeet transcriber (may take a moment on first run)...")
-                let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/SpliceKit/tools/parakeet-transcriber"
-                let sourcePath = URL(fileURLWithPath: parakeetSrcDir).standardizedFileURL.path
-                let cachePath = URL(fileURLWithPath: parakeetCacheDir).standardizedFileURL.path
-                let parakeetPkgDir: String
-                if sourcePath == cachePath {
-                    parakeetPkgDir = parakeetSrcDir
-                } else {
-                    await logAsync("Caching Parakeet transcriber sources...")
-                    shell("""
-                        rm -rf '\(parakeetCacheDir)' && \
-                        mkdir -p '\((parakeetCacheDir as NSString).deletingLastPathComponent)' && \
-                        ditto '\(parakeetSrcDir)' '\(parakeetCacheDir)' && \
-                        rm -rf '\(parakeetCacheDir)/.build' '\(parakeetCacheDir)/.swiftpm' 2>&1
-                        """)
-                    parakeetPkgDir = parakeetCacheDir
-                }
-                let parakeetResult = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
-                let parakeetBuilt = parakeetPkgDir + "/.build/release/parakeet-transcriber"
-                if FileManager.default.fileExists(atPath: parakeetBuilt) {
-                    shell("cp '\(parakeetBuilt)' '\(parakeetBin)'")
-                    await logAsync("Built Parakeet transcriber")
-                } else {
-                    await logAsync("Warning: Parakeet transcriber build failed (transcription will use Apple Speech instead)")
-                    await logAsync(String(parakeetResult.suffix(200)))
-                }
-            }
         }
 
         await completeStepAsync(.buildDylib)
@@ -796,74 +689,25 @@ class PatcherModel: ObservableObject {
         let buildDir = NSTemporaryDirectory() + "SpliceKit_build"
         shell("mkdir -p '\(buildDir)'")
 
+        // Use pre-built dylib from app bundle
         let bundledDylib = (Bundle.main.resourcePath ?? "") + "/SpliceKit"
-        if FileManager.default.fileExists(atPath: bundledDylib) {
-            await logAsync("Using pre-built SpliceKit dylib from app bundle")
-            shell("cp '\(bundledDylib)' '\(buildDir)/SpliceKit'")
-        } else {
-            await logAsync("Compiling SpliceKit dylib...")
-            let sources = ["SpliceKit.m", "SpliceKitRuntime.m", "SpliceKitSwizzle.m", "SpliceKitServer.m", "SpliceKitLogPanel.m", "SpliceKitTranscriptPanel.m", "SpliceKitCaptionPanel.m", "SpliceKitCommandPalette.m", "SpliceKitDebugUI.m"]
-                .map { "'\(repoDir)/Sources/\($0)'" }.joined(separator: " ")
-            let buildResult = shell("""
-                clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
-                -framework Foundation -framework AppKit -framework AVFoundation \
-                -fobjc-arc -fmodules -Wno-deprecated-declarations \
-                -undefined dynamic_lookup -dynamiclib \
-                -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
-                -I '\(repoDir)/Sources' \
-                \(sources) -o '\(buildDir)/SpliceKit' 2>&1
-                """)
-            guard FileManager.default.fileExists(atPath: buildDir + "/SpliceKit") else {
-                throw PatchError.msg("Build failed:\n\(buildResult)")
-            }
-            await logAsync("Built universal dylib (arm64 + x86_64)")
+        guard FileManager.default.fileExists(atPath: bundledDylib) else {
+            throw PatchError.msg("Pre-built SpliceKit dylib not found in app bundle. Please re-download the patcher app.")
         }
+        await logAsync("Using pre-built SpliceKit dylib")
+        shell("cp '\(bundledDylib)' '\(buildDir)/SpliceKit'")
 
-        // Build tools
+        // Copy pre-built tools from app bundle
         let silenceBin = buildDir + "/silence-detector"
         let bundledSilence = (Bundle.main.resourcePath ?? "") + "/tools/silence-detector"
         if FileManager.default.fileExists(atPath: bundledSilence) {
             shell("cp '\(bundledSilence)' '\(silenceBin)'")
-        } else {
-            let silenceSwift = repoDir + "/tools/silence-detector.swift"
-            if FileManager.default.fileExists(atPath: silenceSwift) {
-                _ = shell("swiftc -O -suppress-warnings -o '\(silenceBin)' '\(silenceSwift)' 2>&1")
-            }
         }
 
         let parakeetBin = buildDir + "/parakeet-transcriber"
         let bundledParakeet = (Bundle.main.resourcePath ?? "") + "/tools/parakeet-transcriber"
-        var bundledParakeetIsDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: bundledParakeet, isDirectory: &bundledParakeetIsDirectory),
-           !bundledParakeetIsDirectory.boolValue {
+        if FileManager.default.fileExists(atPath: bundledParakeet) {
             shell("cp '\(bundledParakeet)' '\(parakeetBin)'")
-        } else {
-            let bundledParakeetSources = bundledParakeetIsDirectory.boolValue ? bundledParakeet : ""
-            let parakeetSrcDir = FileManager.default.fileExists(atPath: bundledParakeetSources + "/Package.swift")
-                ? bundledParakeetSources
-                : repoDir + "/patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
-            if FileManager.default.fileExists(atPath: parakeetSrcDir + "/Package.swift") {
-                let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/SpliceKit/tools/parakeet-transcriber"
-                let sourcePath = URL(fileURLWithPath: parakeetSrcDir).standardizedFileURL.path
-                let cachePath = URL(fileURLWithPath: parakeetCacheDir).standardizedFileURL.path
-                let parakeetPkgDir: String
-                if sourcePath == cachePath {
-                    parakeetPkgDir = parakeetSrcDir
-                } else {
-                    shell("""
-                        rm -rf '\(parakeetCacheDir)' && \
-                        mkdir -p '\((parakeetCacheDir as NSString).deletingLastPathComponent)' && \
-                        ditto '\(parakeetSrcDir)' '\(parakeetCacheDir)' && \
-                        rm -rf '\(parakeetCacheDir)/.build' '\(parakeetCacheDir)/.swiftpm' 2>&1
-                        """)
-                    parakeetPkgDir = parakeetCacheDir
-                }
-                let parakeetResult = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
-                let parakeetBuilt = parakeetPkgDir + "/.build/release/parakeet-transcriber"
-                if FileManager.default.fileExists(atPath: parakeetBuilt) {
-                    shell("cp '\(parakeetBuilt)' '\(parakeetBin)'")
-                }
-            }
         }
         await completeStepAsync(.buildDylib)
 
@@ -1004,41 +848,7 @@ class PatcherModel: ObservableObject {
 
     // MARK: - Helpers
 
-    /// Read a bundle value from common Info.plist locations inside an app or framework bundle.
-    private nonisolated func readBundleValue(_ key: String, bundlePath: String) -> String {
-        let fm = FileManager.default
-        let plistCandidates = [
-            bundlePath + "/Contents/Info.plist",
-            bundlePath + "/Versions/A/Resources/Info.plist",
-            bundlePath + "/Resources/Info.plist"
-        ]
-
-        for plistPath in plistCandidates where fm.fileExists(atPath: plistPath) {
-            let quotedPath = shellQuote(plistPath)
-            let value = shell("/usr/libexec/PlistBuddy -c 'Print :\(key)' \(quotedPath) 2>/dev/null")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty && !value.contains("Doesn't Exist") {
-                return value
-            }
-        }
-
-        return ""
-    }
-
-    /// Read a bundle version from either CFBundleShortVersionString or CFBundleVersion.
-    private nonisolated func readBundleVersion(_ bundlePath: String) -> String {
-        for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
-            let value = readBundleValue(key, bundlePath: bundlePath)
-            if !value.isEmpty {
-                return value
-            }
-        }
-        return ""
-    }
-
-    private nonisolated func readBundleIdentifier(_ bundlePath: String) -> String {
-        readBundleValue("CFBundleIdentifier", bundlePath: bundlePath)
-    }
+    // Shell helpers, bundle reading, and signing identity are in ShellHelpers.swift
 
     private nonisolated func cloudContentDefaultsDomain(for bundlePath: String) -> String {
         let bundleID = readBundleIdentifier(bundlePath)
@@ -1248,55 +1058,6 @@ class PatcherModel: ObservableObject {
         return ""
     }
 
-    /// Run a shell command synchronously; nonisolated for use in background tasks.
-    nonisolated func shellResult(_ command: String) -> (output: String, status: Int32) {
-        let process = Process()
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", command]
-        try? process.run()
-        process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return (String(data: data, encoding: .utf8) ?? "", process.terminationStatus)
-    }
-
-    @discardableResult
-    nonisolated func shell(_ command: String) -> String {
-        shellResult(command).output
-    }
-
-    private nonisolated func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private nonisolated func preferredSigningIdentity() -> String? {
-        let output = shell("/usr/bin/security find-identity -v -p codesigning 2>/dev/null")
-        let identities = output
-            .split(separator: "\n")
-            .compactMap { line -> (hash: String, label: String)? in
-                let parts = line.split(omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
-                guard parts.count >= 3,
-                      let firstQuote = line.firstIndex(of: "\""),
-                      let lastQuote = line.lastIndex(of: "\""),
-                      firstQuote != lastQuote else {
-                    return nil
-                }
-                return (
-                    hash: String(parts[1]),
-                    label: String(line[line.index(after: firstQuote)..<lastQuote])
-                )
-            }
-
-        if let identity = identities.first(where: { $0.label.hasPrefix("Apple Development:") }) {
-            return identity.hash
-        }
-        if let identity = identities.first(where: { $0.label.hasPrefix("Developer ID Application:") }) {
-            return identity.hash
-        }
-        return identities.first?.hash
-    }
 
     func appendLog(_ text: String) {
         log += text + "\n"

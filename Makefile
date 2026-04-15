@@ -6,23 +6,8 @@ OBJC_FLAGS = -fobjc-arc -fmodules
 LINKER_FLAGS = -undefined dynamic_lookup -dynamiclib
 INSTALL_NAME = -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit
 
-SOURCES = Sources/SpliceKit.m \
-          Sources/SpliceKitDualTimeline.m \
-          Sources/SpliceKitDualTimelineDrag.m \
-          Sources/SpliceKitRuntime.m \
-          Sources/SpliceKitSwizzle.m \
-          Sources/SpliceKitServer.m \
-          Sources/SpliceKitLogPanel.m \
-          Sources/SpliceKitTranscriptPanel.m \
-          Sources/SpliceKitCaptionPanel.m \
-          Sources/SpliceKitCommandPalette.m \
-          Sources/SpliceKitDebugUI.m \
-          Sources/SpliceKitStructureBlocks.m \
-          Sources/SpliceKitSectionsBar.m \
-          Sources/SpliceKitLua.m \
-          Sources/SpliceKitLuaPanel.m \
-          Sources/SpliceKitPlugins.m \
-          Sources/SpliceKitMixerPanel.m
+# Read canonical source list from Sources/SOURCES.txt
+SOURCES = $(addprefix Sources/, $(shell grep -v '^\#' Sources/SOURCES.txt | grep -v '^$$'))
 
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)/SpliceKit

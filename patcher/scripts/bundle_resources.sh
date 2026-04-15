@@ -12,17 +12,8 @@ if [ -f "$PREBUILT/SpliceKit" ]; then
     echo "Bundled SpliceKit dylib"
 fi
 
-# Copy Sources for from-source builds
-#mkdir -p "$APP_RESOURCES/Sources"
-#rsync -a --delete "$REPO_DIR/Sources/" "$APP_RESOURCES/Sources/"
-#echo "Bundled Sources/"
-
-# Copy Lua vendor sources (for from-source builds)
-#if [ -d "$REPO_DIR/vendor/lua-5.4.7" ]; then
-#    mkdir -p "$APP_RESOURCES/vendor/lua-5.4.7/src"
-#    rsync -a "$REPO_DIR/vendor/lua-5.4.7/src/" "$APP_RESOURCES/vendor/lua-5.4.7/src/"
-#    echo "Bundled vendor/lua-5.4.7/"
-#fi
+# Sources/ and vendor/lua are no longer bundled — the pre-built dylib is sufficient.
+# From-source builds use the repo checkout directly (Makefile / patch_fcp.sh).
 
 # Copy MCP server
 mkdir -p "$APP_RESOURCES/mcp"
