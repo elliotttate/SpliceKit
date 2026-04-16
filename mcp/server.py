@@ -3952,25 +3952,56 @@ def _otio_read_fcpx_string(fcpxml_str):
     )
 
 
-def _otio_write_fcpx_string(timeline):
-    """Write FCPXML using whichever adapter name is installed."""
+def _otio_write_fcpx_string(timeline, fcpxml_version=None):
+    """Write FCPXML using whichever adapter name is installed.
+
+    The modern PR #7 adapter accepts ``fcpxml_version`` for version-aware
+    FCPXML 1.0-1.14 output. Older adapters reject that kwarg, so retry without
+    it before moving to the next adapter name.
+    """
     import opentimelineio as otio
 
-    return _otio_with_fcpx_adapter(
-        lambda adapter_name: otio.adapters.write_to_string(timeline, adapter_name)
-    )
+    def write(adapter_name):
+        if fcpxml_version:
+            try:
+                return otio.adapters.write_to_string(
+                    timeline,
+                    adapter_name,
+                    fcpxml_version=fcpxml_version,
+                )
+            except TypeError as exc:
+                if "fcpxml_version" not in str(exc):
+                    raise
+        return otio.adapters.write_to_string(timeline, adapter_name)
+
+    return _otio_with_fcpx_adapter(write)
+
+
+def _otio_fcpxmld_info_path(package_path):
+    """Return the FCPXML document entrypoint for a `.fcpxmld` package."""
+    from pathlib import Path
+
+    package = Path(package_path)
+    if not package.exists():
+        raise FileNotFoundError(f"FCPXML package does not exist: '{package}'.")
+    if not package.is_dir():
+        raise NotADirectoryError(f"FCPXML package path is not a directory: '{package}'.")
+
+    info_path = package / "Info.fcpxml"
+    if not info_path.is_file():
+        raise FileNotFoundError(f"FCPXML package is missing 'Info.fcpxml': '{package}'.")
+    return info_path
 
 
 def _otio_read_fcpx_document(path):
     """Read a `.fcpxml` document or `.fcpxmld` package entrypoint."""
-    import os
+    from pathlib import Path
 
-    document_path = path
-    if path.lower().endswith(".fcpxmld"):
-        document_path = os.path.join(path, "Info.fcpxml")
+    document_path = Path(path)
+    if document_path.is_dir() or document_path.suffix.lower() == ".fcpxmld":
+        document_path = _otio_fcpxmld_info_path(document_path)
 
-    with open(document_path, "r") as f:
-        return f.read()
+    return document_path.read_text(encoding="utf-8")
 
 
 def _otio_fcpxml_clean_for_paste(fcpxml_str):
@@ -3994,25 +4025,30 @@ def _otio_fcpxml_clean_for_paste(fcpxml_str):
 
 def _otio_first_timeline(result):
     """Extract the first Timeline from an OTIO read result."""
-    import opentimelineio as otio
-    if isinstance(result, otio.schema.Timeline):
-        return result
-    if isinstance(result, otio.schema.SerializableCollection) and len(result) > 0:
-        for item in result:
-            if isinstance(item, otio.schema.Timeline):
-                return item
-        return result
+    timelines = _otio_all_timelines(result, collection_fallback=False)
+    if timelines:
+        return timelines[0]
     return result
 
-def _otio_all_timelines(result):
+def _otio_all_timelines(result, collection_fallback=True):
     """Extract all Timelines from an OTIO read result."""
     import opentimelineio as otio
     if isinstance(result, otio.schema.Timeline):
         return [result]
     if isinstance(result, otio.schema.SerializableCollection):
-        timelines = [item for item in result if isinstance(item, otio.schema.Timeline)]
-        return timelines if timelines else list(result)
-    return [result]
+        timelines = []
+        if hasattr(result, "find_children"):
+            timelines = list(result.find_children(descended_from_type=otio.schema.Timeline))
+        if not timelines:
+            timelines = [
+                child
+                for item in result
+                for child in _otio_all_timelines(item, collection_fallback=False)
+            ]
+        if timelines:
+            return timelines
+        return list(result) if collection_fallback else []
+    return [result] if collection_fallback else []
 
 def _otio_timeline_summary(timeline):
     """Build a summary dict for an OTIO timeline."""
@@ -4107,7 +4143,7 @@ def export_otio(path: str = "/tmp/splicekit_export.otio", rate: float = 0) -> st
     try:
         import opentimelineio as otio
     except ImportError:
-        return "Error: opentimelineio not installed. Run: pip install opentimelineio otio-fcpx-xml-adapter (or otio-fcpxml-adapter)"
+        return "Error: opentimelineio not installed. Run: pip install opentimelineio otio-fcpxml-adapter (or legacy otio-fcpx-xml-adapter)"
 
     import tempfile, os
 
@@ -4212,7 +4248,7 @@ def import_otio(path: str = "", otio_json: str = "", rate: float = 0) -> str:
     try:
         import opentimelineio as otio
     except ImportError:
-        return "Error: opentimelineio not installed. Run: pip install opentimelineio otio-fcpx-xml-adapter (or otio-fcpxml-adapter)"
+        return "Error: opentimelineio not installed. Run: pip install opentimelineio otio-fcpxml-adapter (or legacy otio-fcpx-xml-adapter)"
 
     # For .fcpxml/.fcpxmld input, send directly to FCP's native importer for full fidelity.
     if path and path.lower().endswith((".fcpxml", ".fcpxmld")):

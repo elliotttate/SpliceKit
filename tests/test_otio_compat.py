@@ -74,8 +74,22 @@ class FakeTrack(list):
 
 
 class FakeTimeline:
-    def __init__(self, tracks=None):
+    def __init__(self, tracks=None, name=""):
         self.tracks = tracks or []
+        self.name = name
+
+
+class FakeSerializableCollection(list):
+    def __init__(self, children=None, name=""):
+        super().__init__(children or [])
+        self.name = name
+
+    def find_children(self, descended_from_type):
+        for child in self:
+            if isinstance(child, descended_from_type):
+                yield child
+            if hasattr(child, "find_children"):
+                yield from child.find_children(descended_from_type)
 
 
 class FakeGap:
@@ -101,17 +115,23 @@ class OTIOCompatTests(unittest.TestCase):
         cls.module = load_server_module()
 
     @contextmanager
-    def fake_otio(self, *, available_adapters=None):
+    def fake_otio(self, *, available_adapters=None, write_to_string=None):
         available_adapters = list(available_adapters or [])
 
         class FakeAdapters:
             def available_adapter_names(self_inner):
                 return list(available_adapters)
 
+            def write_to_string(self_inner, timeline, adapter_name, **kwargs):
+                if write_to_string is None:
+                    raise RuntimeError("write_to_string not configured")
+                return write_to_string(timeline, adapter_name, **kwargs)
+
         fake_otio = types.SimpleNamespace(
             adapters=FakeAdapters(),
             schema=types.SimpleNamespace(
                 Timeline=FakeTimeline,
+                SerializableCollection=FakeSerializableCollection,
                 Track=FakeTrack,
                 Gap=FakeGap,
                 Clip=FakeClip,
@@ -172,6 +192,21 @@ class OTIOCompatTests(unittest.TestCase):
             self.assertIsInstance(prepared.tracks[0][2], FakeGap)
             self.assertEqual(prepared.tracks[0][2].source_range, "gap-range")
 
+    def test_all_timelines_recurses_through_fcpxml_library_event_collections(self):
+        with self.fake_otio():
+            timeline_a = FakeTimeline(name="Project A")
+            timeline_b = FakeTimeline(name="Project B")
+            result = FakeSerializableCollection(
+                [
+                    FakeSerializableCollection([timeline_a], name="Event A"),
+                    FakeSerializableCollection([timeline_b], name="Event B"),
+                ],
+                name="Library",
+            )
+
+            self.assertEqual(self.module._otio_all_timelines(result), [timeline_a, timeline_b])
+            self.assertIs(self.module._otio_first_timeline(result), timeline_a)
+
     def test_read_fcpx_document_reads_package_entrypoint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             package_path = Path(tmpdir) / "Example.fcpxmld"
@@ -183,6 +218,52 @@ class OTIOCompatTests(unittest.TestCase):
                 self.module._otio_read_fcpx_document(str(package_path)),
                 "<fcpxml version='1.14'/>",
             )
+
+    def test_read_fcpx_document_reports_missing_package_entrypoint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package_path = Path(tmpdir) / "Broken.fcpxmld"
+            package_path.mkdir()
+
+            with self.assertRaisesRegex(FileNotFoundError, "Info.fcpxml"):
+                self.module._otio_read_fcpx_document(str(package_path))
+
+    def test_write_fcpx_string_passes_version_to_modern_adapter(self):
+        calls = []
+
+        def write_to_string(timeline, adapter_name, **kwargs):
+            calls.append((adapter_name, kwargs))
+            return "xml"
+
+        with self.fake_otio(available_adapters=["fcpxml"], write_to_string=write_to_string):
+            self.assertEqual(
+                self.module._otio_write_fcpx_string(FakeTimeline(), fcpxml_version="1.10"),
+                "xml",
+            )
+
+        self.assertEqual(calls, [("fcpxml", {"fcpxml_version": "1.10"})])
+
+    def test_write_fcpx_string_retries_without_version_for_legacy_adapter(self):
+        calls = []
+
+        def write_to_string(timeline, adapter_name, **kwargs):
+            calls.append((adapter_name, kwargs))
+            if "fcpxml_version" in kwargs:
+                raise TypeError("unexpected keyword argument 'fcpxml_version'")
+            return "legacy-xml"
+
+        with self.fake_otio(available_adapters=["fcpx_xml"], write_to_string=write_to_string):
+            self.assertEqual(
+                self.module._otio_write_fcpx_string(FakeTimeline(), fcpxml_version="1.10"),
+                "legacy-xml",
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                ("fcpx_xml", {"fcpxml_version": "1.10"}),
+                ("fcpx_xml", {}),
+            ],
+        )
 
 
 if __name__ == "__main__":

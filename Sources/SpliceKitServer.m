@@ -1665,6 +1665,8 @@ NSDictionary *SpliceKit_handleFCPXMLImport(NSDictionary *params) {
     NSString *xml = params[@"xml"];
     if (!xml) return @{@"error": @"xml parameter required"};
     BOOL useInternal = [params[@"internal"] boolValue];
+    BOOL allowFileFallback = params[@"allowFileFallback"] ?
+        [params[@"allowFileFallback"] boolValue] : !useInternal;
 
     // Try the clean path first — no dialogs, no file I/O
     if (useInternal) {
@@ -1674,6 +1676,12 @@ NSDictionary *SpliceKit_handleFCPXMLImport(NSDictionary *params) {
         }
         SpliceKit_log(@"Pasteboard import failed (%@), falling back to file import",
                       pbResult[@"error"]);
+        if (!allowFileFallback) {
+            return @{@"error": [NSString stringWithFormat:
+                         @"Internal FCPXML import failed and file fallback is disabled: %@",
+                         pbResult[@"error"]],
+                     @"method": @"pasteboard"};
+        }
     }
 
     // Fallback: file-based import via NSWorkspace (async, won't block bridge)
@@ -1826,7 +1834,11 @@ NSDictionary *SpliceKit_handlePasteboardImportXML(NSDictionary *params) {
                         event = ((id (*)(id, SEL))objc_msgSend)(sequence, containerEventSel);
                     }
                     if (event) {
-                        SEL setTargetSel = NSSelectorFromString(@"setTargetEvent:");
+                        SEL setEventSel = NSSelectorFromString(@"setEvent:");
+                        if ([options respondsToSelector:setEventSel]) {
+                            ((void (*)(id, SEL, id))objc_msgSend)(options, setEventSel, event);
+                        }
+                        SEL setTargetSel = NSSelectorFromString(@"setTarget:");
                         if ([options respondsToSelector:setTargetSel]) {
                             ((void (*)(id, SEL, id))objc_msgSend)(options, setTargetSel, event);
                         }
@@ -1834,15 +1846,25 @@ NSDictionary *SpliceKit_handlePasteboardImportXML(NSDictionary *params) {
                 }
             }
 
-            // Import clips
-            SEL importSel = NSSelectorFromString(@"importClipsWithOptions:");
+            // Import full FCPXML documents first. importClipsWithOptions: only
+            // imports browser clips from project XML and can miss the timeline.
+            SEL importDocSel = NSSelectorFromString(@"importWithOptions:");
+            id importObject = nil;
             BOOL importOK = NO;
-            if ([task respondsToSelector:importSel]) {
+            if ([task respondsToSelector:importDocSel]) {
+                importObject = ((id (*)(id, SEL, id))objc_msgSend)(task, importDocSel, options);
+                importOK = importObject != nil;
+            }
+
+            // Fallback: clip-only imports for XML snippets that do not contain
+            // a project/sequence document.
+            SEL importSel = NSSelectorFromString(@"importClipsWithOptions:");
+            if (!importOK && [task respondsToSelector:importSel]) {
                 importOK = ((BOOL (*)(id, SEL, id))objc_msgSend)(task, importSel, options);
             } else {
                 // Fallback: try importWithOptions:
                 SEL importSel2 = NSSelectorFromString(@"importWithOptions:");
-                if ([task respondsToSelector:importSel2]) {
+                if (!importOK && [task respondsToSelector:importSel2]) {
                     importOK = ((BOOL (*)(id, SEL, id))objc_msgSend)(task, importSel2, options);
                 }
             }
