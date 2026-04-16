@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.1.148</title>
+      <sparkle:version>3.1.148</sparkle:version>
+      <sparkle:shortVersionString>3.1.148</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Thu, 16 Apr 2026 02:52:18 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.1.148</h2>
+        <p>Automatically expose Apple's AUSoundIsolation effect on startup so Voice Isolation stays available in the audio effects browser across launches.</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.148/SpliceKit-v3.1.148.dmg"
+        sparkle:edSignature="9ixqlw4F6mRdXb8EmuB1Z0CJE1n7vMVJIlB7Bec4yzoWs7VK+ZrZuCN8V/Fqzcl0FQyeYCRQGwQyI6xkeHD3CQ=="
+        length="14115947"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.1.147</title>
       <sparkle:version>3.1.147</sparkle:version>
       <sparkle:shortVersionString>3.1.147</sparkle:shortVersionString>
