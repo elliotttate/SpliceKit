@@ -544,23 +544,28 @@ static CFDictionaryRef CreatePixelBufferAttributes(CFAllocatorRef allocator, con
         0,
         &kCFTypeDictionaryKeyCallBacks,
         &kCFTypeDictionaryValueCallBacks);
-    const void *keys[4] = {
+    // Metal compatibility is required so the host-side zero-copy path can wrap
+    // this pixel buffer's IOSurface as an MTLTexture (via CVMetalTextureCache)
+    // and GPU-blit decoded pixels into it.
+    const void *keys[5] = {
         kCVPixelBufferWidthKey,
         kCVPixelBufferHeightKey,
         kCVPixelBufferPixelFormatTypeKey,
         kCVPixelBufferIOSurfacePropertiesKey,
+        kCVPixelBufferMetalCompatibilityKey,
     };
-    const void *values[4] = {
+    const void *values[5] = {
         widthNumber,
         heightNumber,
         pixelFormatNumber,
         ioSurface,
+        kCFBooleanTrue,
     };
     CFDictionaryRef attributes = CFDictionaryCreate(
         allocator,
         keys,
         values,
-        4,
+        5,
         &kCFTypeDictionaryKeyCallBacks,
         &kCFTypeDictionaryValueCallBacks);
     if (widthNumber) CFRelease(widthNumber);
@@ -837,11 +842,15 @@ static void FillBytesSolid(CVPixelBufferRef pixelBuffer)
     CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
 }
 
-// Host-side decode helper, resolved via dlsym. Returns YES with malloc'd bytes
-// on success; caller frees. Letting dlsym miss (symbol not exported in this
-// process) falls back to stub / in-bundle path.
+// Host-side decode helpers, resolved via dlsym. The pixel-buffer variant is
+// the preferred zero-copy path: the host runs the BRAW Metal pipeline and
+// GPU-blits the result straight into our IOSurface-backed pool buffer. The
+// bytes variant is the legacy fallback when Metal isn't available on the
+// device or the host build doesn't export the new symbol.
 typedef BOOL (*SKBRAWHostDecodeFn)(CFStringRef, uint32_t, uint32_t, uint32_t,
                                     uint32_t *, uint32_t *, uint32_t *, void **);
+typedef BOOL (*SKBRAWHostDecodeIntoPBFn)(CFStringRef, uint32_t, uint32_t,
+                                          CVPixelBufferRef, uint32_t *, uint32_t *);
 
 static SKBRAWHostDecodeFn ResolveHostDecodeFn()
 {
@@ -849,6 +858,16 @@ static SKBRAWHostDecodeFn ResolveHostDecodeFn()
     if (fn == (SKBRAWHostDecodeFn)-1) {
         fn = (SKBRAWHostDecodeFn)dlsym(RTLD_DEFAULT, "SpliceKitBRAW_DecodeFrameBytes");
         Log(@"decoder", @"host decode fn %@", fn ? @"available" : @"unavailable");
+    }
+    return fn;
+}
+
+static SKBRAWHostDecodeIntoPBFn ResolveHostDecodeIntoPBFn()
+{
+    static SKBRAWHostDecodeIntoPBFn fn = (SKBRAWHostDecodeIntoPBFn)-1;
+    if (fn == (SKBRAWHostDecodeIntoPBFn)-1) {
+        fn = (SKBRAWHostDecodeIntoPBFn)dlsym(RTLD_DEFAULT, "SpliceKitBRAW_DecodeFrameIntoPixelBuffer");
+        Log(@"decoder", @"host decode-into-PB fn %@", fn ? @"available" : @"unavailable");
     }
     return fn;
 }
@@ -970,25 +989,39 @@ static OSStatus DecodeFrame(VTVideoDecoderRef decoderRef, VTVideoDecoderFrame fr
         return s;
     }
 
-    // Opt-in: host-delegated decode. Currently crashes when BRAW SDK callbacks
-    // fire on worker threads in an FCP process that has an active VT decoder
-    // session; wire is here for further debugging.
-    if (SKBRAWHostDecodeOptedIn()) {
-        SKBRAWHostDecodeFn hostDecode = ResolveHostDecodeFn();
-        if (hostDecode && decoder->currentPath) {
+    if (SKBRAWHostDecodeOptedIn() && decoder->currentPath) {
+        // Preferred path: zero-copy Metal. The host runs BRAW's Metal pipeline,
+        // blits the result straight into this CVPixelBuffer's IOSurface via a
+        // GPU blit command, and returns once the command buffer has completed.
+        // No CPU memcpy of the ~170 MB frame, no vImage channel swap.
+        if (SKBRAWHostDecodeIntoPBFn hostDecodePB = ResolveHostDecodeIntoPBFn()) {
+            CVPixelBufferRef pb = CreatePixelBuffer(decoder);
+            if (pb) {
+                uint32_t w = 0, h = 0;
+                BOOL ok = hostDecodePB(decoder->currentPath, frameIndex, 0, pb, &w, &h);
+                if (ok) {
+                    OSStatus s = VTDecoderSessionEmitDecodedFrame(decoder->session, frame, noErr, 0, pb);
+                    CFRelease(pb);
+                    return s;
+                }
+                CFRelease(pb);
+                Log(@"decoder", @"host decode-into-PB failed frame=%u; falling back to bytes path", frameIndex);
+            }
+        }
+
+        // Fallback: CPU-bytes path. Slower but still correct.
+        if (SKBRAWHostDecodeFn hostDecode = ResolveHostDecodeFn()) {
             uint32_t w = 0, h = 0, sz = 0;
             void *hostBytes = nullptr;
-            // scale=0 (full), format=0 (RGBAU8). Full scale matches the clip's
-            // format-description dimensions so the viewer doesn't render a
-            // half-size image padded with black.
+            // scale=0 (full), format=0 (RGBAU8).
             BOOL ok = hostDecode(decoder->currentPath, frameIndex, 0, 0, &w, &h, &sz, &hostBytes);
             if (ok && hostBytes && sz > 0) {
-                Log(@"decoder", @"host decode ok frame=%u %ux%u bytes=%u", frameIndex, w, h, sz);
                 OSStatus status = EmitDecodedFrame_FromHostBytes(decoder, frame, w, h, sz, (const uint8_t *)hostBytes);
                 free(hostBytes);
                 return status;
             }
-            Log(@"decoder", @"host decode failed frame=%u", frameIndex);
+            if (hostBytes) free(hostBytes);
+            Log(@"decoder", @"host decode-bytes failed frame=%u", frameIndex);
         }
     }
 

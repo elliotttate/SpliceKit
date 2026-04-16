@@ -1814,8 +1814,57 @@ SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWProviderProbe(NSDictio
 // has no such problem; braw.probe decodes the same file end-to-end. So we
 // expose a sync decode helper here and have the decoder bundle call it via
 // dlsym(RTLD_DEFAULT, "SpliceKitBRAW_DecodeFrameBytes").
+//
+// Decode path:
+//   1. Per-clip: configure Metal pipeline if supported (else CPU).
+//   2. BRAW SDK decodes on GPU, emits a Metal BGRAU8 MTLBuffer (shared storage).
+//   3. ProcessComplete encodes a GPU blit from that MTLBuffer into an
+//      IOSurface-backed MTLTexture that wraps the destination CVPixelBuffer —
+//      no CPU-visible copies of the ~170 MB frame.
+//   4. If the caller didn't provide a CVPixelBuffer (legacy bytes API) or
+//      Metal isn't available, fall back to CPU readback.
 
 namespace {
+
+static id<MTLDevice> SpliceKitBRAWMetalDevice() {
+    static id<MTLDevice> device = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        device = MTLCreateSystemDefaultDevice();
+        if (!device) {
+            SpliceKitBRAWTrace(@"[metal] no default device; will fall back to CPU pipeline");
+        }
+    });
+    return device;
+}
+
+static id<MTLCommandQueue> SpliceKitBRAWMetalCommandQueue() {
+    static id<MTLCommandQueue> queue = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        id<MTLDevice> device = SpliceKitBRAWMetalDevice();
+        if (device) queue = [device newCommandQueue];
+    });
+    return queue;
+}
+
+static CVMetalTextureCacheRef SpliceKitBRAWMetalTextureCache() {
+    static CVMetalTextureCacheRef cache = nullptr;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        id<MTLDevice> device = SpliceKitBRAWMetalDevice();
+        if (device) {
+            CVReturn cvr = CVMetalTextureCacheCreate(
+                kCFAllocatorDefault, nullptr, device, nullptr, &cache);
+            if (cvr != kCVReturnSuccess) {
+                SpliceKitBRAWTrace([NSString stringWithFormat:
+                    @"[metal] CVMetalTextureCacheCreate failed cvr=%d", cvr]);
+                cache = nullptr;
+            }
+        }
+    });
+    return cache;
+}
 
 struct SpliceKitBRAWHostDecodeContext {
     std::mutex mutex;
@@ -1830,6 +1879,11 @@ struct SpliceKitBRAWHostDecodeContext {
     uint32_t resourceSizeBytes { 0 };
     BlackmagicRawResolutionScale scale { blackmagicRawResolutionScaleHalf };
     BlackmagicRawResourceFormat format { blackmagicRawResourceFormatRGBAU8 };
+
+    // Zero-copy Metal target: if set, ProcessComplete blits the SDK's MTLBuffer
+    // directly into this CVPixelBuffer's IOSurface-backed MTLTexture instead of
+    // copying bytes through CPU memory.
+    CVPixelBufferRef destPixelBuffer { nullptr };
 };
 
 class SpliceKitBRAWHostDecodeCallback : public IBlackmagicRawCallback {
@@ -1893,33 +1947,121 @@ public:
                 processedImage->GetResource(&resource);
             }
 
-            std::lock_guard<std::mutex> lock(ctx->mutex);
+            std::unique_lock<std::mutex> lock(ctx->mutex);
             ctx->processResult = result;
             ctx->width = w;
             ctx->height = h;
             ctx->resourceSizeBytes = sz;
+
             if (result != S_OK) {
                 ctx->error = "ProcessComplete returned failure";
-            } else if (resourceType != blackmagicRawResourceTypeBufferCPU) {
-                // With a non-CPU pipeline, GetResource() hands back an opaque Metal/CUDA/OpenCL
-                // buffer or texture — not RGBA bytes. Copying it would produce garbled output.
-                // Bail so the caller emits a placeholder instead of corrupted pixels.
-                ctx->error = "ProcessComplete returned non-CPU resource; CPU pipeline expected";
-            } else if (!resource || sz == 0 || sz > 512u * 1024u * 1024u) {
+            } else if (!resource || sz == 0 || sz > 512u * 1024u * 1024u || w == 0 || h == 0) {
                 ctx->error = "ProcessComplete returned invalid resource";
-            } else {
+            } else if (resourceType == blackmagicRawResourceTypeBufferCPU) {
                 const uint8_t *bytes = static_cast<const uint8_t *>(resource);
                 try {
                     ctx->bytes.assign(bytes, bytes + sz);
                 } catch (...) {
-                    ctx->error = "failed to copy bytes";
+                    ctx->error = "failed to copy CPU bytes";
                 }
+            } else if (resourceType == blackmagicRawResourceTypeBufferMetal) {
+                // Drop the lock while encoding/waiting on the GPU blit — we don't
+                // need ctx->mutex for any of it, and holding it would block a
+                // parallel decode that's waiting on the condition variable.
+                lock.unlock();
+
+                id<MTLBuffer> srcBuffer = (__bridge id<MTLBuffer>)resource;
+                std::string blitError;
+                bool blitOK = false;
+
+                if (ctx->destPixelBuffer) {
+                    blitOK = EncodeMetalBlit(srcBuffer, w, h, ctx->destPixelBuffer, blitError);
+                } else {
+                    // Bytes API fallback — copy MTLBuffer.contents into the vector.
+                    // Shared-storage MTLBuffers are CPU-visible immediately after
+                    // GPU work completes; the callback fires after that.
+                    const void *contents = srcBuffer ? [srcBuffer contents] : nullptr;
+                    if (contents) {
+                        const uint8_t *bytes = static_cast<const uint8_t *>(contents);
+                        try {
+                            std::lock_guard<std::mutex> l2(ctx->mutex);
+                            ctx->bytes.assign(bytes, bytes + sz);
+                            blitOK = true;
+                        } catch (...) {
+                            blitError = "failed to copy Metal buffer bytes";
+                        }
+                    } else {
+                        blitError = "MTLBuffer contents null";
+                    }
+                }
+
+                lock.lock();
+                if (!blitOK) ctx->error = blitError.empty() ? "Metal blit failed" : blitError;
+            } else {
+                ctx->error = "ProcessComplete returned unsupported resource type";
             }
             ctx->finished = true;
             ctx->cv.notify_all();
         }
 
         if (job) job->Release();
+    }
+
+    static bool EncodeMetalBlit(id<MTLBuffer> srcBuffer,
+                                uint32_t w, uint32_t h,
+                                CVPixelBufferRef destPixelBuffer,
+                                std::string &errorOut) {
+        if (!srcBuffer) { errorOut = "MTLBuffer null"; return false; }
+        if (!destPixelBuffer) { errorOut = "dest CVPixelBuffer null"; return false; }
+
+        CVMetalTextureCacheRef cache = SpliceKitBRAWMetalTextureCache();
+        id<MTLCommandQueue> queue = SpliceKitBRAWMetalCommandQueue();
+        if (!cache || !queue) {
+            errorOut = "Metal cache/queue unavailable";
+            return false;
+        }
+
+        CVMetalTextureRef textureRef = nullptr;
+        CVReturn cvr = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, cache, destPixelBuffer, nullptr,
+            MTLPixelFormatBGRA8Unorm, w, h, 0, &textureRef);
+        if (cvr != kCVReturnSuccess || !textureRef) {
+            errorOut = [NSString stringWithFormat:@"CVMetalTextureCacheCreateTextureFromImage cvr=%d", cvr].UTF8String;
+            if (textureRef) CFRelease(textureRef);
+            return false;
+        }
+
+        id<MTLTexture> dstTexture = CVMetalTextureGetTexture(textureRef);
+        if (!dstTexture) {
+            errorOut = "CVMetalTextureGetTexture returned null";
+            CFRelease(textureRef);
+            return false;
+        }
+
+        @autoreleasepool {
+            id<MTLCommandBuffer> cmdBuffer = [queue commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [cmdBuffer blitCommandEncoder];
+            [blit copyFromBuffer:srcBuffer
+                    sourceOffset:0
+               sourceBytesPerRow:(NSUInteger)w * 4
+             sourceBytesPerImage:(NSUInteger)w * (NSUInteger)h * 4
+                      sourceSize:MTLSizeMake(w, h, 1)
+                       toTexture:dstTexture
+                destinationSlice:0
+                destinationLevel:0
+               destinationOrigin:MTLOriginMake(0, 0, 0)];
+            [blit endEncoding];
+            [cmdBuffer commit];
+            [cmdBuffer waitUntilCompleted];
+            if (cmdBuffer.error) {
+                errorOut = cmdBuffer.error.localizedDescription.UTF8String;
+                CFRelease(textureRef);
+                return false;
+            }
+        }
+
+        CFRelease(textureRef);
+        return true;
     }
 
     void TrimProgress(IBlackmagicRawJob *, float) override {}
@@ -2001,18 +2143,38 @@ static SpliceKitBRAWHostClipEntry *SpliceKitBRAWHostAcquireEntry(NSString *path,
         return nullptr;
     }
 
-    // Force CPU pipeline. With the Metal pipeline, IBlackmagicRawProcessedImage::
-    // GetResource() returns an opaque Metal buffer/texture pointer — not CPU-readable
-    // RGBA bytes — so copying it directly produces garbled scanline output. A proper
-    // Metal path would dispatch GetResourceType() and blit the Metal texture into the
-    // CVPixelBuffer's IOSurface, but that's a future zero-copy optimization. CPU
-    // pipeline is the correctness baseline and matches the probe's known-good flow.
+    // Prefer the Metal pipeline when available — decode happens on GPU and the
+    // resulting MTLBuffer can be GPU-blitted into the destination CVPixelBuffer's
+    // IOSurface without any CPU-visible copy. Fall back to CPU if Metal isn't
+    // supported on the device (unlikely on modern Apple Silicon Macs).
     IBlackmagicRawConfiguration *config = nullptr;
+    bool usingMetal = false;
     if (codec->QueryInterface(IID_IBlackmagicRawConfiguration, (LPVOID *)&config) == S_OK && config) {
-        config->SetPipeline(blackmagicRawPipelineCPU, nullptr, nullptr);
-        uint32_t cpuCount = (uint32_t)std::max(1, (int)[NSProcessInfo processInfo].activeProcessorCount - 1);
-        config->SetCPUThreads(cpuCount);
-        SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] using CPU pipeline (%u threads)", cpuCount]);
+        id<MTLDevice> device = SpliceKitBRAWMetalDevice();
+        id<MTLCommandQueue> queue = SpliceKitBRAWMetalCommandQueue();
+        bool metalSupported = false;
+        if (device && queue) {
+            config->IsPipelineSupported(blackmagicRawPipelineMetal, &metalSupported);
+            if (metalSupported) {
+                HRESULT hr = config->SetPipeline(blackmagicRawPipelineMetal,
+                                                 (__bridge void *)device,
+                                                 (__bridge void *)queue);
+                if (hr == S_OK) {
+                    usingMetal = true;
+                    SpliceKitBRAWTrace(@"[host-decode] using Metal pipeline");
+                } else {
+                    SpliceKitBRAWTrace([NSString stringWithFormat:
+                        @"[host-decode] Metal SetPipeline failed hr=0x%08X; falling back to CPU",
+                        (uint32_t)hr]);
+                }
+            }
+        }
+        if (!usingMetal) {
+            config->SetPipeline(blackmagicRawPipelineCPU, nullptr, nullptr);
+            uint32_t cpuCount = (uint32_t)std::max(1, (int)[NSProcessInfo processInfo].activeProcessorCount - 1);
+            config->SetCPUThreads(cpuCount);
+            SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] using CPU pipeline (%u threads)", cpuCount]);
+        }
     }
 
     IBlackmagicRawClip *clip = nullptr;
@@ -2091,6 +2253,50 @@ static dispatch_queue_t SpliceKitBRAWWorkQueue(void) {
     return queue;
 }
 
+static bool SpliceKitBRAWRunDecodeJob(SpliceKitBRAWHostClipEntry *entry,
+                                      SpliceKitBRAWHostDecodeContext &ctx,
+                                      uint32_t frameIndex) {
+    entry->callback->Bind(&ctx);
+
+    IBlackmagicRawJob *readJob = nullptr;
+    HRESULT hr = entry->clip->CreateJobReadFrame(frameIndex, &readJob);
+    if (hr != S_OK || !readJob) {
+        entry->callback->Unbind();
+        SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] CreateJobReadFrame failed frame=%u hr=0x%08X", frameIndex, (uint32_t)hr]);
+        return false;
+    }
+    hr = readJob->Submit();
+    if (hr != S_OK) {
+        readJob->Release();
+        entry->callback->Unbind();
+        return false;
+    }
+
+    entry->codec->FlushJobs();
+    {
+        std::unique_lock<std::mutex> lock(ctx.mutex);
+        ctx.cv.wait_for(lock, std::chrono::seconds(10), [&] { return ctx.finished; });
+    }
+    entry->callback->Unbind();
+
+    if (ctx.processResult != S_OK) {
+        SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] decode failed frame=%u error=%s",
+                            frameIndex, ctx.error.c_str()]);
+        return false;
+    }
+    return true;
+}
+
+static BlackmagicRawResolutionScale SpliceKitBRAWScaleForHint(uint32_t scaleHint) {
+    switch (scaleHint) {
+        case 0: return blackmagicRawResolutionScaleFull;
+        case 1: return blackmagicRawResolutionScaleHalf;
+        case 2: return blackmagicRawResolutionScaleQuarter;
+        case 3: return blackmagicRawResolutionScaleEighth;
+        default: return blackmagicRawResolutionScaleHalf;
+    }
+}
+
 static BOOL SpliceKitBRAWDecodeFrameBytesOnWorkQueue(
     NSString *path,
     uint32_t frameIndex,
@@ -2109,41 +2315,11 @@ static BOOL SpliceKitBRAWDecodeFrameBytesOnWorkQueue(
     }
 
     SpliceKitBRAWHostDecodeContext ctx;
-    switch (scaleHint) {
-        case 0: ctx.scale = blackmagicRawResolutionScaleFull; break;
-        case 1: ctx.scale = blackmagicRawResolutionScaleHalf; break;
-        case 2: ctx.scale = blackmagicRawResolutionScaleQuarter; break;
-        case 3: ctx.scale = blackmagicRawResolutionScaleEighth; break;
-        default: ctx.scale = blackmagicRawResolutionScaleHalf; break;
-    }
+    ctx.scale = SpliceKitBRAWScaleForHint(scaleHint);
     ctx.format = (formatHint == 1) ? blackmagicRawResourceFormatBGRAU8
                                     : blackmagicRawResourceFormatRGBAU8;
 
-    entry->callback->Bind(&ctx);
-
-    IBlackmagicRawJob *readJob = nullptr;
-    HRESULT hr = entry->clip->CreateJobReadFrame(frameIndex, &readJob);
-    if (hr != S_OK || !readJob) {
-        entry->callback->Unbind();
-        SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] CreateJobReadFrame failed frame=%u hr=0x%08X", frameIndex, (uint32_t)hr]);
-        return NO;
-    }
-    hr = readJob->Submit();
-    if (hr != S_OK) {
-        readJob->Release();
-        entry->callback->Unbind();
-        return NO;
-    }
-
-    entry->codec->FlushJobs();
-    {
-        std::unique_lock<std::mutex> lock(ctx.mutex);
-        ctx.cv.wait_for(lock, std::chrono::seconds(10), [&] { return ctx.finished; });
-    }
-    entry->callback->Unbind();
-
-    if (ctx.processResult != S_OK || ctx.bytes.empty()) {
-        SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] decode failed frame=%u error=%s", frameIndex, ctx.error.c_str()]);
+    if (!SpliceKitBRAWRunDecodeJob(entry, ctx, frameIndex) || ctx.bytes.empty()) {
         return NO;
     }
 
@@ -2154,6 +2330,41 @@ static BOOL SpliceKitBRAWDecodeFrameBytesOnWorkQueue(
     *outHeight = ctx.height;
     *outSizeBytes = (uint32_t)ctx.bytes.size();
     *outBytes = buffer;
+    return YES;
+}
+
+static BOOL SpliceKitBRAWDecodeIntoPixelBufferOnWorkQueue(
+    NSString *path,
+    uint32_t frameIndex,
+    uint32_t scaleHint,
+    CVPixelBufferRef destPixelBuffer,
+    uint32_t *outWidth,
+    uint32_t *outHeight)
+{
+    std::string error;
+    SpliceKitBRAWHostClipEntry *entry = SpliceKitBRAWHostAcquireEntry(path, error);
+    if (!entry) {
+        SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] acquire failed for %@: %s", path, error.c_str()]);
+        return NO;
+    }
+
+    SpliceKitBRAWHostDecodeContext ctx;
+    ctx.scale = SpliceKitBRAWScaleForHint(scaleHint);
+    // BGRAU8 matches kCVPixelFormatType_32BGRA on the destination so the blit
+    // is a straight-line copy (no channel swap).
+    ctx.format = blackmagicRawResourceFormatBGRAU8;
+    ctx.destPixelBuffer = destPixelBuffer;
+
+    if (!SpliceKitBRAWRunDecodeJob(entry, ctx, frameIndex)) {
+        return NO;
+    }
+    if (!ctx.error.empty()) {
+        SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] blit error frame=%u: %s",
+                            frameIndex, ctx.error.c_str()]);
+        return NO;
+    }
+    *outWidth = ctx.width;
+    *outHeight = ctx.height;
     return YES;
 }
 
@@ -2189,6 +2400,49 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameBytes(
     *outHeight = h;
     *outSizeBytes = sz;
     *outBytes = bytes;
+    return result;
+}
+
+// Zero-copy Metal decode: BRAW SDK decodes on GPU and the resulting MTLBuffer
+// is GPU-blitted directly into `destPixelBuffer`'s IOSurface-backed texture.
+// No CPU-visible copies of the frame. Caller retains ownership of the pixel
+// buffer; we fill it and return.
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameIntoPixelBuffer(
+    CFStringRef pathRef,
+    uint32_t frameIndex,
+    uint32_t scaleHint,
+    CVPixelBufferRef destPixelBuffer,
+    uint32_t *outWidth,
+    uint32_t *outHeight)
+{
+    if (!pathRef || !destPixelBuffer || !outWidth || !outHeight) return NO;
+    *outWidth = 0;
+    *outHeight = 0;
+
+    // The destination must be BGRA so the blit matches the SDK's BGRAU8 output
+    // without a channel-swap shader. IOSurface-backed buffers come from VT's
+    // pool which we configured for 32BGRA in StartDecoderSession.
+    OSType pixelFormat = CVPixelBufferGetPixelFormatType(destPixelBuffer);
+    if (pixelFormat != kCVPixelFormatType_32BGRA) {
+        SpliceKitBRAWTrace([NSString stringWithFormat:
+            @"[host-decode] destPixelBuffer format 0x%08x != 32BGRA", (unsigned)pixelFormat]);
+        return NO;
+    }
+
+    NSString *path = (__bridge NSString *)pathRef;
+    __block BOOL result = NO;
+    __block uint32_t w = 0, h = 0;
+    NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
+    dispatch_sync(SpliceKitBRAWWorkQueue(), ^{
+        result = SpliceKitBRAWDecodeIntoPixelBufferOnWorkQueue(
+            path, frameIndex, scaleHint, destPixelBuffer, &w, &h);
+    });
+    NSTimeInterval elapsedMs = ([NSDate timeIntervalSinceReferenceDate] - t0) * 1000.0;
+    SpliceKitBRAWTrace([NSString stringWithFormat:
+        @"[host-decode] into-PB frame=%u %.2fms result=%@",
+        frameIndex, elapsedMs, result ? @"ok" : @"fail"]);
+    *outWidth = w;
+    *outHeight = h;
     return result;
 }
 
@@ -2298,6 +2552,20 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_ReadClipMetadata(
     if (outHeight) *outHeight = 0;
     if (outFrameRate) *outFrameRate = 0;
     if (outFrameCount) *outFrameCount = 0;
+    return NO;
+}
+
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameIntoPixelBuffer(
+    CFStringRef pathRef,
+    uint32_t frameIndex,
+    uint32_t scaleHint,
+    CVPixelBufferRef destPixelBuffer,
+    uint32_t *outWidth,
+    uint32_t *outHeight)
+{
+    (void)pathRef; (void)frameIndex; (void)scaleHint; (void)destPixelBuffer;
+    if (outWidth) *outWidth = 0;
+    if (outHeight) *outHeight = 0;
     return NO;
 }
 

@@ -190,10 +190,14 @@ $(BRAW_CLI_BIN): $(BRAW_CLI_SRC) | $(BUILD_DIR)
 	@codesign --force --sign - "$(BRAW_CLI_BIN)" >/dev/null
 	@echo "Built: $(BRAW_CLI_BIN)"
 
+# Enable the BRAW prototype bundles by default during deploy; override with
+# ENABLE_BRAW_PROTOTYPE=0 to skip copying them into the modded FCP app.
+ENABLE_BRAW_PROTOTYPE ?= 1
+
 braw-prototype: $(BRAW_IMPORT_EXEC) $(BRAW_DECODER_EXEC) $(BRAW_CLI_BIN)
 	@echo "Staged: $(BRAW_BUILD_DIR)"
 
-deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP)
+deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) braw-prototype
 	@echo "=== Deploying SpliceKit to modded FCP ==="
 	@mkdir -p "$(FW_DIR)/Versions/A/Resources"
 	cp $(OUTPUT) "$(FW_DIR)/Versions/A/SpliceKit"
