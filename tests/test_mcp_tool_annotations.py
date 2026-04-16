@@ -12,6 +12,8 @@ class FakeFastMCP:
         self.name = name
         self.instructions = instructions
         self.tools = []
+        self.resources = []
+        self.prompts = []
 
     def tool(self, annotations=None):
         def decorator(func):
@@ -24,6 +26,18 @@ class FakeFastMCP:
             )
             return func
 
+        return decorator
+
+    def resource(self, uri, **kwargs):
+        def decorator(func):
+            self.resources.append({"uri": uri, "func": func, **kwargs})
+            return func
+        return decorator
+
+    def prompt(self, **kwargs):
+        def decorator(func):
+            self.prompts.append({"func": func, **kwargs})
+            return func
         return decorator
 
 
@@ -91,6 +105,12 @@ class MCPToolAnnotationTests(unittest.TestCase):
             "open_livecam",
             "close_livecam",
             "get_livecam_status",
+            "mixer_set_solo",
+            "mixer_set_mute",
+            "mixer_apply_bus_effect",
+            "mixer_open_bus_effect",
+            "mixer_set_bus_effect_enabled",
+            "mixer_remove_bus_effect",
         }
         self.assertTrue(expected.issubset(self.tools.keys()))
 
@@ -161,73 +181,67 @@ class MCPToolAnnotationTests(unittest.TestCase):
             ],
         )
 
-    def test_handle_split_wrappers_forward_expected_bridge_calls(self):
+    def test_mixer_solo_mute_wrappers_forward_expected_bridge_calls(self):
         calls = []
 
         def fake_call(method, **params):
             calls.append((method, params))
-            return {"method": method, "params": params}
+            if method == "mixer.setSolo":
+                return {"ok": True, "role": "Dialogue", "soloed": True, "soloObjectCount": 2}
+            if method == "mixer.setMute":
+                return {"ok": True, "role": "Music", "muted": False, "roleUIDCount": 1}
+            if method == "mixer.openBusEffect":
+                return {"ok": True, "role": "Music", "effect": {"name": "Channel EQ"}, "effectIndex": 0}
+            if method == "mixer.setBusEffectEnabled":
+                return {"ok": True, "role": "Music", "enabled": False, "effectIndex": 0}
+            if method == "mixer.removeBusEffect":
+                return {"ok": True, "role": "Music", "effectIndex": 0, "busObjectCount": 1}
+            return {"ok": True, "role": "Music", "effect": {"name": "Channel EQ"}, "busObjectCount": 1}
 
         self.module.bridge.call = fake_call
 
-        self.module.list_handles()
-        self.module.inspect_handle("obj_7")
-        self.module.release_handle("obj_7")
-        self.module.release_all_handles()
+        solo_result = self.module.mixer_set_solo(index=0, mode="exclusive")
+        mute_result = self.module.mixer_set_mute(role="Music", mode="unmute")
+        bus_result = self.module.mixer_apply_bus_effect(name="Channel EQ", role="Music", dry_run=True)
+        open_result = self.module.mixer_open_bus_effect(effect_index=0, role="Music")
+        disable_result = self.module.mixer_set_bus_effect_enabled(effect_index=0, enabled=False, role="Music")
+        remove_result = self.module.mixer_remove_bus_effect(effect_index=0, role="Music")
 
+        self.assertIn("Dialogue: soloed", solo_result)
+        self.assertIn("Music: unmuted", mute_result)
+        self.assertIn("Channel EQ -> Music", bus_result)
+        self.assertIn("Opened Channel EQ editor", open_result)
+        self.assertIn("Music: disabled", disable_result)
+        self.assertIn("Removed mixer bus effect 0 from Music", remove_result)
         self.assertEqual(
             calls,
             [
-                ("object.list", {}),
-                ("object.get", {"handle": "obj_7"}),
-                ("object.release", {"handle": "obj_7"}),
-                ("object.release", {"all": True}),
+                ("mixer.setSolo", {"mode": "exclusive", "index": 0}),
+                ("mixer.setMute", {"mode": "unmute", "role": "Music"}),
+                ("mixer.applyBusEffect", {
+                    "dryRun": True,
+                    "allowObjectFallback": False,
+                    "name": "Channel EQ",
+                    "role": "Music",
+                }),
+                ("mixer.openBusEffect", {
+                    "effectIndex": 0,
+                    "allowObjectFallback": False,
+                    "role": "Music",
+                }),
+                ("mixer.setBusEffectEnabled", {
+                    "effectIndex": 0,
+                    "enabled": False,
+                    "allowObjectFallback": False,
+                    "role": "Music",
+                }),
+                ("mixer.removeBusEffect", {
+                    "effectIndex": 0,
+                    "allowObjectFallback": False,
+                    "role": "Music",
+                }),
             ],
         )
-
-    def test_timeline_split_wrappers_forward_expected_bridge_calls(self):
-        calls = []
-
-        def fake_call(method, **params):
-            calls.append((method, params))
-            return {"ok": True}
-
-        self.module.bridge.call = fake_call
-
-        self.module.timeline_navigation_action("nextEdit")
-        self.module.timeline_edit_action("addMarker")
-        self.module.timeline_destructive_action("blade")
-        self.module.history_action("undo")
-
-        self.assertEqual(
-            calls,
-            [
-                ("timeline.action", {"action": "nextEdit"}),
-                ("timeline.action", {"action": "addMarker"}),
-                ("timeline.action", {"action": "blade"}),
-                ("timeline.action", {"action": "undo"}),
-            ],
-        )
-
-    def test_read_only_scene_tool_rejects_mutating_legacy_actions(self):
-        result = self.module.detect_scene_changes(action="markers")
-        self.assertIn("read-only", result)
-
-    def test_timeline_split_wrappers_accept_documented_actions(self):
-        self.module.bridge.call = lambda method, **params: {"ok": True, "action": params["action"]}
-
-        self.assertIn("ok", self.module.timeline_navigation_action("enableBeatDetection"))
-        self.assertIn("ok", self.module.timeline_navigation_action("nextKeyframe"))
-        self.assertIn("ok", self.module.timeline_edit_action("addKeyframe"))
-        self.assertIn("ok", self.module.timeline_edit_action("transcodeMedia"))
-
-    def test_history_actions_are_rejected_by_non_destructive_split(self):
-        result = self.module.timeline_edit_action("undo")
-        self.assertIn("history_action()", result)
-
-    def test_background_render_control_rejects_invalid_inputs(self):
-        self.assertIn("action must be", self.module.background_render_control("pause", 1.0))
-        self.assertIn("seconds must be > 0", self.module.background_render_control("hold_off", 0))
 
     def test_transcript_grep_wrappers_forward_expected_bridge_calls(self):
         calls = []
@@ -332,6 +346,446 @@ class MCPToolAnnotationTests(unittest.TestCase):
                 ("liveCam.status", {}),
             ],
         )
+
+    def test_handle_split_wrappers_forward_expected_bridge_calls(self):
+        calls = []
+
+        def fake_call(method, **params):
+            calls.append((method, params))
+            return {"method": method, "params": params}
+
+        self.module.bridge.call = fake_call
+
+        self.module.list_handles()
+        self.module.inspect_handle("obj_7")
+        self.module.release_handle("obj_7")
+        self.module.release_all_handles()
+
+        self.assertEqual(
+            calls,
+            [
+                ("object.list", {}),
+                ("object.get", {"handle": "obj_7"}),
+                ("object.release", {"handle": "obj_7"}),
+                ("object.release", {"all": True}),
+            ],
+        )
+
+    def test_timeline_split_wrappers_forward_expected_bridge_calls(self):
+        calls = []
+
+        def fake_call(method, **params):
+            calls.append((method, params))
+            return {"ok": True}
+
+        self.module.bridge.call = fake_call
+
+        self.module.timeline_navigation_action("nextEdit")
+        self.module.timeline_edit_action("addMarker")
+        self.module.timeline_destructive_action("blade")
+        self.module.history_action("undo")
+
+        self.assertEqual(
+            calls,
+            [
+                ("timeline.action", {"action": "nextEdit"}),
+                ("timeline.action", {"action": "addMarker"}),
+                ("timeline.action", {"action": "blade"}),
+                ("timeline.action", {"action": "undo"}),
+            ],
+        )
+
+    def test_read_only_scene_tool_rejects_mutating_legacy_actions(self):
+        result = self.module.detect_scene_changes(action="markers")
+        self.assertIn("read-only", result)
+
+    def test_timeline_split_wrappers_accept_documented_actions(self):
+        self.module.bridge.call = lambda method, **params: {"ok": True, "action": params["action"]}
+
+        self.assertIn("ok", self.module.timeline_navigation_action("enableBeatDetection"))
+        self.assertIn("ok", self.module.timeline_navigation_action("nextKeyframe"))
+        self.assertIn("ok", self.module.timeline_edit_action("addKeyframe"))
+        self.assertIn("ok", self.module.timeline_destructive_action("removeAllKeyframesFromClip"))
+        self.assertIn("ok", self.module.timeline_edit_action("transcodeMedia"))
+
+    def test_history_actions_are_rejected_by_non_destructive_split(self):
+        result = self.module.timeline_edit_action("undo")
+        self.assertIn("history_action()", result)
+
+    def test_background_render_control_rejects_invalid_inputs(self):
+        self.assertIn("action must be", self.module.background_render_control("pause", 1.0))
+        self.assertIn("seconds must be > 0", self.module.background_render_control("hold_off", 0))
+
+    def test_trim_clips_to_beats_forwards_expected_bridge_call(self):
+        calls = []
+
+        def fake_call(method, params_dict=None, **params):
+            if params_dict is not None:
+                params = {**params_dict, **params}
+            calls.append((method, params))
+            return {
+                "status": "ok",
+                "dryRun": True,
+                "grid": "half_beat",
+                "randomize": True,
+                "randomSeed": 99,
+                "gridPointCount": 3,
+                "gridPreview": [1.0, 1.5, 2.0],
+                "planned": 1,
+                "applied": 0,
+                "source": {"name": "Song", "tempo": 120.0},
+                "plan": [
+                    {
+                        "name": "Clip A",
+                        "start": 5.0,
+                        "targetEnd": 6.5,
+                        "trimAmount": 1.0,
+                        "newDuration": 1.5,
+                        "status": "planned",
+                    }
+                ],
+            }
+
+        self.module.bridge.call = fake_call
+
+        result = self.module.trim_clips_to_beats(
+            grid="half_beat",
+            randomize=True,
+            random_min_step=2,
+            random_max_step=5,
+            random_seed=99,
+            min_trim_seconds=0.2,
+            min_result_duration=0.5,
+            source_handle="obj_10",
+            target_handles='["obj_11","obj_12"]',
+            dry_run=True,
+        )
+
+        self.assertIn("Previewing 0/1 planned trims", result)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "timeline.trimClipsToBeats",
+                    {
+                        "grid": "half_beat",
+                        "randomize": True,
+                        "randomMinStep": 2,
+                        "randomMaxStep": 5,
+                        "randomSeed": 99,
+                        "dryRun": True,
+                        "minTrimSeconds": 0.2,
+                        "minResultDuration": 0.5,
+                        "sourceHandle": "obj_10",
+                        "targetHandles": ["obj_11", "obj_12"],
+                        "targetMode": "auto",
+                    },
+                )
+            ],
+        )
+
+    def test_trim_clips_to_beats_rejects_invalid_target_handle_json(self):
+        result = self.module.trim_clips_to_beats(target_handles="{bad json")
+        self.assertIn("Invalid target_handles JSON", result)
+
+    def test_sync_clips_to_song_beats_uses_overlay_shortcut(self):
+        calls = []
+
+        def fake_call(method, params_dict=None, **params):
+            if params_dict is not None:
+                params = {**params_dict, **params}
+            calls.append((method, params))
+            return {
+                "status": "ok",
+                "dryRun": True,
+                "grid": "random_half_beat",
+                "targetMode": "overlay",
+                "randomize": True,
+                "randomSeed": 77,
+                "gridPointCount": 4,
+                "gridPreview": [0.5, 1.0, 1.5],
+                "planned": 2,
+                "applied": 0,
+                "source": {"name": "Song", "tempo": 128.0},
+                "plan": [],
+            }
+
+        self.module.bridge.call = fake_call
+
+        result = self.module.sync_clips_to_song_beats(
+            mode="random_half_beat",
+            overlay_only=True,
+            random_min_step=2,
+            random_max_step=3,
+            random_seed=77,
+            dry_run=True,
+        )
+
+        self.assertIn("targets=overlay", result)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "timeline.trimClipsToBeats",
+                    {
+                        "grid": "random_half_beat",
+                        "targetMode": "overlay",
+                        "randomize": True,
+                        "randomMinStep": 2,
+                        "randomMaxStep": 3,
+                        "randomSeed": 77,
+                        "dryRun": True,
+                    },
+                )
+            ],
+        )
+
+    def test_assemble_random_clips_to_song_beats_forwards_expected_bridge_call(self):
+        calls = []
+
+        def fake_call(method, params_dict=None, **params):
+            if params_dict is not None:
+                params = {**params_dict, **params}
+            calls.append((method, params))
+            return {
+                "status": "ok",
+                "dryRun": True,
+                "grid": "bar",
+                "projectName": "Beat Cut",
+                "randomSeed": 12,
+                "segmentCount": 3,
+                "assignedClipCount": 2,
+                "gapCount": 1,
+                "clipPoolCount": 9,
+                "source": {"name": "Song", "tempo": 122.0},
+                "plan": [
+                    {"clipName": "Clip A", "timelineStartSeconds": 0.0, "durationSeconds": 1.0, "clipEvent": "Beat Tests", "status": "planned"},
+                    {"segmentIndex": 1, "timelineStartSeconds": 1.0, "durationSeconds": 1.0, "status": "gap"},
+                ],
+            }
+
+        self.module.bridge.call = fake_call
+
+        result = self.module.assemble_random_clips_to_song_beats(
+            grid="bar",
+            project_name="Beat Cut",
+            event_name="Beat Tests",
+            clip_handles='["obj_20","obj_21"]',
+            source_handle="obj_10",
+            segment_min_step=1,
+            segment_max_step=3,
+            max_segments=12,
+            random_seed=12,
+            allow_clip_reuse=False,
+            include_audio=True,
+            dry_run=True,
+        )
+
+        self.assertIn("Previewing 2/3 beat segments", result)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "timeline.assembleRandomClipsToBeats",
+                    {
+                        "grid": "bar",
+                        "projectName": "Beat Cut",
+                        "segmentMinStep": 1,
+                        "segmentMaxStep": 3,
+                        "randomSeed": 12,
+                        "allowClipReuse": False,
+                        "includeAudio": True,
+                        "buildMode": "native",
+                        "targetCurrentTimeline": False,
+                        "dryRun": True,
+                        "eventName": "Beat Tests",
+                        "clipHandles": ["obj_20", "obj_21"],
+                        "sourceHandle": "obj_10",
+                        "maxSegments": 12,
+                    },
+                )
+            ],
+        )
+
+    def test_assemble_random_clips_to_song_beats_rejects_invalid_clip_handle_json(self):
+        result = self.module.assemble_random_clips_to_song_beats(clip_handles="{bad json")
+        self.assertIn("Invalid clip_handles JSON", result)
+
+    def test_build_song_cut_maps_aggressive_preset(self):
+        calls = []
+
+        def fake_call(method, params_dict=None, **params):
+            if params_dict is not None:
+                params = {**params_dict, **params}
+            calls.append((method, params))
+            return {
+                "status": "ok",
+                "dryRun": True,
+                "grid": "quarter_beat",
+                "projectName": "Song Cut Demo",
+                "randomSeed": 9,
+                "segmentCount": 4,
+                "assignedClipCount": 4,
+                "gapCount": 0,
+                "clipPoolCount": 12,
+                "source": {"name": "Song", "tempo": 122.0},
+                "plan": [],
+            }
+
+        self.module.bridge.call = fake_call
+
+        result = self.module.build_song_cut(
+            pace="aggressive",
+            project_name="Song Cut Demo",
+            event_name="Beat Tests",
+            source_handle="obj_99",
+            max_segments=20,
+            random_seed=9,
+            dry_run=True,
+        )
+
+        self.assertIn("Preset: aggressive", result)
+        self.assertIn("Song attached underneath generated primary storyline", result)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "timeline.assembleRandomClipsToBeats",
+                    {
+                        "grid": "quarter_beat",
+                        "projectName": "Song Cut Demo",
+                        "segmentMinStep": 1,
+                        "segmentMaxStep": 4,
+                        "randomSeed": 9,
+                        "allowClipReuse": True,
+                        "includeAudio": True,
+                        "buildMode": "native",
+                        "targetCurrentTimeline": False,
+                        "dryRun": True,
+                        "eventName": "Beat Tests",
+                        "sourceHandle": "obj_99",
+                        "maxSegments": 20,
+                    },
+                )
+            ],
+        )
+
+    def test_build_song_cut_maps_natural_preset_with_weighted_steps(self):
+        calls = []
+
+        def fake_call(method, params_dict=None, **params):
+            if params_dict is not None:
+                params = {**params_dict, **params}
+            calls.append((method, params))
+            return {
+                "status": "ok",
+                "dryRun": True,
+                "buildMethod": "fcpxml",
+                "grid": "half_beat",
+                "projectName": "Song Cut Natural",
+                "randomSeed": 42,
+                "segmentCount": 8,
+                "assignedClipCount": 8,
+                "gapCount": 0,
+                "clipPoolCount": 6,
+                "source": {"name": "Song", "tempo": 122.0},
+                "plan": [],
+            }
+
+        self.module.bridge.call = fake_call
+
+        result = self.module.build_song_cut(
+            project_name="Song Cut Natural",
+            build_mode="fcpxml",
+            random_seed=42,
+            dry_run=True,
+        )
+
+        self.assertIn("Preset: natural", result)
+        self.assertIn("Build mode: fcpxml", result)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "timeline.assembleRandomClipsToBeats",
+                    {
+                        "grid": "half_beat",
+                        "projectName": "Song Cut Natural",
+                        "segmentMinStep": 1,
+                        "segmentMaxStep": 4,
+                        "stepWeights": {"1": 1, "2": 8, "4": 3},
+                        "randomSeed": 42,
+                        "allowClipReuse": True,
+                        "includeAudio": True,
+                        "buildMode": "fcpxml",
+                        "targetCurrentTimeline": False,
+                        "dryRun": True,
+                    },
+                )
+            ],
+        )
+
+    def test_build_song_cut_forwards_sequence_backed_source_and_current_timeline(self):
+        calls = []
+
+        def fake_call(method, params_dict=None, **params):
+            if params_dict is not None:
+                params = {**params_dict, **params}
+            calls.append((method, params))
+            return {
+                "status": "ok",
+                "dryRun": True,
+                "buildMethod": "native",
+                "grid": "half_beat",
+                "projectName": "Test",
+                "randomSeed": 7,
+                "segmentCount": 10,
+                "assignedClipCount": 10,
+                "gapCount": 0,
+                "clipPoolCount": 1,
+                "source": {"name": "Here We Go", "tempo": 122.0},
+                "plan": [],
+            }
+
+        self.module.bridge.call = fake_call
+
+        result = self.module.build_song_cut(
+            project_name="Ignored",
+            source_project_name="Here We Go feat We Lepers - Instrumental by ivywild Song License",
+            clip_source_project_name="THE LIONESS - A Kenyan Woman's Unexpected Journey to Photography",
+            target_current_timeline=True,
+            random_seed=7,
+            dry_run=True,
+        )
+
+        self.assertIn("Preset: natural", result)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "timeline.assembleRandomClipsToBeats",
+                    {
+                        "grid": "half_beat",
+                        "projectName": "Ignored",
+                        "segmentMinStep": 1,
+                        "segmentMaxStep": 4,
+                        "stepWeights": {"1": 1, "2": 8, "4": 3},
+                        "randomSeed": 7,
+                        "allowClipReuse": True,
+                        "includeAudio": True,
+                        "buildMode": "native",
+                        "targetCurrentTimeline": True,
+                        "dryRun": True,
+                        "sourceProjectName": "Here We Go feat We Lepers - Instrumental by ivywild Song License",
+                        "clipSourceProjectName": "THE LIONESS - A Kenyan Woman's Unexpected Journey to Photography",
+                    },
+                )
+            ],
+        )
+
+    def test_build_song_cut_rejects_invalid_pace(self):
+        result = self.module.build_song_cut(pace="slow")
+        self.assertIn('pace must be one of', result)
 
 
 if __name__ == "__main__":

@@ -292,7 +292,8 @@ timeline_action("clearRange")      # remove range selection
 ```
 open_transcript()                              # transcribe all clips on timeline
 open_transcript(file_url="/path/to/video.mp4") # transcribe a specific file
-get_transcript()                               # get words with timestamps + speakers + silences
+open_transcript(force_retranscribe=True)       # discard cache and re-transcribe
+get_transcript()                               # get words with timestamps + speakers + silences + gap histogram
 delete_transcript_words(start_index=5, count=3) # delete words 5-7 (removes video segment)
 move_transcript_words(start_index=10, count=2, dest_index=3) # reorder clips
 search_transcript("hello")                     # search for text in transcript
@@ -300,7 +301,7 @@ search_transcript("pauses")                    # find all silences/pauses
 delete_transcript_silences()                   # batch-remove all silences from timeline
 delete_transcript_silences(min_duration=1.0)   # remove only silences > 1 second
 set_transcript_speaker(start_index=0, count=50, speaker="Host")  # label speakers
-set_silence_threshold(threshold=0.5)           # set minimum pause detection (seconds)
+set_silence_threshold(threshold=0.5)           # recompute silences immediately (no re-transcription)
 close_transcript()                             # close the panel
 ```
 
@@ -416,6 +417,34 @@ export_xml(path="/tmp/my_project.fcpxml")           # export to custom path
 ```
 Programmatic export — no save dialog. Returns the FCPXML file path.
 
+## OpenTimelineIO Import & Export
+```
+export_otio()                                      # export to /tmp/splicekit_export.otio
+export_otio(path="/tmp/my_project.otio")           # export as .otio (DaVinci Resolve native)
+export_otio(path="/tmp/my_project.fcpxml")         # export as .fcpxml (native FCP exporter)
+export_otio(path="/tmp/my_project.edl")            # export as EDL (Premiere/Resolve/Avid)
+export_otio(path="/tmp/my_project.edl", rate=29.97) # EDL with explicit frame rate
+export_otio(path="/tmp/my_project.aaf")            # export as AAF (Avid Media Composer)
+import_otio(path="/tmp/from_resolve.otio")         # import .otio from DaVinci Resolve
+import_otio(path="/tmp/project.fcpxml")            # import .fcpxml into FCP
+import_otio(path="/tmp/premiere.edl", rate=29.97)  # import EDL from Premiere (set fps)
+import_otio(path="/tmp/avid.aaf")                  # import AAF from Avid
+import_otio(otio_json='{"OTIO_SCHEMA":...}')       # import raw OTIO JSON string
+```
+
+Universal timeline import/export via OpenTimelineIO. Handles all OTIO formats
+AND FCPXML/EDL/AAF, replacing `import_fcpxml` / `export_xml` as the primary tools.
+Enables timeline exchange with DaVinci Resolve, Premiere Pro, Avid Media Composer.
+
+Supported formats:
+- `.otio` — OpenTimelineIO native JSON (DaVinci Resolve, universal)
+- `.fcpxml` — Final Cut Pro XML (uses FCP's native importer/exporter for full fidelity)
+- `.edl` — CMX 3600 EDL (Premiere, Resolve, Avid — set `rate` for drop-frame)
+- `.aaf` — Avid AAF (requires Avid-specific metadata on clips)
+- `.otioz` / `.otiod` — OTIO bundles (media files must exist on disk)
+
+Requires: `pip install opentimelineio otio-fcpx-xml-adapter otio-cmx3600-adapter`
+
 ## Deploy & Restart FCP
 ```
 deploy_and_restart()                 # build, deploy, kill FCP, relaunch, wait for bridge
@@ -452,6 +481,81 @@ detect_beats(file_path="song.mp3", sensitivity=0.8) # more sensitive
 detect_beats(file_path="song.mp3", min_bpm=120, max_bpm=180) # for fast music
 ```
 Build first: `swiftc -O -o build/beat-detector tools/beat-detector.swift`
+
+## Song Cut (Beat-Synced Video Assembly)
+
+Build a contiguous primary-storyline cut synced to a song's Apple beat map.
+Uses beat detection from one sequence, video clips from another, and assembles
+the result via FCPXML import — no per-clip latency, handles any segment count.
+
+### Quick Start
+```
+# 1. Have three sequences in your library:
+#    - A song sequence (with beat detection already run on the audio)
+#    - A video clip sequence (source footage to cut from)
+#    - An empty target sequence (or let it create a new project)
+
+# 2. Open the target sequence
+open_project("My Target")
+
+# 3. Build the song cut
+build_song_cut(
+    pace="natural",                          # pacing preset
+    source_project_name="My Song",           # sequence with beat-detected audio
+    clip_source_project_name="My Footage",   # sequence with video clips
+    build_mode="fcpxml",                     # "fcpxml" (recommended) or "native"
+    project_name="My Song Cut",              # name for the generated project
+)
+```
+
+### Pacing Presets
+| Preset | Grid | Behavior |
+|--------|------|----------|
+| `natural` | half_beat | Mostly whole-beat cuts, sometimes two beats, rarely paired half-beats |
+| `medium` | half_beat | 1-2 beat cuts |
+| `fast` | half_beat | Half- to full-beat cuts, half-beats always paired |
+| `aggressive` | quarter_beat | Quarter- to full-beat cuts |
+
+**Half-beat pairing rule**: On a half_beat grid, when a half-beat step is chosen,
+the next segment is forced to also be a half-beat. This ensures half-beat cuts
+always come in pairs, resolving on whole-beat boundaries.
+
+### Custom Pacing (bypass presets)
+```
+assemble_random_clips_to_song_beats(
+    grid="half_beat",                        # beat, half_beat, quarter_beat, bar, section
+    segment_min_step=1,                      # min grid intervals per cut
+    segment_max_step=4,                      # max grid intervals per cut
+    step_weights='{"1": 1, "2": 8, "4": 3}', # bias toward whole beats
+    source_project_name="My Song",
+    clip_source_project_name="My Footage",
+    build_mode="fcpxml",
+    project_name="Custom Cut",
+)
+```
+
+### Build Modes
+- **`fcpxml`** (recommended): Generates complete FCPXML and imports once. Handles
+  any segment count instantly. Creates a new project in the library.
+- **`native`**: Direct in-app append edits via browser selection. Works for smaller
+  builds (~50 segments) but times out on large ones. Supports `target_current_timeline=True`
+  to append into the active empty timeline.
+
+### Source Requirements
+- **Song**: Must have Apple beat detection run on it (`hasTimingMetadata` = true).
+  Run beat detection in FCP first (select clip → Modify → Detect Beats), or use
+  `detect_beats()` on the audio file.
+- **Video pool**: Any sequence with video clips. Clips are reused with random in-points
+  when the pool is smaller than the song. Set `allow_clip_reuse=False` to prevent reuse.
+- **Song audio**: Automatically attached underneath the video on lane -1.
+  Set `include_audio=False` to omit.
+
+### Dry Run
+```
+build_song_cut(pace="natural", source_project_name="Song",
+               clip_source_project_name="Footage", dry_run=True)
+# Returns: segment count, gap count, tempo, plan details — no changes made
+```
 
 ## SRT Import
 ```

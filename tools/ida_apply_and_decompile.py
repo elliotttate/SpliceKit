@@ -36,6 +36,11 @@ from ida_objc_types import ObjCTypeParser, build_class_struct, IDA_TYPE_MAP
 RUNTIME_JSON = os.environ.get("RUNTIME_JSON", "")
 IMAGE_MAP_JSON = os.environ.get("IMAGE_MAP_JSON", "")
 OUTPUT_DIR = os.environ.get("DECOMPILE_OUTPUT_DIR", "/tmp/decompiled")
+EXPORT_XREF_PATTERNS = [
+    pat.strip().lower()
+    for pat in os.environ.get("EXPORT_XREF_PATTERNS", "").split(",")
+    if pat.strip()
+]
 
 
 def sanitize_filename(name):
@@ -258,6 +263,87 @@ def decompile_all():
     print(f"[*] Done: {summary}")
 
 
+def export_targeted_xrefs():
+    """Export call relationships for functions matching caller-supplied patterns."""
+    if not EXPORT_XREF_PATTERNS:
+        return 0
+
+    def function_name(ea):
+        return ida_name.get_ea_name(ea) or f"sub_{ea:X}"
+
+    def call_targets(func):
+        seen = set()
+        refs = []
+        for item_ea in idautils.FuncItems(func.start_ea):
+            for target_ea in idautils.CodeRefsFrom(item_ea, 0):
+                target_func = ida_funcs.get_func(target_ea)
+                if not target_func:
+                    continue
+                start_ea = target_func.start_ea
+                if start_ea in seen:
+                    continue
+                seen.add(start_ea)
+                refs.append({
+                    "ea": f"0x{start_ea:X}",
+                    "name": function_name(start_ea),
+                })
+        refs.sort(key=lambda ref: ref["ea"])
+        return refs
+
+    def callers(func):
+        seen = set()
+        refs = []
+        for ref_ea in idautils.CodeRefsTo(func.start_ea, 0):
+            caller_func = ida_funcs.get_func(ref_ea)
+            if not caller_func:
+                continue
+            start_ea = caller_func.start_ea
+            if start_ea in seen:
+                continue
+            seen.add(start_ea)
+            refs.append({
+                "ea": f"0x{start_ea:X}",
+                "name": function_name(start_ea),
+            })
+        refs.sort(key=lambda ref: ref["ea"])
+        return refs
+
+    matches = []
+    for ea in idautils.Functions():
+        fname = function_name(ea)
+        lname = fname.lower()
+        if any(pat in lname for pat in EXPORT_XREF_PATTERNS):
+            matches.append((ea, fname))
+
+    entries = []
+    for ea, fname in matches:
+        func = ida_funcs.get_func(ea)
+        if not func:
+            continue
+        entries.append({
+            "ea": f"0x{ea:X}",
+            "name": fname,
+            "incoming": callers(func),
+            "outgoing": call_targets(func),
+        })
+
+    out_path = os.path.join(OUTPUT_DIR, "_XREFS.json")
+    with open(out_path, "w") as f:
+        json.dump({
+            "patterns": EXPORT_XREF_PATTERNS,
+            "matchCount": len(entries),
+            "functions": entries,
+        }, f, indent=2)
+
+    match_path = os.path.join(OUTPUT_DIR, "_XREF_MATCHES.txt")
+    with open(match_path, "w") as f:
+        for entry in entries:
+            f.write(f"{entry['ea']}\t{entry['name']}\n")
+
+    print(f"[*] Exported targeted xrefs for {len(entries)} functions")
+    return len(entries)
+
+
 def main():
     print("=" * 60)
     print("SpliceKit IDA Import + Decompile (IDA 9.x)")
@@ -269,6 +355,7 @@ def main():
 
     apply_runtime_metadata()
     decompile_all()
+    export_targeted_xrefs()
 
     print("[*] Saving IDB...")
     try:

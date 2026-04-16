@@ -15,6 +15,7 @@
 
 #import "SpliceKitCaptionPanel.h"
 #import "SpliceKit.h"
+#import "SpliceKitTranscriptDiagnostics.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <float.h>
@@ -1389,11 +1390,15 @@ static void SpliceKit_installDragSpy(void) {
                                                               object:nil
                                                                queue:[NSOperationQueue mainQueue]
                                                           usingBlock:^(__unused NSNotification *note) {
-            [weakSelf scheduleAutomaticRestoreAttemptsWithInitialDelay:0.15];
+            if (weakSelf.panel.isVisible) {
+                [weakSelf scheduleAutomaticRestoreAttemptsWithInitialDelay:0.15];
+            }
         }];
     }
 
-    [self scheduleAutomaticRestoreAttemptsWithInitialDelay:0.6];
+    if (self.panel.isVisible) {
+        [self scheduleAutomaticRestoreAttemptsWithInitialDelay:0.6];
+    }
 }
 
 - (void)scheduleAutomaticRestoreAttemptsWithInitialDelay:(NSTimeInterval)initialDelay {
@@ -1753,9 +1758,13 @@ static void SpliceKit_installDragSpy(void) {
     return nil;
 }
 
-- (void)collectClipsFrom:(NSArray *)items atTimeline:(double *)timelinePos into:(NSMutableArray *)clipInfos {
+- (void)collectClipsFrom:(NSArray *)items
+            primaryObject:(id)primaryObject
+               atTimeline:(double *)timelinePos
+                     into:(NSMutableArray *)clipInfos {
     for (id item in items) {
         NSString *className = NSStringFromClass([item class]);
+        double itemTimelineStart = *timelinePos;
 
         double clipDuration = 0;
         if ([item respondsToSelector:@selector(duration)]) {
@@ -1768,63 +1777,127 @@ static void SpliceKit_installDragSpy(void) {
         BOOL isTransition = [className containsString:@"Transition"];
 
         if (isMedia && clipDuration > 0) {
-            double trimStart = 0;
-            SEL unclippedSel = NSSelectorFromString(@"unclippedRange");
-            if ([item respondsToSelector:unclippedSel]) {
-                NSMethodSignature *sig = [item methodSignatureForSelector:unclippedSel];
-                if (sig && [sig methodReturnLength] == sizeof(SpliceKitCaption_CMTimeRange)) {
-                    SpliceKitCaption_CMTimeRange range;
-                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                    [inv setTarget:item];
-                    [inv setSelector:unclippedSel];
-                    [inv invoke];
-                    [inv getReturnValue:&range];
-                    trimStart = SpliceKitCaption_CMTimeToSeconds(range.start);
-                }
-            }
-            NSMutableDictionary *info = [NSMutableDictionary dictionary];
-            info[@"timelineStart"] = @(*timelinePos);
-            info[@"duration"] = @(clipDuration);
-            info[@"trimStart"] = @(trimStart);
-            info[@"handle"] = SpliceKit_storeHandle(item);
-            NSURL *mediaURL = [self getMediaURLForClip:item];
-            if (mediaURL) info[@"mediaURL"] = mediaURL;
-            [clipInfos addObject:info];
-            *timelinePos += clipDuration;
+            [self addTimelineObject:item defaultTimeline:itemTimelineStart primaryObject:primaryObject into:clipInfos];
 
         } else if (isCollection && clipDuration > 0) {
-            // Look for media inside container
-            id innerMedia = [self findFirstMediaInContainer:item];
-            if (innerMedia) {
-                double collTrimStart = 0;
-                SEL crSel = NSSelectorFromString(@"clippedRange");
-                if ([item respondsToSelector:crSel]) {
-                    NSMethodSignature *sig = [item methodSignatureForSelector:crSel];
-                    if (sig && [sig methodReturnLength] == sizeof(SpliceKitCaption_CMTimeRange)) {
-                        SpliceKitCaption_CMTimeRange range;
-                        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                        [inv setTarget:item];
-                        [inv setSelector:crSel];
-                        [inv invoke];
-                        [inv getReturnValue:&range];
-                        collTrimStart = SpliceKitCaption_CMTimeToSeconds(range.start);
-                    }
-                }
-                NSMutableDictionary *info = [NSMutableDictionary dictionary];
-                info[@"timelineStart"] = @(*timelinePos);
-                info[@"duration"] = @(clipDuration);
-                info[@"trimStart"] = @(collTrimStart);
-                info[@"handle"] = SpliceKit_storeHandle(innerMedia);
-                NSURL *mediaURL = [self getMediaURLForClip:innerMedia];
-                if (mediaURL) info[@"mediaURL"] = mediaURL;
-                [clipInfos addObject:info];
-            }
-            *timelinePos += clipDuration;
+            [self addTimelineObject:item defaultTimeline:itemTimelineStart primaryObject:primaryObject into:clipInfos];
+        }
 
-        } else if (!isTransition) {
+        for (id anchoredItem in [self anchoredItemsForTimelineItem:item]) {
+            [self addTimelineObject:anchoredItem defaultTimeline:itemTimelineStart primaryObject:primaryObject into:clipInfos];
+        }
+
+        if (!isTransition) {
             *timelinePos += clipDuration;
         }
     }
+}
+
+- (NSArray *)anchoredItemsForTimelineItem:(id)item {
+    SEL anchoredSel = NSSelectorFromString(@"anchoredItems");
+    if (![item respondsToSelector:anchoredSel]) return @[];
+
+    id anchoredRaw = ((id (*)(id, SEL))objc_msgSend)(item, anchoredSel);
+    if ([anchoredRaw isKindOfClass:[NSArray class]]) return anchoredRaw;
+    if ([anchoredRaw isKindOfClass:[NSSet class]]) return [(NSSet *)anchoredRaw allObjects];
+    return @[];
+}
+
+- (BOOL)effectiveRangeForTimelineObject:(id)item
+                          primaryObject:(id)primaryObject
+                                  start:(double *)startOut
+                               duration:(double *)durationOut {
+    if (startOut) *startOut = 0;
+    if (durationOut) *durationOut = 0;
+    if (!item || !primaryObject) return NO;
+
+    SEL rangeSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+    if (![primaryObject respondsToSelector:rangeSel]) return NO;
+
+    @try {
+        SpliceKitCaption_CMTimeRange range =
+            ((SpliceKitCaption_CMTimeRange (*)(id, SEL, id))STRET_MSG)(primaryObject, rangeSel, item);
+        double start = SpliceKitCaption_CMTimeToSeconds(range.start);
+        double duration = SpliceKitCaption_CMTimeToSeconds(range.duration);
+        if (duration <= 0) return NO;
+        if (startOut) *startOut = start;
+        if (durationOut) *durationOut = duration;
+        return YES;
+    } @catch (__unused NSException *e) {
+        return NO;
+    }
+}
+
+- (double)anchoredOffsetForTimelineObject:(id)item {
+    SEL offsetSel = NSSelectorFromString(@"anchoredOffset");
+    if (![item respondsToSelector:offsetSel]) return -1;
+
+    @try {
+        SpliceKitCaption_CMTime offset =
+            ((SpliceKitCaption_CMTime (*)(id, SEL))STRET_MSG)(item, offsetSel);
+        return SpliceKitCaption_CMTimeToSeconds(offset);
+    } @catch (__unused NSException *e) {
+        return -1;
+    }
+}
+
+- (void)addTimelineObject:(id)item
+          defaultTimeline:(double)defaultTimelinePos
+             primaryObject:(id)primaryObject
+                      into:(NSMutableArray *)clipInfos {
+    if (!item) return;
+
+    NSString *className = NSStringFromClass([item class]) ?: @"";
+    BOOL isMedia = [className containsString:@"MediaComponent"];
+    BOOL isCollection = [className containsString:@"Collection"] || [className containsString:@"AnchoredClip"];
+    if (!isMedia && !isCollection) return;
+
+    double clipDuration = 0;
+    if ([item respondsToSelector:@selector(duration)]) {
+        SpliceKitCaption_CMTime d = ((SpliceKitCaption_CMTime (*)(id, SEL))STRET_MSG)(item, @selector(duration));
+        clipDuration = SpliceKitCaption_CMTimeToSeconds(d);
+    }
+    if (clipDuration <= 0) return;
+
+    double timelineStart = defaultTimelinePos;
+    double effectiveDuration = clipDuration;
+    if (![self effectiveRangeForTimelineObject:item
+                                  primaryObject:primaryObject
+                                          start:&timelineStart
+                                       duration:&effectiveDuration]) {
+        double anchoredOffset = [self anchoredOffsetForTimelineObject:item];
+        if (anchoredOffset >= 0) timelineStart = anchoredOffset;
+    }
+
+    if (isMedia) {
+        [self addMediaClip:item timelineObject:item duration:effectiveDuration atTimeline:timelineStart into:clipInfos];
+        return;
+    }
+
+    id innerMedia = [self findFirstMediaInContainer:item];
+    if (!innerMedia) return;
+
+    double collTrimStart = 0;
+    SEL crSel = NSSelectorFromString(@"clippedRange");
+    if ([item respondsToSelector:crSel]) {
+        NSMethodSignature *sig = [item methodSignatureForSelector:crSel];
+        if (sig && [sig methodReturnLength] == sizeof(SpliceKitCaption_CMTimeRange)) {
+            SpliceKitCaption_CMTimeRange range;
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:item];
+            [inv setSelector:crSel];
+            [inv invoke];
+            [inv getReturnValue:&range];
+            collTrimStart = SpliceKitCaption_CMTimeToSeconds(range.start);
+        }
+    }
+
+    [self addMediaClip:innerMedia
+          timelineObject:item
+               duration:effectiveDuration
+              trimStart:collTrimStart
+             atTimeline:timelineStart
+                   into:clipInfos];
 }
 
 - (id)findFirstMediaInContainer:(id)container {
@@ -1850,6 +1923,99 @@ static void SpliceKit_installDragSpy(void) {
         }
     }
     return nil;
+}
+
+- (void)addMediaClip:(id)clip duration:(double)clipDuration atTimeline:(double)timelinePos into:(NSMutableArray *)clipInfos {
+    [self addMediaClip:clip timelineObject:clip duration:clipDuration atTimeline:timelinePos into:clipInfos];
+}
+
+- (void)addMediaClip:(id)clip timelineObject:(id)timelineObject duration:(double)clipDuration atTimeline:(double)timelinePos into:(NSMutableArray *)clipInfos {
+    double trimStart = 0;
+    SEL unclippedSel = NSSelectorFromString(@"unclippedRange");
+    if ([clip respondsToSelector:unclippedSel]) {
+        NSMethodSignature *sig = [clip methodSignatureForSelector:unclippedSel];
+        if (sig && [sig methodReturnLength] == sizeof(SpliceKitCaption_CMTimeRange)) {
+            SpliceKitCaption_CMTimeRange range;
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:clip];
+            [inv setSelector:unclippedSel];
+            [inv invoke];
+            [inv getReturnValue:&range];
+            trimStart = SpliceKitCaption_CMTimeToSeconds(range.start);
+        }
+    }
+    [self addMediaClip:clip
+          timelineObject:timelineObject
+               duration:clipDuration
+              trimStart:trimStart
+             atTimeline:timelinePos
+                   into:clipInfos];
+}
+
+- (void)addMediaClip:(id)clip duration:(double)clipDuration trimStart:(double)trimStart atTimeline:(double)timelinePos into:(NSMutableArray *)clipInfos {
+    [self addMediaClip:clip
+          timelineObject:clip
+               duration:clipDuration
+              trimStart:trimStart
+             atTimeline:timelinePos
+                   into:clipInfos];
+}
+
+- (void)addMediaClip:(id)clip timelineObject:(id)timelineObject duration:(double)clipDuration trimStart:(double)trimStart atTimeline:(double)timelinePos into:(NSMutableArray *)clipInfos {
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    info[@"timelineStart"] = @(timelinePos);
+    info[@"duration"] = @(clipDuration);
+    info[@"trimStart"] = @(trimStart);
+    info[@"handle"] = SpliceKit_storeHandle(clip);
+    if (timelineObject) info[@"timelineObject"] = timelineObject;
+    if (clip) info[@"mediaObject"] = clip;
+
+    // Get the media's timecode origin (unclippedRange.start) for coordinate conversion.
+    double mediaOrigin = 0;
+    SEL ucSel = NSSelectorFromString(@"unclippedRange");
+    if ([clip respondsToSelector:ucSel]) {
+        NSMethodSignature *sig = [clip methodSignatureForSelector:ucSel];
+        if (sig && [sig methodReturnLength] == sizeof(SpliceKitCaption_CMTimeRange)) {
+            SpliceKitCaption_CMTimeRange range;
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:clip];
+            [inv setSelector:ucSel];
+            [inv invoke];
+            [inv getReturnValue:&range];
+            mediaOrigin = SpliceKitCaption_CMTimeToSeconds(range.start);
+        }
+    }
+    info[@"mediaOrigin"] = @(mediaOrigin);
+
+    NSURL *mediaURL = [self getMediaURLForClip:clip];
+    if (mediaURL) info[@"mediaURL"] = mediaURL;
+    [clipInfos addObject:info];
+}
+
+- (NSArray *)collectClipInfosForSequence:(id)sequence primaryObject:(id)primaryObject errorMessage:(NSString **)errorMessageOut {
+    if (errorMessageOut) *errorMessageOut = nil;
+    if (!sequence) {
+        if (errorMessageOut) *errorMessageOut = @"No sequence in timeline.";
+        return nil;
+    }
+    if (!primaryObject) {
+        if (errorMessageOut) *errorMessageOut = @"No primary object in sequence.";
+        return nil;
+    }
+
+    id items = nil;
+    if ([primaryObject respondsToSelector:@selector(containedItems)]) {
+        items = ((id (*)(id, SEL))objc_msgSend)(primaryObject, @selector(containedItems));
+    }
+    if (!items || ![items isKindOfClass:[NSArray class]]) {
+        if (errorMessageOut) *errorMessageOut = @"No items on timeline.";
+        return nil;
+    }
+
+    NSMutableArray *clipInfos = [NSMutableArray array];
+    double timelinePos = 0;
+    [self collectClipsFrom:(NSArray *)items primaryObject:primaryObject atTimeline:&timelinePos into:clipInfos];
+    return [clipInfos copy];
 }
 
 - (void)performCaptionTranscription {
@@ -1893,24 +2059,18 @@ static void SpliceKit_installDragSpy(void) {
             id sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
             if (!sequence) { [self transcriptionFailedWithError:@"No sequence in timeline."]; return; }
 
-            id primaryObj = nil;
-            if ([sequence respondsToSelector:@selector(primaryObject)]) {
-                primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject));
-            }
-            if (!primaryObj) { [self transcriptionFailedWithError:@"No primary object in sequence."]; return; }
+            id primaryObj = [sequence respondsToSelector:@selector(primaryObject)]
+                ? ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject))
+                : nil;
 
-            id items = nil;
-            if ([primaryObj respondsToSelector:@selector(containedItems)]) {
-                items = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
+            NSString *collectError = nil;
+            clips = [self collectClipInfosForSequence:sequence
+                                         primaryObject:primaryObj
+                                          errorMessage:&collectError];
+            if (!clips) {
+                [self transcriptionFailedWithError:collectError ?: @"No items on timeline."];
+                return;
             }
-            if (!items || ![items isKindOfClass:[NSArray class]]) {
-                [self transcriptionFailedWithError:@"No items on timeline."]; return;
-            }
-
-            NSMutableArray *clipInfos = [NSMutableArray array];
-            double timelinePos = 0;
-            [self collectClipsFrom:(NSArray *)items atTimeline:&timelinePos into:clipInfos];
-            clips = [clipInfos copy];
         } @catch (NSException *e) {
             [self transcriptionFailedWithError:[NSString stringWithFormat:@"Error reading timeline: %@", e.reason]];
         }
@@ -2053,14 +2213,28 @@ static void SpliceKit_installDragSpy(void) {
         return;
     }
 
+    // CoreML's E5RT runtime can print error messages to stdout before the JSON.
+    // Detect and strip any non-JSON prefix so parsing succeeds.
+    NSString *rawOutput = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+    if (rawOutput && [rawOutput hasPrefix:@"E5RT "]) {
+        NSRange bracketRange = [rawOutput rangeOfString:@"["];
+        if (bracketRange.location != NSNotFound) {
+            NSString *errPrefix = [rawOutput substringToIndex:bracketRange.location];
+            SpliceKit_log(@"[Captions] CoreML warning on stdout (stripped): %@", [errPrefix stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]);
+            rawOutput = [rawOutput substringFromIndex:bracketRange.location];
+            jsonData = [rawOutput dataUsingEncoding:NSUTF8StringEncoding];
+        }
+    }
+
     NSError *jsonError = nil;
     NSArray *batchResults = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&jsonError];
     if (![batchResults isKindOfClass:[NSArray class]]) {
-        [self transcriptionFailedWithError:@"Parakeet returned unexpected output."];
+        [self transcriptionFailedWithError:@"Parakeet returned unexpected output. Check the log for details."];
         return;
     }
 
     // Map results back to clips
+    SpliceKitTranscriptDiag_logParsedResults(batchResults);
     NSMutableDictionary *resultsByFile = [NSMutableDictionary dictionary];
     for (NSDictionary *result in batchResults) {
         NSString *file = result[@"file"];
@@ -2077,10 +2251,14 @@ static void SpliceKit_installDragSpy(void) {
         double timelineStart = [clipInfo[@"timelineStart"] doubleValue];
         double trimStart = [clipInfo[@"trimStart"] doubleValue];
         double clipDuration = [clipInfo[@"duration"] doubleValue];
+        double mediaOrigin = [clipInfo[@"mediaOrigin"] doubleValue];
         NSString *clipHandle = clipInfo[@"handle"];
 
         NSArray *wordDicts = resultsByFile[mediaURL.path];
         if (!wordDicts) continue;
+
+        // Convert trimStart from FCP's timecode coordinate space to file-relative
+        double fileRelativeTrimStart = trimStart - mediaOrigin;
 
         for (NSDictionary *wd in wordDicts) {
             NSString *text = wd[@"word"];
@@ -2088,17 +2266,17 @@ static void SpliceKit_installDragSpy(void) {
             double endTime = [wd[@"endTime"] doubleValue];
             double confidence = [wd[@"confidence"] doubleValue];
 
-            if (startTime >= trimStart && startTime < trimStart + clipDuration) {
+            if (startTime >= fileRelativeTrimStart && startTime < fileRelativeTrimStart + clipDuration) {
                 SpliceKitTranscriptWord *word = [[SpliceKitTranscriptWord alloc] init];
                 word.text = text;
-                word.startTime = timelineStart + (startTime - trimStart);
-                word.duration = MIN(endTime - startTime, (trimStart + clipDuration) - startTime);
+                word.startTime = timelineStart + (startTime - fileRelativeTrimStart);
+                word.duration = MIN(endTime - startTime, (fileRelativeTrimStart + clipDuration) - startTime);
                 word.endTime = word.startTime + word.duration;
                 word.confidence = confidence;
                 word.clipHandle = clipHandle;
                 word.clipTimelineStart = timelineStart;
                 word.sourceMediaOffset = trimStart;
-                word.sourceMediaTime = startTime;
+                word.sourceMediaTime = startTime + mediaOrigin;
                 word.sourceMediaPath = mediaURL.path;
                 [allWords addObject:word];
             }
@@ -5190,6 +5368,10 @@ static BOOL SpliceKitCaption_pollMainThread(BOOL (^condition)(void), double time
                   sequenceKey ?: @"<nil>",
                   panelVisible ? @"YES" : @"NO",
                   (unsigned long)runtimeEntries.count);
+    if (!panelVisible) {
+        SpliceKit_log(@"[Captions] Persisted caption repair skipped: panel not visible");
+        return;
+    }
     if (runtimeEntries.count == 0 || !styleDict) {
         SpliceKit_log(@"[Captions] Persisted caption repair skipped: runtime entries or style missing");
         return;

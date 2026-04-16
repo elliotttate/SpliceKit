@@ -262,27 +262,41 @@ step "Step 2: Building SpliceKit dylib"
 BUILD_DIR="$REPO_DIR/build"
 mkdir -p "$BUILD_DIR"
 
-SOURCES=(
-    "$REPO_DIR/Sources/SpliceKit.m"
-    "$REPO_DIR/Sources/SpliceKitRuntime.m"
-    "$REPO_DIR/Sources/SpliceKitSwizzle.m"
-    "$REPO_DIR/Sources/SpliceKitServer.m"
-    "$REPO_DIR/Sources/SpliceKitLogPanel.m"
-    "$REPO_DIR/Sources/SpliceKitTranscriptPanel.m"
-    "$REPO_DIR/Sources/SpliceKitCaptionPanel.m"
-    "$REPO_DIR/Sources/SpliceKitCommandPalette.m"
-    "$REPO_DIR/Sources/SpliceKitDebugUI.m"
-)
+# Read canonical source list from Sources/SOURCES.txt
+SOURCES=()
+while IFS= read -r line; do
+    [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+    SOURCES+=("$REPO_DIR/Sources/$line")
+done < "$REPO_DIR/Sources/SOURCES.txt"
+
+# Build Lua 5.4.7 static library if vendored sources exist
+LUA_DIR="$REPO_DIR/vendor/lua-5.4.7/src"
+LUA_LIB="$BUILD_DIR/liblua.a"
+LUA_FLAGS=""
+if [ -d "$LUA_DIR" ]; then
+    info "Building Lua 5.4.7 static library..."
+    mkdir -p "$BUILD_DIR/lua_obj"
+    for src in "$LUA_DIR"/*.c; do
+        base="$(basename "$src" .c)"
+        [ "$base" = "lua" ] && continue
+        [ "$base" = "luac" ] && continue
+        clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
+            -DLUA_USE_MACOSX -O2 -Wall -c "$src" -o "$BUILD_DIR/lua_obj/$base.o"
+    done
+    libtool -static -o "$LUA_LIB" "$BUILD_DIR"/lua_obj/*.o
+    LUA_FLAGS="-I $LUA_DIR $LUA_LIB"
+    log "Built: $LUA_LIB"
+fi
 
 info "Compiling ${#SOURCES[@]} source files..."
 clang -arch arm64 -arch x86_64 \
     -mmacosx-version-min=14.0 \
-    -framework Foundation -framework AppKit \
-    -fobjc-arc -fmodules \
+    -framework Foundation -framework AppKit -framework AVFoundation -framework CoreServices \
+    -fobjc-arc -fmodules -Wno-deprecated-declarations \
     -undefined dynamic_lookup -dynamiclib \
     -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
     -I "$REPO_DIR/Sources" \
-    "${SOURCES[@]}" \
+    "${SOURCES[@]}" $LUA_FLAGS \
     -o "$BUILD_DIR/SpliceKit" 2>&1
 
 log "Built: $(file "$BUILD_DIR/SpliceKit" | grep -o 'universal.*')"
@@ -362,7 +376,10 @@ cat > "$ENTITLEMENTS" << 'ENT'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>com.apple.security.cs-disable-library-validation</key><true/>
+    <key>com.apple.security.app-sandbox</key><false/>
+    <key>com.apple.security.cs.disable-library-validation</key><true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+    <key>com.apple.security.get-task-allow</key><true/>
 </dict>
 </plist>
 ENT
@@ -403,7 +420,7 @@ else
 fi
 
 # Verify entitlements applied
-if codesign -d --entitlements - "$MODDED_APP" 2>&1 | grep -q "cs-disable-library-validation"; then
+if codesign -d --entitlements - "$MODDED_APP" 2>&1 | grep -q "disable-library-validation"; then
     log "Entitlements applied (no sandbox, library validation disabled)"
 else
     err "Entitlements not applied correctly"

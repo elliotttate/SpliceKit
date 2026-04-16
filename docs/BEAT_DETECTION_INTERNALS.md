@@ -4,11 +4,13 @@ This guide documents how Final Cut Pro's built-in beat detection actually works,
 how SpliceKit exposes it, and how that differs from SpliceKit's standalone
 `detect_beats()` analysis tool.
 
-It is based on three sources:
+It is based on five sources:
 
 1. Live runtime inspection of FCP through SpliceKit's ObjC bridge
 2. Decompiled Flexo symbols related to beat detection
-3. SpliceKit's own source and MCP behavior
+3. Headless `arm64` IDA decompilation of `AudioAnalysis.framework`
+4. Headless `arm64` IDA decompilation of `MusicUnderstandingEmbedded.framework`
+5. SpliceKit's own source and MCP behavior
 
 ---
 
@@ -22,9 +24,12 @@ It is based on three sources:
 6. [What Happens After Detection Runs](#what-happens-after-detection-runs)
 7. [Beat Grid UI States](#beat-grid-ui-states)
 8. [Existing Beat Grid Metadata](#existing-beat-grid-metadata)
-9. [SpliceKit's External `detect_beats()` Tool](#splicekits-external-detect_beats-tool)
-10. [Practical Workflows](#practical-workflows)
-11. [Debugging Checklist](#debugging-checklist)
+9. [AudioAnalysis Bridge](#audioanalysis-bridge)
+10. [MusicUnderstanding Session Pipeline](#musicunderstanding-session-pipeline)
+11. [Standalone BeatTracker Path](#standalone-beattracker-path)
+12. [SpliceKit's External `detect_beats()` Tool](#splicekits-external-detect_beats-tool)
+13. [Practical Workflows](#practical-workflows)
+14. [Debugging Checklist](#debugging-checklist)
 
 ---
 
@@ -259,6 +264,239 @@ canHideBeats =
 
 So after analysis has been performed once, the same command toggles visibility
 instead of re-running detection.
+
+---
+
+## AudioAnalysis Bridge
+
+The original investigation stopped at Flexo's delegate call:
+
+`FFEnableBeatGridCommand -> FFBeatDetectionCoordinator -> analyzeBeatsOnAssets:`
+
+The missing middle layer is now confirmed to live in `AudioAnalysis.framework`.
+That bridge is what turns an abstract FCP audio source into a
+`MusicUnderstandingSession`, runs analysis, and translates the results back into
+Objective-C objects that Flexo already knows how to write into the clip model.
+
+### Confirmed Object Graph
+
+The arm64 decompile shows this concrete object chain:
+
+```text
+FFEnableBeatGridCommand
+  -> FFBeatDetectionCoordinator
+    -> AABeatDetector
+      -> MusicUnderstandingSessionAudioSourceProvider
+      -> MusicUnderstandingSession
+        -> RhythmProvider
+        -> StructureProvider
+      -> AnalysisResult
+        -> AARhythmDetectionResult
+        -> AAStructureDetectionResult
+```
+
+### Detector Construction
+
+`-[AABeatDetector initWithSource:resultHandler:error:]` is a thin wrapper around
+an internal helper that builds the actual session graph.
+
+That helper does the following:
+
+1. Clears detector state (`session`, `analysisTask`, `taskIsRunning`)
+2. Stores the audio `source` and Objective-C `resultHandler`
+3. Asks the source for its `sampleRate`
+4. Builds an `AVAudioFormat`
+5. Allocates `MusicUnderstandingSessionAudioSourceProvider(source, format)`
+6. Initializes `MusicUnderstandingSession(audioProvider:)`
+
+This is the previously missing proof that `AudioAnalysis` is the glue between
+Flexo's `AABeatDetector` API and the Swift detector stack inside
+`MusicUnderstandingEmbedded`.
+
+### Async Task Split
+
+`-[AABeatDetector start]` just calls Swift `BeatDetector.start()`, but the Swift
+method immediately splits into two tasks:
+
+1. An **analysis task** that owns the `MusicUnderstandingSession`
+2. A **supervisor task** that waits for `analysisTask.result`
+
+The split matters because the analysis task is responsible for collecting raw
+Swift rhythm and structure results, while the supervisor task converts those
+results into Objective-C `AARhythmDetectionResult` /
+`AAStructureDetectionResult` instances and sends them to the delegate callback
+selectors.
+
+### AudioAnalysis Helper Map
+
+The anonymous helpers in `AudioAnalysis` are now concrete enough to name by
+role:
+
+| Helper | Role |
+|--------|------|
+| `sub_F100` | Build `MusicUnderstandingSessionAudioSourceProvider` and `MusicUnderstandingSession` |
+| `sub_E250` | Spawn the analysis task |
+| `sub_E480` | Spawn the supervisor task |
+| `sub_D8BC` | Main analysis task body |
+| `sub_DC04` / `sub_DC4C` | Drain `RhythmProvider.rhythmResults` async stream into an array |
+| `sub_DF3C` / `sub_DF84` | Drain `StructureProvider.structureResults` and build `AnalysisResult` |
+| `sub_E6B8` / `sub_E7CC` | Await `analysisTask.result` from the supervisor |
+| `sub_E81C` | Wrap Swift results as Objective-C objects and call `handleRhythmResult:` / `handleStructureResult:` |
+| `sub_EBE0` / `sub_ED54` | Cancel running task and session |
+
+---
+
+## MusicUnderstanding Session Pipeline
+
+The `MusicUnderstandingSession` side is now concrete enough to describe the
+actual detector flow instead of stopping at "delegate analyzes assets."
+
+### Session Launch
+
+The analysis task body:
+
+1. Loads the current `MusicUnderstandingSession` from `AABeatDetector.session`
+2. Allocates `MusicUnderstandingSession.RhythmProvider`
+3. Allocates `MusicUnderstandingSession.StructureProvider`
+4. Packs those providers into an array of protocol-conforming analysis requests
+5. Calls `MusicUnderstandingSession.runAnalysis(_:)`
+
+At that point the session has everything it needs to analyze a source once and
+publish two result streams:
+
+- rhythm results
+- structure results
+
+### Result Collection
+
+After `runAnalysis(_:)` returns, `AudioAnalysis` does not synchronously inspect a
+single return object. Instead, it drains two async streams:
+
+1. `RhythmProvider.rhythmResults`
+2. `StructureProvider.structureResults`
+
+Each stream is appended into a Swift array. When the structure stream finishes,
+`AudioAnalysis` allocates an `AnalysisResult` object that simply holds:
+
+- `rhythmResults`
+- `structureResults`
+
+The supervisor task then iterates those arrays and bridges them back into
+Objective-C:
+
+- each Swift `RhythmResult` becomes `AARhythmDetectionResult`
+- each Swift `StructureResult` becomes `AAStructureDetectionResult`
+
+Those are the objects that the Objective-C delegate methods
+`handleRhythmResult:` and `handleStructureResult:` receive before Flexo writes
+clip metadata.
+
+### What the Session Actually Returns
+
+The refreshed arm64 decompile confirms that the session-level result objects
+line up exactly with the metadata Flexo expects later:
+
+- `RhythmResult` exposes `beats`, `bars`, and `beatsPerMinute`
+- `StructureResult` exposes `sections`, `segments`, and `phrases`
+
+That matches the later model writeback in Flexo:
+
+- beat times
+- bar times
+- section times
+- tempo
+
+### Concrete Built-In Beatmap Pipeline
+
+With `Flexo`, `AudioAnalysis`, and `MusicUnderstandingEmbedded` combined, the
+built-in beatmap path is now:
+
+```text
+detectBeatsOnSelection:
+  -> FFEnableBeatGridCommand detects eligible clips
+  -> FFBeatDetectionCoordinator groups clips by asset
+  -> AABeatDetector builds MusicUnderstandingSession(audioProvider:)
+  -> BeatDetector.start() launches analysis + supervisor tasks
+  -> MusicUnderstandingSession.runAnalysis([RhythmProvider, StructureProvider])
+  -> AudioAnalysis drains rhythm/structure async streams
+  -> AudioAnalysis emits AARhythmDetectionResult / AAStructureDetectionResult
+  -> Flexo writes beat/bar/section/BPM metadata to FFAnchoredObject
+  -> Optional beat-grid enablement toggles visual presentation
+```
+
+---
+
+## Standalone BeatTracker Path
+
+`MusicUnderstandingEmbedded` also contains a lower-level `BeatTracker` path that
+is useful for understanding the detector without any FCP or `AudioAnalysis`
+wrapper logic around it.
+
+### Convenience Entry Point
+
+`BeatTracker.run(fileURL:)` is a simple wrapper:
+
+1. Construct a temporary `BeatTracker`
+2. Feed a file URL into it
+3. Run the tracker
+4. Destroy the temporary tracker
+
+So the real work happens in the helper that reads the file and in
+`BeatTracker.run()`.
+
+### File Feeding
+
+The file reader helper:
+
+1. Opens `AVAudioFile`
+2. Gets its `processingFormat`
+3. Allocates one `AVAudioPCMBuffer` sized to the file length
+4. Reads the file into that buffer
+5. Converts the PCM data into the tracker's internal sample storage
+
+The runtime helper map for that path is:
+
+| Helper | Role |
+|--------|------|
+| `sub_DD40` | Open `AVAudioFile`, read the whole file, and feed PCM into the tracker |
+| `sub_D7AC` | Append float channel data into the sample buffer and advance analyzed duration |
+| `sub_D8F8` | Flush trailing buffered samples and mark end-of-input |
+| `BeatTracker.sendAudio(buffer:)` | Public wrapper around `sub_D7AC` plus `BeatTracker.run()` |
+| `BeatTracker.finishedSendingAudio()` | Public wrapper around `sub_D8F8` |
+
+### Tracker Execution
+
+The core tracker loop in `BeatTracker.run()` now reads as:
+
+1. Pull buffered audio/features
+2. Convert them into detector-ready representations
+3. Accumulate intermediate analysis state
+4. If enough evidence exists, or end-of-input has been reached, finalize a beat track
+5. Choose between constant-tempo and variable-tempo output
+6. Build a `BeatTrackerResult`
+7. Trim beats to the actually analyzed duration
+
+The most important anonymous helper in that finalization path is `sub_200F0`,
+which logs either:
+
+- "Choosing Constant Tempo."
+- "Choosing Variable Tempo."
+
+That is the clearest evidence in the current dump that the lower-level tracker
+explicitly chooses between two tempo models before packaging its output.
+
+### What Remains Anonymous
+
+The pipeline is now understood end-to-end, but the inner ML and signal
+processing math is still only partially named. In particular:
+
+- `RhythmAnalyzer`
+- `DownbeatTracker`
+- some feature-building helpers reached from `BeatTracker.run()`
+
+still fan out into many `sub_*` routines. The current arm64 pass is enough to
+understand control flow and object boundaries, but not enough to assign nice
+semantic names to every DSP / model-inference helper.
 
 ---
 

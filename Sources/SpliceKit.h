@@ -28,6 +28,10 @@ const char *SpliceKit_getSocketPath(void);
 // The log file is handy for post-mortem debugging when Console isn't open.
 void SpliceKit_log(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
 
+// Diagnostics: swizzle result tracking and server ready timing
+NSDictionary *SpliceKit_getSwizzleResults(void);
+void SpliceKit_markServerReady(void);
+
 #pragma mark - Runtime Utilities
 
 // Thin wrappers around objc_msgSend that nil-check the target first.
@@ -57,6 +61,14 @@ BOOL SpliceKit_isMainThreadInRPCDispatch(void);
 NSDictionary *SpliceKit_sequenceIdentity(id sequence);
 NSDictionary *SpliceKit_loadSequenceState(id sequence);
 BOOL SpliceKit_saveSequenceState(id sequence, NSDictionary *state, NSError **error);
+
+#pragma mark - Safe Install
+
+// Execute a feature install block with crash recovery.  If the block triggers
+// SIGSEGV or SIGBUS, catches it via sigsetjmp/siglongjmp, logs the failure,
+// and returns NO so startup can continue.  Returns YES on success.
+// Only call from the main thread during startup.
+BOOL SpliceKit_safeInstall(const char *featureName, void (^block)(void));
 
 #pragma mark - Swizzling
 
@@ -92,10 +104,12 @@ void SpliceKit_registerPluginManifest(NSString *pluginId, NSDictionary *manifest
 // Starts the TCP listener on port 9876 and the Unix domain socket.
 // Called once from the app-launch notification handler.
 void SpliceKit_startControlServer(void);
+id SpliceKit_getActiveTimelineModule(void);
 
 // Push a JSON-RPC notification to every connected client.
 // Used for things like playhead-moved events.
 void SpliceKit_broadcastEvent(NSDictionary *event);
+NSDictionary *SpliceKit_handleAudioBusDiagnostics(NSString *method, NSDictionary *params);
 
 #pragma mark - Feature Swizzles
 //
@@ -181,6 +195,7 @@ NSString *SpliceKit_getDefaultSpatialConformType(void);
 // window currently has focus.
 void SpliceKit_installDualTimeline(void);
 void SpliceKit_installDualTimelineCrossWindowDrag(void);
+BOOL SpliceKit_isDualTimelineInstalled(void);
 NSString *SpliceKit_dualTimelineSecondaryIdentifier(void);
 id SpliceKit_dualTimelineFocusedEditorContainer(void);
 id SpliceKit_dualTimelinePrimaryEditorContainer(void);

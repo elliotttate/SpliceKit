@@ -18,7 +18,7 @@ if [ -z "$NOTES" ]; then
 fi
 
 SIGN_ID="Developer ID Application: Brian Tate (RH4U5VJHM6)"
-KEYCHAIN_PROFILE="FCPBridge"  # legacy name; change to "SpliceKit" after: xcrun notarytool store-credentials "SpliceKit"
+KEYCHAIN_PROFILE="SpliceKit"
 XCODE_PROJECT="patcher/SpliceKit.xcodeproj"
 BUILD_DIR="patcher/build"
 BUILT_APP="${BUILD_DIR}/Build/Products/Release/SpliceKit.app"
@@ -34,6 +34,22 @@ fi
 REMOTE_URL="$(git remote get-url "${PUSH_REMOTE}")"
 RELEASE_REPO="$(printf '%s' "${REMOTE_URL}" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')"
 TAG_NAME="v${VERSION}"
+
+if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+    echo "ERROR: Working tree is dirty. Commit, stash, or remove local changes before releasing." >&2
+    git status --short >&2
+    exit 1
+fi
+
+echo "[0/14] Checking notarization profile..."
+NOTARY_PREFLIGHT_LOG="$(mktemp)"
+if ! xcrun notarytool history --keychain-profile "${KEYCHAIN_PROFILE}" >/dev/null 2>"${NOTARY_PREFLIGHT_LOG}"; then
+    cat "${NOTARY_PREFLIGHT_LOG}" >&2
+    rm -f "${NOTARY_PREFLIGHT_LOG}"
+    echo "ERROR: Notarization profile ${KEYCHAIN_PROFILE} is not ready. Fix Apple Developer agreements or credentials before releasing." >&2
+    exit 1
+fi
+rm -f "${NOTARY_PREFLIGHT_LOG}"
 
 resolve_built_app() {
     local products_dir="${BUILD_DIR}/Build/Products/Release"
@@ -72,20 +88,26 @@ echo ""
 
 echo "[1/14] Bumping version to ${VERSION}..."
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "patcher/SpliceKit/Resources/Info.plist"
-sed -i '' "s/MARKETING_VERSION = \"[^\"]*\"/MARKETING_VERSION = \"${VERSION}\"/g" "${XCODE_PROJECT}/project.pbxproj"
+sed -i '' -E "s/MARKETING_VERSION = \"?[^\";]+\"?;/MARKETING_VERSION = ${VERSION};/g" "${XCODE_PROJECT}/project.pbxproj"
 sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = ${VERSION}/g" "${XCODE_PROJECT}/project.pbxproj"
 
 echo "[2/14] Building SpliceKit dylib + tools..."
-make clean && make && make tools
+make clean
+make
+make tools
 
 echo "[3/14] Building parakeet-transcriber..."
 PARAKEET_PKG_DIR="patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
-cd "${PARAKEET_PKG_DIR}" && swift build -c release 2>&1 | tail -3 && cd "${REPO_ROOT}"
 PARAKEET_BIN="${PARAKEET_PKG_DIR}/.build/release/parakeet-transcriber"
-if [ -f "$PARAKEET_BIN" ]; then
-    echo "  Built: $(du -h "$PARAKEET_BIN" | cut -f1)"
+if [ -d "${PARAKEET_PKG_DIR}" ]; then
+    cd "${PARAKEET_PKG_DIR}" && swift build -c release 2>&1 | tail -3 && cd "${REPO_ROOT}"
+    if [ -f "$PARAKEET_BIN" ]; then
+        echo "  Built: $(du -h "$PARAKEET_BIN" | cut -f1)"
+    else
+        echo "  WARNING: parakeet-transcriber build failed — release will not include it"
+    fi
 else
-    echo "  WARNING: parakeet-transcriber build failed — release will not include it"
+    echo "  Skipped: parakeet-transcriber package not found (pre-built binary will be used if available)"
 fi
 
 echo "[4/14] Building SpliceKit app via Xcode..."
@@ -101,19 +123,11 @@ echo "  Using app bundle: ${BUILT_APP}"
 
 echo "[5/14] Syncing bundled resources into app..."
 APP_RES="${BUILT_APP}/Contents/Resources"
-mkdir -p "${APP_RES}/Sources"
 mkdir -p "${APP_RES}/mcp"
 mkdir -p "${APP_RES}/tools"
 cp build/SpliceKit "${APP_RES}/SpliceKit"
 cp build/silence-detector "${APP_RES}/tools/silence-detector"
 cp mcp/server.py "${APP_RES}/mcp/server.py"
-rsync -a --delete Sources/ "${APP_RES}/Sources/"
-# Bundle Lua vendor sources (for from-source builds)
-if [ -d "vendor/lua-5.4.7" ]; then
-    mkdir -p "${APP_RES}/vendor/lua-5.4.7/src"
-    rsync -a vendor/lua-5.4.7/src/ "${APP_RES}/vendor/lua-5.4.7/src/"
-    echo "  Bundled vendor/lua-5.4.7/"
-fi
 # Bundle Lua scripts
 if [ -d "Scripts/lua" ]; then
     mkdir -p "${APP_RES}/Scripts/lua"
@@ -256,7 +270,7 @@ print('  Appcast updated')
 # ──────────────────────────────────────────────
 
 echo "[13/14] Committing and pushing..."
-git add -A
+git add appcast.xml "patcher/SpliceKit/Resources/Info.plist" "${XCODE_PROJECT}/project.pbxproj"
 git commit -m "Release v${VERSION}: ${NOTES}"
 git push "${PUSH_REMOTE}" "HEAD:${PUSH_BRANCH}"
 
@@ -276,12 +290,16 @@ if [ -z "${REMOTE_TAG_SHA}" ]; then
 fi
 
 echo "[14/14] Creating GitHub release..."
-gh release create "${TAG_NAME}" "${DMG_PATH}" \
+if gh release create "${TAG_NAME}" "${DMG_PATH}" \
     -R "${RELEASE_REPO}" \
     --verify-tag \
     --title "${TAG_NAME}" \
-    --notes "${NOTES}" \
-    2>/dev/null && RELEASE_URL=$(gh release view "${TAG_NAME}" -R "${RELEASE_REPO}" --json url -q '.url') || RELEASE_URL="(check GitHub)"
+    --notes "${NOTES}"; then
+    RELEASE_URL=$(gh release view "${TAG_NAME}" -R "${RELEASE_REPO}" --json url -q '.url')
+else
+    echo "ERROR: Failed to create GitHub release ${TAG_NAME}" >&2
+    exit 1
+fi
 
 echo ""
 echo "========================================="

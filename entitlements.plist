@@ -2,13 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Disable sandbox to prevent CloudKit entitlement validation failures -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
     <!-- Injection entitlements -->
-    <key>com.apple.security.cs-disable-library-validation</key>
+    <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
-    <key>com.apple.security.cs-allow-dyld-environment-variables</key>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
     <key>com.apple.security.get-task-allow</key>
     <true/>
-    <!-- NO SANDBOX - unsandboxed gives full filesystem/network access -->
 </dict>
 </plist>

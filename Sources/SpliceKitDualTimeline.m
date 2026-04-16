@@ -27,6 +27,11 @@ static IMP sOriginalContentBrowserViewDidLoad = NULL;
 static IMP sOriginalWindowModuleShouldSaveToLayout = NULL;
 static IMP sOriginalLayoutManagerExistingModuleFromLayout = NULL;
 
+// Track whether the dual timeline swizzles were fully installed.
+// Code that walks the focus chain (e.g. getActiveTimelineModule) must
+// check this before calling into the dual timeline functions.
+static BOOL sDualTimelineInstalled = NO;
+
 static __weak id sFocusedEditorContainer = nil;
 static __weak id sSecondaryContentBrowserModule = nil;
 static __weak id sSecondaryRootWindowModule = nil;
@@ -826,9 +831,17 @@ void SpliceKit_installDualTimeline(void) {
 
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        // The activeEditorContainer swizzle is the critical one — everything else
+        // (focus tracking, constraint relaxation) depends on it.  If it fails, bail
+        // rather than leaving partial state that corrupts the editor container path.
         sOriginalActiveEditorContainer = SpliceKit_swizzleMethod(
             appControllerClass, @selector(activeEditorContainer),
             (IMP)SpliceKit_dualTimelineSwizzledActiveEditorContainer);
+        if (!sOriginalActiveEditorContainer) {
+            SpliceKit_log(@"[DualTimeline] activeEditorContainer swizzle failed — aborting install");
+            return;
+        }
+
         sOriginalEditorContainerFirstResponderChanged = SpliceKit_swizzleMethod(
             editorContainerClass, NSSelectorFromString(@"firstResponderChanged:"),
             (IMP)SpliceKit_dualTimelineSwizzledFirstResponderChanged);
@@ -859,8 +872,13 @@ void SpliceKit_installDualTimeline(void) {
             sFocusedEditorContainer = primary;
             SpliceKit_dualTimelineRelaxBrowserWidthConstraintsForContainer(primary);
         }
+        sDualTimelineInstalled = YES;
         SpliceKit_log(@"[DualTimeline] Installed focused editor routing swizzles");
     });
+}
+
+BOOL SpliceKit_isDualTimelineInstalled(void) {
+    return sDualTimelineInstalled;
 }
 
 NSString *SpliceKit_dualTimelineSecondaryIdentifier(void) {

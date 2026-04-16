@@ -1,10 +1,22 @@
 # SpliceKit
 
-Direct in-process control of Final Cut Pro via dylib injection. SpliceKit loads a custom framework into FCP's process space, giving you full access to all 78,000+ ObjC classes and their methods through a JSON-RPC interface and MCP server.
+Welcome to **SpliceKit**!
 
-Join us on [FCP Cafe](https://fcp.cafe) in the **#splicekit** [Discord channel](https://discord.com/invite/HD3FPc4Azu) for help, questions, or feature requests. For bug reports, [opening a GitHub Issue](https://github.com/elliotttate/SpliceKit/issues) is still recommended.
+SpliceKit gives superpowers to Apple's Final Cut Pro.
 
-## Sample Apps
+If you're a video editor, the best place to get started is the official [SpliceKit website](https://splicekit.fcp.cafe). Definitely check out the [FAQ](https://splicekit.fcp.cafe/faq/) for an easier explanation of some of what SpliceKit can do.
+
+You can also join us on [FCP Cafe](https://fcp.cafe) in the SpliceKit [Discord channels](https://discord.com/invite/HD3FPc4Azu) for help, questions, or feature requests.
+
+For bug reports please [open a GitHub Issue](https://github.com/elliotttate/SpliceKit/issues).
+
+We can't wait to see what you do with SpliceKit!
+
+Onwards & Upwards! 🥳
+
+---
+
+## Built-in Features
 
 ### Transcript Editor — Text-Based Video Editing
 
@@ -51,6 +63,8 @@ The AI understands your intent, maps it to the right sequence of FCP actions, an
 
 **Scene Detection** uses histogram-based frame comparison via the Accelerate framework's vImage to detect cuts and shot changes. Configurable sensitivity and sample interval. Markers are inserted programmatically at exact timecodes — no playhead movement required — making it fast even on long sequences.
 
+---
+
 ## What This Does
 
 SpliceKit injects a dynamic library into a re-signed copy of Final Cut Pro that:
@@ -60,6 +74,8 @@ SpliceKit injects a dynamic library into a re-signed copy of Final Cut Pro that:
 - Provides an MCP server for AI-assisted FCP automation
 - Swizzles out CloudKit/ImagePlayground calls that crash without iCloud entitlements
 - Gives direct access to Flexo, Ozone, TimelineKit, LunaKit, and all internal frameworks
+
+---
 
 ## Architecture
 
@@ -89,13 +105,15 @@ SpliceKit injects a dynamic library into a re-signed copy of Final Cut Pro that:
         └─────────────────────────────┘
 ```
 
+---
+
 ## Quick Setup
 
 ### GUI Patcher (Recommended)
 
 [![Installation Guide](https://img.youtube.com/vi/NxbInKlXQVs/maxresdefault.jpg)](https://www.youtube.com/watch?v=NxbInKlXQVs)
 
-Download **SpliceKitPatcher** from the [latest release](https://github.com/elliotttate/SpliceKit/releases/latest), unzip it, and run the app. It handles everything automatically — just click the button to patch.
+Download **SpliceKit** from the [latest release](https://github.com/elliotttate/SpliceKit/releases/latest), unzip it, and run the app. It handles everything automatically — just click the button to patch.
 
 <img src="docs/patcher-screenshot.jpg" width="500" alt="SpliceKit Patcher">
 
@@ -125,6 +143,8 @@ Options:
 ./patcher/patch_fcp.sh --uninstall         # Remove the modded copy
 ```
 
+---
+
 ## Manual Setup
 
 ### Prerequisites
@@ -133,7 +153,7 @@ Options:
 - Final Cut Pro installed at `/Applications/Final Cut Pro.app`
 - Python 3 with `mcp` package (`pip install mcp`)
 
-### 1. Create the Modded FCP Copy
+### 1. Create the Modded Final Cut Pro Copy
 
 ```bash
 # Copy FCP
@@ -179,6 +199,8 @@ Check `~/Library/Logs/SpliceKit/splicekit.log` for startup messages. You should 
 ```
 [SpliceKit] Control server listening on 127.0.0.1:9876
 ```
+
+---
 
 ## Usage
 
@@ -247,6 +269,8 @@ If you installed SpliceKit using the packaged app, point MCP at the server scrip
 Notes:
 - The MCP server connects to the SpliceKit bridge running inside Final Cut Pro on `127.0.0.1:9876`, so the modded Final Cut Pro must be running.
 
+---
+
 ## JSON-RPC API
 
 | Method | Description |
@@ -283,15 +307,19 @@ Notes:
 | TK | TimelineKit | 111 | Timeline UI |
 | IX | Interchange | 155 | FCPXML import/export |
 
+---
+
 ## How It Works
 
-1. **App duplication**: FCP is copied to a writable location
+1. **App duplication**: Final Cut Pro is copied to a writable location
 2. **Re-signing**: Ad-hoc signature with entitlements that disable library validation and sandbox
 3. **Binary patching**: `insert_dylib` adds an `LC_LOAD_DYLIB` command pointing to `SpliceKit.framework`
 4. **Auto-load**: On launch, dyld loads SpliceKit before `main()` runs
 5. **Constructor**: `__attribute__((constructor))` caches class references and swizzles CloudContent
 6. **Server start**: On `NSApplicationDidFinishLaunchingNotification`, starts TCP server on port 9876
 7. **Runtime access**: All calls use `objc_getClass()`, `objc_msgSend()`, and the ObjC runtime API
+
+---
 
 ## Project Structure
 
@@ -328,6 +356,8 @@ SpliceKit/
 └── LICENSE                    # MIT License
 ```
 
+---
+
 ## Is This Legal / Safe to Use?
 
 A few things worth clarifying up front -- this isn't for everyone, but it's very easy to set up if you do want to try it.
@@ -342,6 +372,8 @@ A few things worth clarifying up front -- this isn't for everyone, but it's very
 
 On a personal note -- I've been frustrated by how little progress Final Cut Pro has made over the years, and my hope is that this project can help it finally get some of the features it desperately needs. There's a huge precedent in modding software and games. I've modded quite a few games where the developers officially adopted features based on community work. It can be a really productive relationship where proof of concepts demonstrate what would be genuinely useful to add officially.
 
+---
+
 ## License
 
-MIT
+[MIT](LICENSE)

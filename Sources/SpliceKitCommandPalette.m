@@ -14,8 +14,6 @@
 
 #import "SpliceKitCommandPalette.h"
 #import "SpliceKit.h"
-#import "SpliceKitUprezzer.h"
-#import "SpliceKitURLImport.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -475,6 +473,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     // --- Keyframes ---
     add(@"Add Keyframe", @"addKeyframe", @"timeline", SpliceKitCommandCategoryKeyframes, @"Keyframes", nil, @"Add keyframe at playhead", @[@"animation"]);
     add(@"Delete Keyframes", @"deleteKeyframes", @"timeline", SpliceKitCommandCategoryKeyframes, @"Keyframes", nil, @"Remove keyframes from selection", @[]);
+    add(@"Remove All Keyframes From Clip", @"removeAllKeyframesFromClip", @"timeline", SpliceKitCommandCategoryKeyframes, @"Keyframes", nil, @"Clear every keyframed channel on the selected clip", @[@"clear all keyframes", @"remove keyframe animation", @"reset animation"]);
     add(@"Next Keyframe", @"nextKeyframe", @"timeline", SpliceKitCommandCategoryKeyframes, @"Keyframes", nil, @"Go to next keyframe", @[]);
     add(@"Previous Keyframe", @"previousKeyframe", @"timeline", SpliceKitCommandCategoryKeyframes, @"Keyframes", nil, @"Go to previous keyframe", @[]);
 
@@ -482,7 +481,6 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"Export FCPXML", @"exportXML", @"timeline", SpliceKitCommandCategoryExport, @"Export", nil, @"Export timeline as FCPXML", @[@"xml"]);
     add(@"Share Selection", @"shareSelection", @"timeline", SpliceKitCommandCategoryExport, @"Export", nil, @"Share/export selected range", @[@"render"]);
     add(@"Batch Export", @"batchExport", @"batch_export", SpliceKitCommandCategoryExport, @"Export", nil, @"Export each clip individually using default share destination", @[@"batch", @"export all", @"individual"]);
-    add(@"Uprezzer", @"open", @"uprezzer", SpliceKitCommandCategoryExport, @"Export", nil, @"Upscale selected clips from the timeline or browser using local processing", @[@"upscale", @"enhance", @"resolution boost", @"uprez", @"fx-upscale"]);
     add(@"Auto Reframe", @"autoReframe", @"timeline", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Auto-reframe for different aspect ratios", @[@"crop", @"aspect"]);
     add(@"Stabilize Subject", @"stabilize_subject", @"subject_stabilize", SpliceKitCommandCategoryEffects, @"Effects", nil, @"Lock camera onto a subject — keeps it fixed while background moves", @[@"lock on", @"track", @"stabilize", @"pin", @"follow", @"steady"]);
 
@@ -539,6 +537,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"Audio Fade In", @"addAudioFadeIn", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Add audio fade-in to selected clip", @[@"ramp up"]);
     add(@"Audio Fade Out", @"addAudioFadeOut", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Add audio fade-out to selected clip", @[@"ramp down"]);
     add(@"Expand Audio Components", @"expandAudioComponents", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Show individual audio channels", @[@"channels"]);
+    add(@"Mute Audio", @"toggleMuteAudio", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", @"Ctrl+Opt+M", @"Mute/unmute audio on selected clip or clip at playhead", @[@"mute", @"silence", @"audio off", @"toggle audio", @"unmute"]);
     add(@"Audio Enhancements", @"showAudioEnhancements", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Open audio enhancement controls", @[@"eq", @"noise removal", @"loudness"]);
     add(@"Audio Match", @"matchAudio", @"timeline", SpliceKitCommandCategoryEffects, @"Audio", nil, @"Match audio levels between clips", @[@"normalize"]);
 
@@ -592,8 +591,6 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"New Project", @"newProject", @"timeline", SpliceKitCommandCategoryExport, @"Project", @"Cmd+N", @"Create a new project in the current event", @[@"new timeline"]);
     add(@"New Event", @"newEvent", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Create a new event in the library", @[]);
     add(@"Import Media", @"importMedia", @"timeline", SpliceKitCommandCategoryExport, @"Project", @"Cmd+I", @"Open the import media dialog", @[@"add files", @"ingest"]);
-    add(@"Import URL to Library", @"import_only", @"url_import_prompt", SpliceKitCommandCategoryExport, @"Project", nil, @"Download a remote video URL and import it into the current library/event", @[@"import from url", @"download url", @"web video", @"remote media", @"youtube url", @"vimeo url"]);
-    add(@"Import URL to Timeline", @"insert_at_playhead", @"url_import_prompt", SpliceKitCommandCategoryExport, @"Project", nil, @"Download a remote video URL, import it, and place it in the active timeline", @[@"add url to timeline", @"download and insert", @"append url"]);
     add(@"Show Project Properties", @"showProjectProperties", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"View resolution, frame rate, and codec settings", @[@"settings", @"format"]);
     add(@"Consolidate Library Media", @"consolidateMedia", @"timeline", SpliceKitCommandCategoryExport, @"Project", nil, @"Copy external media into the library", @[@"collect", @"gather"]);
 
@@ -658,6 +655,10 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     // --- LiveCam ---
     add(@"Open LiveCam", @"openLiveCam", @"livecam", SpliceKitCommandCategoryExport, @"LiveCam", nil, @"Open the native webcam booth for direct-to-Library or direct-to-Timeline capture", @[@"camera", @"webcam", @"record to timeline", @"reaction cam", @"live booth"]);
     add(@"Close LiveCam", @"closeLiveCam", @"livecam", SpliceKitCommandCategoryExport, @"LiveCam", nil, @"Close the LiveCam panel", @[@"hide camera", @"close webcam"]);
+
+    // --- Audio Mixer ---
+    add(@"Audio Mixer", @"openMixer", @"mixer", SpliceKitCommandCategoryEditing, @"Audio", @"Ctrl+Opt+M", @"Open audio mixer with volume faders for clips at playhead", @[@"fader", @"volume", @"mix", @"levels"]);
+    add(@"Close Audio Mixer", @"closeMixer", @"mixer", SpliceKitCommandCategoryEditing, @"Audio", nil, @"Close the audio mixer panel", @[]);
 
     // ===================================================================
     // NEW: Comprehensive MCP actions added to command palette
@@ -826,6 +827,10 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"Analyze Clips for Montage", @"analyzeClips", @"montage", SpliceKitCommandCategoryMusic, @"Montage", nil, @"Score and rank clips in the browser for montage creation", @[@"analyze", @"score", @"rank", @"clips"]);
     add(@"Plan Montage Edit", @"planEdit", @"montage", SpliceKitCommandCategoryMusic, @"Montage", nil, @"Create an edit decision list mapping clips to musical beats", @[@"plan", @"edl", @"edit plan", @"beat sync"]);
     add(@"Assemble Montage", @"assemble", @"montage", SpliceKitCommandCategoryMusic, @"Montage", nil, @"Build a montage timeline from an edit plan with transitions and music", @[@"assemble", @"build", @"create", @"timeline"]);
+
+    // --- Arrange ---
+    add(@"Shuffle Clips", @"shuffle", @"spine_action", SpliceKitCommandCategoryEditing, @"Arrange", nil, @"Randomly reorder all clips on the timeline", @[@"randomize", @"random", @"scramble", @"rearrange", @"mix up", @"shuffle order"]);
+    add(@"Reverse Clips", @"reverse", @"spine_action", SpliceKitCommandCategoryEditing, @"Arrange", nil, @"Reverse the order of all clips on the timeline", @[@"backwards", @"flip order", @"mirror"]);
 
     // --- Options ---
     add(@"SpliceKit Options", @"bridgeOptions", @"bridge_options", SpliceKitCommandCategoryOptions, @"Options", nil, @"Open SpliceKit options panel", @[@"settings", @"preferences", @"config"]);
@@ -1525,6 +1530,18 @@ static NSString *FCPStripStopWords(NSString *query) {
             }
         });
         result = @{@"action": action, @"status": @"ok"};
+    } else if ([type isEqualToString:@"mixer"]) {
+        SpliceKit_executeOnMainThread(^{
+            Class panelClass = objc_getClass("SpliceKitMixerPanel");
+            if (!panelClass) return;
+            id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
+            if ([action isEqualToString:@"openMixer"]) {
+                ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
+            } else if ([action isEqualToString:@"closeMixer"]) {
+                ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
+            }
+        });
+        result = @{@"action": action, @"status": @"ok"};
     } else if ([type isEqualToString:@"transition_browse"]) {
         // Switch palette into transition browsing mode
         [self enterTransitionBrowseMode];
@@ -1561,6 +1578,62 @@ static NSString *FCPStripStopWords(NSString *query) {
     } else if ([type isEqualToString:@"scene_options"]) {
         [self showSceneDetectionOptionsPanel];
         result = @{@"action": action, @"status": @"started"};
+    } else if ([type isEqualToString:@"spine_action"]) {
+        // Spine manipulation actions (shuffle, reverse)
+        if ([action isEqualToString:@"shuffle"]) {
+            extern NSDictionary *SpliceKit_handleSpineGetItems(NSDictionary *params);
+            extern NSDictionary *SpliceKit_handleSpineReorder(NSDictionary *params);
+
+            NSDictionary *state = SpliceKit_handleSpineGetItems(@{});
+            NSArray *items = state[@"items"];
+            if (!items || [items count] < 2) {
+                result = @{@"error": @"Need at least 2 clips to shuffle"};
+            } else {
+                // Collect clip indices (skip transitions)
+                NSMutableArray *clipIndices = [NSMutableArray array];
+                for (NSDictionary *item in items) {
+                    NSString *cls = item[@"class"] ?: @"";
+                    if (![cls containsString:@"Transition"]) {
+                        [clipIndices addObject:@(clipIndices.count)];
+                    }
+                }
+                // Fisher-Yates shuffle
+                for (NSInteger i = clipIndices.count - 1; i > 0; i--) {
+                    NSInteger j = arc4random_uniform((uint32_t)(i + 1));
+                    [clipIndices exchangeObjectAtIndex:i withObjectAtIndex:j];
+                }
+                result = SpliceKit_handleSpineReorder(@{@"order": clipIndices});
+                if (result[@"status"]) {
+                    SpliceKit_log(@"[Shuffle] Reordered %@ clips (%@ transitions removed)",
+                        result[@"clipsReordered"], result[@"transitionsRemoved"]);
+                }
+            }
+        } else if ([action isEqualToString:@"reverse"]) {
+            extern NSDictionary *SpliceKit_handleSpineGetItems(NSDictionary *params);
+            extern NSDictionary *SpliceKit_handleSpineReorder(NSDictionary *params);
+
+            NSDictionary *state = SpliceKit_handleSpineGetItems(@{});
+            NSArray *items = state[@"items"];
+            if (!items || [items count] < 2) {
+                result = @{@"error": @"Need at least 2 clips to reverse"};
+            } else {
+                NSMutableArray *clipIndices = [NSMutableArray array];
+                for (NSDictionary *item in items) {
+                    NSString *cls = item[@"class"] ?: @"";
+                    if (![cls containsString:@"Transition"]) {
+                        [clipIndices addObject:@(clipIndices.count)];
+                    }
+                }
+                // Reverse the array
+                NSArray *reversed = [[clipIndices reverseObjectEnumerator] allObjects];
+                result = SpliceKit_handleSpineReorder(@{@"order": reversed});
+                if (result[@"status"]) {
+                    SpliceKit_log(@"[Reverse] Reversed %@ clips", result[@"clipsReordered"]);
+                }
+            }
+        } else {
+            result = @{@"error": [NSString stringWithFormat:@"Unknown spine action: %@", action]};
+        }
     } else if ([type isEqualToString:@"batch_export"]) {
         extern NSDictionary *SpliceKit_handleBatchExport(NSDictionary *params);
         result = SpliceKit_handleBatchExport(@{@"scope": @"all"});
@@ -1637,14 +1710,6 @@ static NSString *FCPStripStopWords(NSString *query) {
         SpliceKit_setDefaultSpatialConformType(next);
         result = @{@"action": action, @"status": @"ok",
                    @"defaultSpatialConformType": next};
-    } else if ([type isEqualToString:@"uprezzer"]) {
-        SpliceKit_executeOnMainThread(^{
-            [[SpliceKitUprezzerPanel sharedPanel] showPanel];
-        });
-        result = @{@"action": action, @"status": @"started"};
-    } else if ([type isEqualToString:@"url_import_prompt"]) {
-        [self showURLImportPromptWithDefaultMode:action];
-        result = @{@"action": action, @"status": @"started"};
     } else if ([type isEqualToString:@"dual_timeline"]) {
         if ([action isEqualToString:@"open"]) {
             result = SpliceKit_dualTimelineOpen(@{});
@@ -1671,9 +1736,6 @@ static NSString *FCPStripStopWords(NSString *query) {
         } else {
             result = @{@"error": [NSString stringWithFormat:@"Unknown dual timeline action: %@", action]};
         }
-    } else if ([type isEqualToString:@"url_import_prompt"]) {
-        [self showURLImportPromptWithDefaultMode:action];
-        result = @{@"action": action, @"status": @"started"};
     }
 
     if (!result) {
@@ -1700,7 +1762,7 @@ static NSString *FCPStripStopWords(NSString *query) {
 }
 
 - (NSPanel *)_createProcessingHUD:(NSString *)message {
-    NSPanel *hud = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 520, 118)
+    NSPanel *hud = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 280, 80)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskFullSizeContentView)
         backing:NSBackingStoreBuffered defer:NO];
     hud.title = @"";
@@ -1721,309 +1783,26 @@ static NSString *FCPStripStopWords(NSString *query) {
     bg.layer.masksToBounds = YES;
     [hud.contentView addSubview:bg];
 
-    NSProgressIndicator *spinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(20, 58, 24, 24)];
+    NSProgressIndicator *spinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(20, 28, 24, 24)];
     spinner.style = NSProgressIndicatorStyleSpinning;
     spinner.controlSize = NSControlSizeRegular;
     [spinner startAnimation:nil];
     [bg addSubview:spinner];
 
-    NSTextField *label = [NSTextField wrappingLabelWithString:message ?: @"Working..."];
-    label.frame = NSMakeRect(52, 42, 446, 40);
+    NSTextField *label = [NSTextField labelWithString:message];
+    label.frame = NSMakeRect(52, 28, 210, 24);
     label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
     label.textColor = [NSColor labelColor];
-    label.maximumNumberOfLines = 2;
-    label.lineBreakMode = NSLineBreakByWordWrapping;
     [bg addSubview:label];
-    objc_setAssociatedObject(hud, "processingLabel", label, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     [hud makeKeyAndOrderFront:nil];
     return hud;
-}
-
-- (void)updateProcessingHUD:(NSPanel *)hud message:(NSString *)message {
-    if (!hud) return;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSTextField *label = objc_getAssociatedObject(hud, "processingLabel");
-        if (label) {
-            label.stringValue = message ?: @"Working...";
-            [label sizeToFit];
-            NSRect frame = label.frame;
-            frame.origin.x = 52;
-            frame.origin.y = 42;
-            frame.size.width = 446;
-            frame.size.height = MIN(MAX(frame.size.height, 20), 40);
-            label.frame = frame;
-        }
-    });
-}
-
-- (void)attachURLImportCancelButtonToHUD:(NSPanel *)hud jobID:(NSString *)jobID {
-    if (!hud || jobID.length == 0) return;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (objc_getAssociatedObject(hud, "urlImportCancelButton")) return;
-
-        NSVisualEffectView *bg = hud.contentView.subviews.firstObject;
-        if (![bg isKindOfClass:[NSVisualEffectView class]]) return;
-
-        objc_setAssociatedObject(hud, "urlImportJobID", jobID, OBJC_ASSOCIATION_COPY_NONATOMIC);
-
-        NSButton *cancelButton = [NSButton buttonWithTitle:@"Cancel Import"
-                                                    target:self
-                                                    action:@selector(handleURLImportCancelButton:)];
-        cancelButton.frame = NSMakeRect(388, 14, 112, 30);
-        cancelButton.bezelStyle = NSBezelStyleRounded;
-        [bg addSubview:cancelButton];
-        objc_setAssociatedObject(hud, "urlImportCancelButton", cancelButton, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    });
-}
-
-- (void)handleURLImportCancelButton:(NSButton *)sender {
-    NSPanel *hud = (NSPanel *)sender.window;
-    NSString *jobID = objc_getAssociatedObject(hud, "urlImportJobID");
-    if (jobID.length == 0) return;
-
-    NSDictionary *cancelResult = SpliceKitURLImport_cancel(@{@"job_id": jobID});
-    sender.enabled = NO;
-    NSString *message = [cancelResult[@"state"] isEqualToString:@"cancelled"]
-        ? @"Cancelling URL import..."
-        : @"Cancel request sent...";
-    [self updateProcessingHUD:hud message:message];
 }
 
 - (void)dismissProcessingHUD:(NSPanel *)hud {
     if (!hud) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         [hud close];
-    });
-}
-
-- (void)showSimpleAlertWithTitle:(NSString *)title message:(NSString *)message {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = title ?: @"SpliceKit";
-        alert.informativeText = message ?: @"";
-        [alert addButtonWithTitle:@"OK"];
-        [alert runModal];
-    });
-}
-
-- (NSString *)selectedURLImportModeForToggle:(NSButton *)timelineToggle
-                                       popup:(NSPopUpButton *)popup {
-    if (timelineToggle.state != NSControlStateValueOn) {
-        return @"import_only";
-    }
-    switch (popup.indexOfSelectedItem) {
-        case 1: return @"insert_at_timeline_start";
-        case 2: return @"append_to_timeline";
-        default: return @"insert_at_playhead";
-    }
-}
-
-- (void)syncURLImportTimelineControls:(NSButton *)timelineToggle {
-    NSTextField *label = objc_getAssociatedObject(timelineToggle, "urlImportTimelineLabel");
-    NSPopUpButton *popup = objc_getAssociatedObject(timelineToggle, "urlImportTimelinePopup");
-    BOOL enabled = (timelineToggle.state == NSControlStateValueOn);
-    popup.enabled = enabled;
-    label.enabled = enabled;
-    label.textColor = enabled ? [NSColor labelColor] : [NSColor secondaryLabelColor];
-}
-
-- (void)handleURLImportTimelineToggle:(NSButton *)sender {
-    [self syncURLImportTimelineControls:sender];
-}
-
-- (void)showURLImportPromptWithDefaultMode:(NSString *)defaultMode {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        BOOL defaultsToTimeline = ![defaultMode isEqualToString:@"import_only"];
-        NSString *promptTitle = defaultsToTimeline
-            ? @"Import URL to Timeline"
-            : @"Import URL to Library";
-        NSString *primaryButtonTitle = defaultsToTimeline
-            ? @"Add to Timeline"
-            : @"Import to Library";
-        NSString *failureTitle = defaultsToTimeline
-            ? @"Import URL to Timeline Failed"
-            : @"Import URL to Library Failed";
-        NSString *emptyMessage = defaultsToTimeline
-            ? @"Paste a video URL to add to the timeline."
-            : @"Paste a video URL to import into the library.";
-
-        NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = promptTitle;
-        alert.informativeText = defaultsToTimeline
-            ? @"Paste a YouTube, Vimeo, or direct media URL. SpliceKit will download it, import it into Final Cut Pro, then place it in the active timeline using the selected placement."
-            : @"Paste a YouTube, Vimeo, or direct media URL. SpliceKit will download it, convert it if needed, and import it into Final Cut Pro.";
-        [alert addButtonWithTitle:primaryButtonTitle];
-        [alert addButtonWithTitle:@"Cancel"];
-
-        NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 184)];
-
-        NSTextField *urlLabel = [NSTextField labelWithString:@"URL"];
-        urlLabel.frame = NSMakeRect(0, 160, 80, 20);
-        [accessory addSubview:urlLabel];
-
-        NSScrollView *urlScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 108, 420, 48)];
-        urlScroll.hasVerticalScroller = YES;
-        urlScroll.hasHorizontalScroller = NO;
-        urlScroll.borderType = NSBezelBorder;
-        urlScroll.autohidesScrollers = YES;
-
-        NSTextView *urlField = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 420, 48)];
-        urlField.minSize = NSMakeSize(0, 48);
-        urlField.maxSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
-        urlField.verticallyResizable = YES;
-        urlField.horizontallyResizable = NO;
-        urlField.automaticQuoteSubstitutionEnabled = NO;
-        urlField.automaticDashSubstitutionEnabled = NO;
-        urlField.automaticTextReplacementEnabled = NO;
-        urlField.font = [NSFont systemFontOfSize:13];
-        urlField.string = @"";
-        urlScroll.documentView = urlField;
-        [accessory addSubview:urlScroll];
-
-        NSTextField *urlHint = [NSTextField labelWithString:@"Paste a full YouTube, Vimeo, or direct video URL"];
-        urlHint.frame = NSMakeRect(2, 90, 320, 14);
-        urlHint.font = [NSFont systemFontOfSize:11];
-        urlHint.textColor = [NSColor secondaryLabelColor];
-        [accessory addSubview:urlHint];
-
-        NSButton *timelineToggle = [[NSButton alloc] initWithFrame:NSMakeRect(0, 62, 260, 20)];
-        [timelineToggle setButtonType:NSButtonTypeSwitch];
-        timelineToggle.title = defaultsToTimeline
-            ? @"Place in active timeline"
-            : @"Also place in active timeline";
-        timelineToggle.target = self;
-        timelineToggle.action = @selector(handleURLImportTimelineToggle:);
-        timelineToggle.state = defaultsToTimeline
-            ? NSControlStateValueOn
-            : NSControlStateValueOff;
-        [accessory addSubview:timelineToggle];
-
-        NSTextField *placementLabel = [NSTextField labelWithString:@"Timeline Placement"];
-        placementLabel.frame = NSMakeRect(0, 34, 140, 20);
-        [accessory addSubview:placementLabel];
-
-        NSPopUpButton *modePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 8, 188, 26) pullsDown:NO];
-        [modePopup addItemsWithTitles:@[@"At Current Playhead", @"At Timeline Start", @"Append to Timeline End"]];
-        if ([defaultMode isEqualToString:@"append_to_timeline"]) {
-            [modePopup selectItemAtIndex:2];
-        } else if ([defaultMode isEqualToString:@"insert_at_timeline_start"]) {
-            [modePopup selectItemAtIndex:1];
-        } else {
-            [modePopup selectItemAtIndex:0];
-        }
-        [accessory addSubview:modePopup];
-        objc_setAssociatedObject(timelineToggle, "urlImportTimelineLabel", placementLabel, OBJC_ASSOCIATION_ASSIGN);
-        objc_setAssociatedObject(timelineToggle, "urlImportTimelinePopup", modePopup, OBJC_ASSOCIATION_ASSIGN);
-        [self syncURLImportTimelineControls:timelineToggle];
-
-        NSTextField *titleLabel = [NSTextField labelWithString:@"Title Override"];
-        titleLabel.frame = NSMakeRect(198, 34, 100, 20);
-        [accessory addSubview:titleLabel];
-
-        NSTextField *titleField = [[NSTextField alloc] initWithFrame:NSMakeRect(198, 8, 222, 24)];
-        titleField.placeholderString = @"Optional clip name";
-        [accessory addSubview:titleField];
-
-        alert.accessoryView = accessory;
-
-        NSInteger response = [alert runModal];
-        if (response != NSAlertFirstButtonReturn) return;
-
-        NSString *url = [urlField.string stringByTrimmingCharactersInSet:
-            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (url.length == 0) {
-            [self showSimpleAlertWithTitle:promptTitle message:emptyMessage];
-            return;
-        }
-
-        NSMutableDictionary *params = [NSMutableDictionary dictionary];
-        params[@"url"] = url;
-        params[@"mode"] = [self selectedURLImportModeForToggle:timelineToggle popup:modePopup];
-        NSString *title = [titleField.stringValue stringByTrimmingCharactersInSet:
-            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (title.length > 0) params[@"title"] = title;
-
-        NSPanel *hud = [self showProcessingHUD:(defaultsToTimeline
-            ? @"Starting timeline URL import..."
-            : @"Starting library URL import...")];
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *start = SpliceKitURLImport_start(params);
-            if (start[@"error"]) {
-                [self dismissProcessingHUD:hud];
-                [self showSimpleAlertWithTitle:failureTitle message:start[@"error"]];
-                return;
-            }
-
-            NSString *jobID = start[@"job_id"];
-            if (jobID.length == 0) {
-                [self dismissProcessingHUD:hud];
-                [self showSimpleAlertWithTitle:failureTitle
-                                       message:@"The URL import job did not return a valid job ID."];
-                return;
-            }
-            [self attachURLImportCancelButtonToHUD:hud jobID:jobID];
-
-            dispatch_async(dispatch_get_main_queue(), ^{
-                __block dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-                    dispatch_get_main_queue());
-                dispatch_source_set_timer(timer,
-                    dispatch_time(DISPATCH_TIME_NOW, 0),
-                    (uint64_t)(0.35 * NSEC_PER_SEC),
-                    (uint64_t)(0.05 * NSEC_PER_SEC));
-
-                dispatch_source_set_event_handler(timer, ^{
-                    NSDictionary *status = SpliceKitURLImport_status(@{@"job_id": jobID});
-                    NSString *state = status[@"state"] ?: @"";
-                    NSString *message = status[@"message"] ?: @"Working...";
-                    double progress = [status[@"progress"] doubleValue];
-                    NSString *hudMessage = message;
-                    if (progress > 0.0 && progress < 1.0) {
-                        hudMessage = [NSString stringWithFormat:@"%@ %.0f%%", message, progress * 100.0];
-                    }
-                    [self updateProcessingHUD:hud message:hudMessage];
-
-                    BOOL finished = [state isEqualToString:@"completed"] ||
-                                    [state isEqualToString:@"failed"] ||
-                                    [state isEqualToString:@"cancelled"];
-                    if (!finished) return;
-
-                    dispatch_source_cancel(timer);
-                    timer = nil;
-                    [self dismissProcessingHUD:hud];
-
-                    BOOL completed = [state isEqualToString:@"completed"];
-                    NSString *statusError = [status[@"error"] isKindOfClass:[NSString class]]
-                        ? status[@"error"] : @"";
-                    BOOL hasWarning = completed && statusError.length > 0;
-
-                    if (completed && !hasWarning) {
-                        SpliceKit_log(@"[URLImport] %@", status[@"message"] ?: @"URL import finished.");
-                        return;
-                    }
-
-                    NSMutableString *summary = [NSMutableString stringWithString:
-                        status[@"message"] ?: @"URL import finished."];
-                    NSString *targetEvent = status[@"target_event"];
-                    NSString *finalPath = [status[@"normalized_path"] length] > 0
-                        ? status[@"normalized_path"] : status[@"download_path"];
-                    if (targetEvent.length > 0) {
-                        [summary appendFormat:@"\n\nEvent: %@", targetEvent];
-                    }
-                    if (finalPath.length > 0 && !completed) {
-                        [summary appendFormat:@"\nPath: %@", finalPath];
-                    }
-                    if (statusError.length > 0) {
-                        [summary appendFormat:@"\n\nDetail: %@", statusError];
-                    }
-
-                    NSString *titleText = completed ? @"URL Imported With Warning" : @"Import From URL Failed";
-                    [self showSimpleAlertWithTitle:titleText message:summary];
-                });
-
-                dispatch_resume(timer);
-            });
-        });
     });
 }
 
@@ -3519,7 +3298,8 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
             @"retimeCustomSpeed", @"retimeInstantReplayHalf", @"retimeInstantReplayQuarter",
             @"retimeReset", @"retimeOpticalFlow", @"retimeFrameBlending", @"retimeFloorFrame",
             // Keyframes
-            @"addKeyframe", @"deleteKeyframes", @"nextKeyframe", @"previousKeyframe",
+            @"addKeyframe", @"deleteKeyframes", @"removeAllKeyframesFromClip",
+            @"nextKeyframe", @"previousKeyframe",
             // Clip operations
             @"solo", @"disable", @"enableDisable", @"createCompoundClip",
             @"breakApartClipItems", @"addAdjustmentClip",
@@ -4949,16 +4729,27 @@ static NSString *SpliceKit_tailLogFile(NSString *path, NSUInteger maxBytes) {
 
     // Timeline actions
     addTool(@"timeline_action",
-        @"Execute a timeline editing action (blade, delete, markers, color, speed, etc). "
-        @"Common actions: blade, bladeAll, delete, cut, copy, paste, undo, redo, "
-        @"selectClipAtPlayhead, selectAll, deselectAll, addMarker, addChapterMarker, addTodoMarker, "
-        @"deleteMarker, nextMarker, previousMarker, nextEdit, previousEdit, addTransition, "
-        @"trimToPlayhead, insertGap, addColorBoard, addColorWheels, addColorCurves, "
-        @"retimeNormal, retimeSlow50, retimeSlow25, retimeFast2x, retimeFast4x, retimeReverse, freezeFrame, "
-        @"addBasicTitle, addBasicLowerThird, adjustVolumeUp, adjustVolumeDown, "
-        @"solo, disable, removeEffects, detachAudio, zoomToFit, renderAll, exportXML, "
-        @"favorite, reject, unrate, createCompoundClip, autoReframe, addKeyframe, deleteKeyframes, "
-        @"showPreferences (open app preferences/settings)",
+        @"Execute a timeline editing action. Actions:\n"
+        @"EDITING: blade, bladeAll, delete, cut, copy, paste, undo, redo, joinClips, replaceWithGap, pasteAsConnected, insertGap, insertPlaceholder\n"
+        @"SELECTION: selectAll, deselectAll, selectClipAtPlayhead, selectToPlayhead\n"
+        @"TRIM: trimToPlayhead, extendEditToPlayhead, trimStart, trimEnd, nudgeLeft, nudgeRight, nudgeUp, nudgeDown\n"
+        @"RANGE: setRangeStart, setRangeEnd, clearRange, setClipRange\n"
+        @"MARKERS: addMarker, addTodoMarker, addChapterMarker, deleteMarker, deleteMarkersInSelection, nextMarker, previousMarker\n"
+        @"NAVIGATION: nextEdit, previousEdit, addTransition\n"
+        @"COLOR: addColorBoard, addColorWheels, addColorCurves, addHueSaturation, addEnhanceLightAndColor, balanceColor, matchColor, addMagneticMask, addColorAdjustment, resetColorBoard, smartConform\n"
+        @"AUDIO: adjustVolumeUp, adjustVolumeDown, volumeMute, detachAudio, addChannelEQ, enhanceAudio, matchAudio, expandAudio, expandAudioComponents, addAudioFadeIn, addAudioFadeOut\n"
+        @"TITLES: addBasicTitle, addBasicLowerThird\n"
+        @"SPEED: retimeNormal, retimeFast2x, retimeFast4x, retimeFast8x, retimeFast20x, retimeSlow50, retimeSlow25, retimeSlow10, retimeReverse, retimeHold, freezeFrame, retimeBladeSpeed, retimeSpeedRampToZero, retimeSpeedRampFromZero\n"
+        @"CLIPS: solo, disable, createCompoundClip, breakApartClipItems, addAdjustmentClip, liftFromPrimaryStoryline, createStoryline, overwriteToPrimaryStoryline, collapseToConnectedStoryline, renameClip, openClip, changeDuration, synchronizeClips, referenceNewParentClip\n"
+        @"EFFECTS: removeEffects, pasteEffects, pasteAttributes, copyAttributes, removeAttributes, autoReframe, showTransformControls, showCropControls\n"
+        @"CAPTIONS: addCaption, splitCaption, resolveOverlaps, importCaptions\n"
+        @"MULTICAM: createMulticamClip, switchAngle01, switchAngle02, switchAngle03, switchAngle04, cutAndSwitchAngle01, cutAndSwitchAngle02\n"
+        @"RATING: favorite, reject, unrate\n"
+        @"KEYFRAMES: addKeyframe, deleteKeyframes, removeAllKeyframesFromClip, nextKeyframe, previousKeyframe\n"
+        @"VIEW: zoomToFit, zoomIn, zoomOut, verticalZoomToFit, toggleSnapping, toggleSkimming, toggleClipSkimming, toggleInspector, toggleTimeline, toggleTimelineIndex, showAudioLanes, enterFullScreen, increaseClipHeight, decreaseClipHeight, showVideoAnimation, showAudioAnimation, showPrecisionEditor\n"
+        @"PROJECT: duplicateProject, snapshotProject, projectProperties, newProject, newEvent, importMedia, find, findAndReplaceTitle, revealInFinder, renderAll, exportXML, analyzeAndFix, recordVoiceover, backgroundTasks, deleteGeneratedFiles, deleteRenderFiles, showPreferences\n"
+        @"AUDITION: createAudition, finalizeAudition, nextAuditionPick, previousAuditionPick\n"
+        @"STORYLINE: createStoryline, liftFromPrimaryStoryline, overwriteToPrimaryStoryline, collapseToConnectedStoryline",
         @{@"type": @"object",
           @"properties": @{
               @"action": @{@"type": @"string", @"description": @"Action name"}
@@ -5020,7 +4811,11 @@ static NSString *SpliceKit_tailLogFile(NSString *path, NSUInteger maxBytes) {
 
     // Effects
     addTool(@"apply_effect",
-        @"Apply a video/audio effect to the selected clip.",
+        @"Apply a video/audio effect to the selected clip. Common effects: "
+        @"Gaussian Blur, Sharpen, Keyer, Luma Keyer, Vignette, Noise Reduction, Stabilization, "
+        @"Black & White, Sepia, Aged Film, Film Grain, Bloom, Glow, Pixellate, Posterize, "
+        @"Invert, Flipped, Tilt-Shift, Drop Shadow, Letterbox, Lens Flare, Underwater, Rolling Shutter. "
+        @"Use list_effects() to discover all available effects.",
         @{@"type": @"object",
           @"properties": @{
               @"name": @{@"type": @"string", @"description": @"Effect name (e.g. Gaussian Blur, Keyer, Vignette)"},
@@ -5118,17 +4913,6 @@ static NSString *SpliceKit_tailLogFile(NSString *path, NSUInteger maxBytes) {
               @"internal": @{@"type": @"boolean", @"description": @"Use internal import (no dialog)"}
           },
           @"required": @[@"xml"]});
-
-    addTool(@"import_url",
-        @"Download a remote media URL, import it into Final Cut Pro, and optionally place it in the timeline.",
-        @{@"type": @"object",
-          @"properties": @{
-              @"url": @{@"type": @"string", @"description": @"Direct media URL or a supported provider URL"},
-              @"mode": @{@"type": @"string", @"description": @"import_only, insert_at_playhead, or append_to_timeline"},
-              @"title": @{@"type": @"string", @"description": @"Optional clip title override"},
-              @"target_event": @{@"type": @"string", @"description": @"Optional event name override"}
-          },
-          @"required": @[@"url"]});
 
     addTool(@"export_xml",
         @"Export current project as FCPXML to a file path.",
@@ -5287,7 +5071,6 @@ static NSDictionary *SpliceKit_gemmaToolBridgeMap(void) {
             @"generate_captions":        @"captions.generate",
             @"generate_fcpxml":          @"fcpxml.generate",
             @"import_fcpxml":            @"fcpxml.import",
-            @"import_url":               @"urlImport.import",
             @"export_xml":               @"fcpxml.export",
             @"detect_scene_changes":     @"scene.detect",
             @"toggle_panel":             @"view.toggle",
@@ -5415,15 +5198,35 @@ static NSString * const kGemmaSystemPrompt =
     @"1. Call get_timeline_clips first if you need to know what's on the timeline\n"
     @"2. Use seek_to_time(seconds) for playhead positioning — it's instant\n"
     @"3. Most edits require selecting a clip first: timeline_action(\"selectClipAtPlayhead\")\n"
-    @"4. If a tool returns an error, try an alternative approach\n"
-    @"5. When done, respond with a brief summary of what you changed\n\n"
+    @"4. For connected clips (titles, B-roll), use select_clip_in_lane(lane=1 above, -1 below)\n"
+    @"5. If a tool returns an error, try an alternative approach\n"
+    @"6. When done, respond with a brief summary of what you changed\n\n"
     @"CRITICAL — batch operations:\n"
     @"For repetitive tasks (cutting at intervals, adding many markers, etc.), ALWAYS use batch tools:\n"
     @"- blade_at_times([3.0, 6.0, 9.0, ...]) — cut at many times in ONE call\n"
     @"- add_markers_at_times([...]) — add many markers in ONE call\n"
     @"- batch_timeline_actions([...]) — chain many actions in ONE call\n"
     @"Compute all needed times/actions upfront, then execute in a single tool call.\n"
-    @"NEVER loop step-by-step (seek+blade, seek+blade...) — use the batch tool instead.";
+    @"NEVER loop step-by-step (seek+blade, seek+blade...) — use the batch tool instead.\n\n"
+    @"CAPABILITIES:\n"
+    @"- Color: addColorBoard/Wheels/Curves, addHueSaturation, balanceColor, matchColor, addMagneticMask\n"
+    @"- Speed: retimeSlow50/25/10, retimeFast2x/4x/8x/20x, retimeReverse, freezeFrame, retimeHold, retimeBladeSpeed, retimeSpeedRampToZero/FromZero\n"
+    @"- Audio: adjustVolumeUp/Down, volumeMute, addAudioFadeIn/Out, detachAudio, addChannelEQ, enhanceAudio, matchAudio\n"
+    @"- Captions: addCaption, splitCaption, resolveOverlaps, generate_captions (social media style)\n"
+    @"- Multicam: createMulticamClip, switchAngle01-04, cutAndSwitchAngle01-02\n"
+    @"- Compound clips: createCompoundClip, breakApartClipItems, openClip (enter), backToParent (exit)\n"
+    @"- Storylines: createStoryline, liftFromPrimaryStoryline, overwriteToPrimaryStoryline\n"
+    @"- Transitions: apply_transition (Cross Dissolve, Flow, Wipe, etc.) with freeze_extend option\n"
+    @"- Effects: apply_effect (Gaussian Blur, Keyer, Vignette, etc.), removeEffects, pasteEffects/Attributes\n"
+    @"- Inspector: get/set_inspector_property (opacity, volume, positionX/Y, rotation, scaleX/Y)\n"
+    @"- Transcript: open_transcript, get_transcript, delete_transcript_silences (remove pauses)\n"
+    @"- Scene detection: detect_scene_changes (add markers or blade at cuts)\n"
+    @"- FCPXML: generate_fcpxml, import_fcpxml, export_xml\n"
+    @"- View: toggle_panel, capture_viewer/timeline for screenshots\n"
+    @"- Trim: trimToPlayhead, trimStart, trimEnd, nudgeLeft/Right/Up/Down\n"
+    @"- Auditions: createAudition, finalizeAudition, nextAuditionPick, previousAuditionPick\n"
+    @"- Rating: favorite, reject, unrate\n"
+    @"- Project: newProject, newEvent, duplicateProject, importMedia, analyzeAndFix, share_project";
 
 - (void)executeNaturalLanguageGemma:(NSString *)query
                          completion:(void(^)(NSString *summary, NSString *error))completion {
@@ -5738,11 +5541,6 @@ static NSString * const kGemmaSystemPrompt =
         "}\n"
         "@Generable struct FxArgs { var name: EffectName }\n"
         "@Generable struct MenuArgs { @Guide(description: \"Menu path\") var path: [String] }\n"
-        "@Generable struct ImportArgs {\n"
-        "    @Guide(description: \"A direct .mp4/.mov/.m4v/.webm URL, or a supported provider URL\") var url: String\n"
-        "    @Guide(description: \"import_only, insert_at_playhead, insert_at_timeline_start, or append_to_timeline\") var mode: String?\n"
-        "    @Guide(description: \"Optional clip title override\") var title: String?\n"
-        "}\n"
         "\n"
         "struct Act: Tool {\n"
         "    let name = \"edit\"\n"
@@ -5787,20 +5585,11 @@ static NSString * const kGemmaSystemPrompt =
         "    let description = \"Execute menu command by path. Only if edit tool doesn't have the action.\"\n"
         "    func call(arguments: MenuArgs) async throws -> String { bridge(\"menu.execute\", [\"menuPath\": arguments.path]) }\n"
         "}\n"
-        "struct ImportURL: Tool {\n"
-        "    let name = \"import_url\"\n"
-        "    let description = \"Download a remote media URL, import it into Final Cut Pro, and optionally place it into the timeline\"\n"
-        "    func call(arguments: ImportArgs) async throws -> String {\n"
-        "        var params: [String: Any] = [\"url\": arguments.url, \"mode\": arguments.mode ?? \"import_only\"]\n"
-        "        if let title = arguments.title, !title.isEmpty { params[\"title\"] = title }\n"
-        "        return bridge(\"urlImport.import\", params)\n"
-        "    }\n"
-        "}\n"
         "\n"
         "Task {\n"
         "    do {\n"
-        "        let s = LanguageModelSession(tools: [Act(), Seek(), Clips(), Repeat(), Fx(), Menu(), ImportURL()],\n"
-        "            instructions: \"You control Final Cut Pro via tools. %@ cut/split means blade NOT delete. For repeating actions at intervals use repeat_action. Always prefer edit tool over menu. If the request includes a media URL, use import_url. Summarize what you did.\")\n"
+        "        let s = LanguageModelSession(tools: [Act(), Seek(), Clips(), Repeat(), Fx(), Menu()],\n"
+        "            instructions: \"You control Final Cut Pro via tools. %@ cut/split means blade NOT delete. For repeating actions at intervals use repeat_action. Always prefer edit tool over menu. Summarize what you did.\")\n"
         "        let r = try await s.respond(to: \"%@\")\n"
         "        print(r.content ?? \"Done.\")\n"
         "    } catch LanguageModelSession.GenerationError.exceededContextWindowSize {\n"

@@ -46,6 +46,13 @@ ENTITLEMENTS = entitlements.plist
 
 SILENCE_DETECTOR = $(BUILD_DIR)/silence-detector
 STRUCTURE_ANALYZER = $(BUILD_DIR)/structure-analyzer
+MIXER_APP = $(BUILD_DIR)/SpliceKitMixer
+AUDIO_BUS_PROBE_DIR = tools/audio-bus-probe-au
+AUDIO_BUS_PROBE_COMPONENT = $(BUILD_DIR)/SpliceKitAudioBusProbe.component
+AUDIO_BUS_PROBE_BINARY = $(AUDIO_BUS_PROBE_COMPONENT)/Contents/MacOS/SpliceKitAudioBusProbe
+AUDIO_BUS_PROBE_INFO = $(AUDIO_BUS_PROBE_DIR)/Info.plist
+AUDIO_BUS_PROBE_SOURCE = $(AUDIO_BUS_PROBE_DIR)/SpliceKitAudioBusProbe.c
+AUDIO_BUS_PROBE_INSTALL_DIR = $(HOME)/Library/Audio/Plug-Ins/Components
 TOOLS_DIR = $(HOME)/Applications/SpliceKit/tools
 PARAKEET_PKG_DIR = patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber
 PARAKEET_RELEASE_BIN = $(PARAKEET_PKG_DIR)/.build/release/parakeet-transcriber
@@ -55,7 +62,32 @@ PARAKEET_DEBUG_BIN = $(PARAKEET_PKG_DIR)/.build/debug/parakeet-transcriber
 
 all: $(OUTPUT)
 
-tools: $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER)
+tools: $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP)
+
+audio-bus-probe: $(AUDIO_BUS_PROBE_BINARY)
+	@echo "Built: $(AUDIO_BUS_PROBE_COMPONENT)"
+
+$(AUDIO_BUS_PROBE_BINARY): $(AUDIO_BUS_PROBE_SOURCE) $(AUDIO_BUS_PROBE_INFO) | $(BUILD_DIR)
+	@mkdir -p "$(AUDIO_BUS_PROBE_COMPONENT)/Contents/MacOS"
+	@cp "$(AUDIO_BUS_PROBE_INFO)" "$(AUDIO_BUS_PROBE_COMPONENT)/Contents/Info.plist"
+	$(CC) $(ARCHS) $(MIN_VERSION) -std=c11 -O2 -Wall -Wextra -Wno-deprecated-declarations \
+		-fvisibility=hidden -dynamiclib \
+		-framework AudioToolbox -framework AudioUnit -framework CoreAudio -framework CoreFoundation -framework CoreServices \
+		"$(AUDIO_BUS_PROBE_SOURCE)" -o "$(AUDIO_BUS_PROBE_BINARY)"
+	@codesign --force --sign - "$(AUDIO_BUS_PROBE_COMPONENT)" >/dev/null
+
+install-audio-bus-probe: audio-bus-probe
+	@mkdir -p "$(AUDIO_BUS_PROBE_INSTALL_DIR)"
+	@rm -rf "$(AUDIO_BUS_PROBE_INSTALL_DIR)/SpliceKitAudioBusProbe.component"
+	@cp -R "$(AUDIO_BUS_PROBE_COMPONENT)" "$(AUDIO_BUS_PROBE_INSTALL_DIR)/SpliceKitAudioBusProbe.component"
+	@codesign --force --sign - "$(AUDIO_BUS_PROBE_INSTALL_DIR)/SpliceKitAudioBusProbe.component" >/dev/null
+	@killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
+	@echo "Installed: $(AUDIO_BUS_PROBE_INSTALL_DIR)/SpliceKitAudioBusProbe.component"
+
+uninstall-audio-bus-probe:
+	@rm -rf "$(AUDIO_BUS_PROBE_INSTALL_DIR)/SpliceKitAudioBusProbe.component"
+	@killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
+	@echo "Uninstalled: $(AUDIO_BUS_PROBE_INSTALL_DIR)/SpliceKitAudioBusProbe.component"
 
 url-import-tools:
 	@mkdir -p "$(TOOLS_DIR)"
@@ -91,6 +123,11 @@ $(STRUCTURE_ANALYZER): tools/structure-analyzer.swift | $(BUILD_DIR)
 	swiftc -O -suppress-warnings -o $(STRUCTURE_ANALYZER) tools/structure-analyzer.swift
 	@echo "Built: $(STRUCTURE_ANALYZER)"
 
+MIXER_SOURCES = $(wildcard tools/mixer-app/*.swift)
+$(MIXER_APP): $(MIXER_SOURCES) | $(BUILD_DIR)
+	swiftc -O -suppress-warnings -parse-as-library -o $(MIXER_APP) $(MIXER_SOURCES)
+	@echo "Built: $(MIXER_APP)"
+
 # Lua static library — compiled as C (no -fobjc-arc)
 $(BUILD_DIR)/lua/%.o: $(LUA_DIR)/%.c | $(BUILD_DIR)/lua
 	$(CC) $(ARCHS) $(MIN_VERSION) -DLUA_USE_MACOSX -O2 -Wall -c $< -o $@
@@ -109,7 +146,7 @@ $(OUTPUT): $(SOURCES) Sources/SpliceKit.h $(LUA_LIB) | $(BUILD_DIR)
 clean:
 	rm -rf $(BUILD_DIR)
 
-deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER)
+deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP)
 	@echo "=== Deploying SpliceKit to modded FCP ==="
 	@mkdir -p "$(FW_DIR)/Versions/A/Resources"
 	cp $(OUTPUT) "$(FW_DIR)/Versions/A/SpliceKit"
@@ -130,6 +167,7 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER)
 	@$(MAKE) url-import-tools
 	@cp $(SILENCE_DETECTOR) "$(TOOLS_DIR)/silence-detector" 2>/dev/null || true
 	@cp $(STRUCTURE_ANALYZER) "$(TOOLS_DIR)/structure-analyzer" 2>/dev/null || true
+	@cp $(MIXER_APP) "$(TOOLS_DIR)/SpliceKitMixer" 2>/dev/null || true
 	@if [ -f "$(PARAKEET_RELEASE_BIN)" ]; then \
 		cp "$(PARAKEET_RELEASE_BIN)" "$(TOOLS_DIR)/parakeet-transcriber"; \
 		cp "$(PARAKEET_RELEASE_BIN)" "$(FW_DIR)/Versions/A/Resources/parakeet-transcriber"; \

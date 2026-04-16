@@ -85,39 +85,8 @@ class PatcherModel: ObservableObject {
             sourceApp = Self.standardApp
         }
         destDir = NSHomeDirectory() + "/Applications/SpliceKit"
-        // Find SpliceKit sources. Priority:
-        // 1. Embedded in app bundle (Resources/Sources/) — self-contained release
-        // 2. Relative to app bundle (developer running from repo checkout)
-        // 3. Common local paths
-        // 4. Cache dir (will download into it during patch)
-        var found = ""
-
-        // 1. Embedded in app bundle
-        if let resourcePath = Bundle.main.resourcePath {
-            let embedded = resourcePath + "/Sources"
-            if FileManager.default.fileExists(atPath: embedded + "/SpliceKit.m") {
-                found = resourcePath
-            }
-        }
-
-        // 2. Relative to app bundle (developer workflow)
-        if found.isEmpty {
-            var dir = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
-            for _ in 0..<5 {
-                if FileManager.default.fileExists(atPath: dir + "/Sources/SpliceKit.m") {
-                    found = dir; break
-                }
-                dir = (dir as NSString).deletingLastPathComponent
-            }
-        }
-
-        // 3. No hardcoded user paths — skip to cache dir
-
-        // 4. Cache dir (download during patch)
-        if found.isEmpty {
-            found = NSHomeDirectory() + "/Library/Caches/SpliceKit"
-        }
-        repoDir = found
+        // The app ships a pre-built dylib in Resources/. No source compilation needed.
+        repoDir = Bundle.main.resourcePath ?? NSHomeDirectory() + "/Library/Caches/SpliceKit"
         // Defer status check — shell() pumps the run loop via waitUntilExit,
         // which crashes if called during SwiftUI view graph initialization.
         DispatchQueue.main.async { [self] in
@@ -314,24 +283,6 @@ class PatcherModel: ObservableObject {
         }
         await logAsync("FCP \(fcpVersion): OK")
 
-        let repoSources = repoDir + "/Sources/SpliceKit.m"
-        if !FileManager.default.fileExists(atPath: repoSources) {
-            await logAsync("Downloading SpliceKit sources...")
-            let dlResult = shell("""
-                mkdir -p '\(repoDir)' && \
-                curl -sL https://github.com/elliotttate/SpliceKit/archive/refs/heads/main.zip \
-                    -o /tmp/splicekit_src.zip && \
-                unzip -qo /tmp/splicekit_src.zip -d /tmp/splicekit_extract && \
-                cp -R /tmp/splicekit_extract/SpliceKit-main/* '\(repoDir)/' && \
-                rm -rf /tmp/splicekit_src.zip /tmp/splicekit_extract 2>&1
-                """)
-            guard FileManager.default.fileExists(atPath: repoSources) else {
-                throw PatchError.msg("Failed to download SpliceKit sources. Make sure you have an internet connection.\n\(dlResult)")
-            }
-            await logAsync("Downloaded SpliceKit sources")
-        } else {
-            await logAsync("SpliceKit sources: OK")
-        }
         await completeStepAsync(.checkPrereqs)
 
         // Step 2: Copy FCP bundle, preserve MAS receipt, strip quarantine xattrs
@@ -350,79 +301,29 @@ class PatcherModel: ObservableObject {
         }
         await completeStepAsync(.copyApp)
 
-        // Step 3: Compile universal (arm64+x86_64) dylib; -undefined dynamic_lookup
-        // because FCP symbols are only available at runtime via dyld.
+        // Step 3: Use pre-built dylib from app bundle
         await setStepAsync(.buildDylib)
-        await logAsync("Compiling SpliceKit dylib...")
         let buildDir = NSTemporaryDirectory() + "SpliceKit_build"
         shell("mkdir -p '\(buildDir)'")
-        let sources = ["SpliceKit.m", "SpliceKitRuntime.m", "SpliceKitSwizzle.m", "SpliceKitServer.m", "SpliceKitTranscriptPanel.m", "SpliceKitCommandPalette.m"]
-            .map { "'\(repoDir)/Sources/\($0)'" }.joined(separator: " ")
-        let buildResult = shell("""
-            clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
-            -framework Foundation -framework AppKit -framework AVFoundation \
-            -fobjc-arc -fmodules -Wno-deprecated-declarations \
-            -undefined dynamic_lookup -dynamiclib \
-            -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
-            -I '\(repoDir)/Sources' \
-            \(sources) -o '\(buildDir)/SpliceKit' 2>&1
-            """)
-        guard FileManager.default.fileExists(atPath: buildDir + "/SpliceKit") else {
-            throw PatchError.msg("Build failed:\n\(buildResult)")
-        }
-        await logAsync("Built universal dylib (arm64 + x86_64)")
 
-        // Build silence-detector tool
-        let silenceSwift = repoDir + "/tools/silence-detector.swift"
+        let bundledDylib = (Bundle.main.resourcePath ?? "") + "/SpliceKit"
+        guard FileManager.default.fileExists(atPath: bundledDylib) else {
+            throw PatchError.msg("Pre-built SpliceKit dylib not found in app bundle. Please re-download the patcher app.")
+        }
+        await logAsync("Using pre-built SpliceKit dylib")
+        shell("cp '\(bundledDylib)' '\(buildDir)/SpliceKit'")
+
+        // Copy pre-built tools from app bundle
         let silenceBin = buildDir + "/silence-detector"
-        if FileManager.default.fileExists(atPath: silenceSwift) {
-            let swiftResult = shell("swiftc -O -suppress-warnings -o '\(silenceBin)' '\(silenceSwift)' 2>&1")
-            if FileManager.default.fileExists(atPath: silenceBin) {
-                await logAsync("Built silence-detector tool")
-            } else {
-                await logAsync("Warning: silence-detector build failed (silence removal will be unavailable)")
-            }
-        } else {
-            // Try to use pre-built binary from Resources
-            let prebuilt = repoDir + "/tools/silence-detector"
-            if FileManager.default.fileExists(atPath: prebuilt) {
-                shell("cp '\(prebuilt)' '\(silenceBin)'")
-                await logAsync("Using pre-built silence-detector")
-            }
+        let bundledSilence = (Bundle.main.resourcePath ?? "") + "/tools/silence-detector"
+        if FileManager.default.fileExists(atPath: bundledSilence) {
+            shell("cp '\(bundledSilence)' '\(silenceBin)'")
         }
 
-        // Build parakeet-transcriber tool (Swift Package with FluidAudio dependency)
-        let parakeetSrcDir = repoDir + "/patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
         let parakeetBin = buildDir + "/parakeet-transcriber"
-        if FileManager.default.fileExists(atPath: parakeetSrcDir + "/Package.swift") {
-            await logAsync("Building Parakeet transcriber (may take a moment on first run)...")
-            // Always stage the package in a persistent cache location so the runtime
-            // can rebuild it later if the deployed binary is missing.
-            let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/SpliceKit/tools/parakeet-transcriber"
-            let sourcePath = URL(fileURLWithPath: parakeetSrcDir).standardizedFileURL.path
-            let cachePath = URL(fileURLWithPath: parakeetCacheDir).standardizedFileURL.path
-            let parakeetPkgDir: String
-            if sourcePath == cachePath {
-                parakeetPkgDir = parakeetSrcDir
-            } else {
-                await logAsync("Caching Parakeet transcriber sources...")
-                shell("""
-                    rm -rf '\(parakeetCacheDir)' && \
-                    mkdir -p '\((parakeetCacheDir as NSString).deletingLastPathComponent)' && \
-                    ditto '\(parakeetSrcDir)' '\(parakeetCacheDir)' && \
-                    rm -rf '\(parakeetCacheDir)/.build' '\(parakeetCacheDir)/.swiftpm' 2>&1
-                    """)
-                parakeetPkgDir = parakeetCacheDir
-            }
-            let parakeetResult = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
-            let parakeetBuilt = parakeetPkgDir + "/.build/release/parakeet-transcriber"
-            if FileManager.default.fileExists(atPath: parakeetBuilt) {
-                shell("cp '\(parakeetBuilt)' '\(parakeetBin)'")
-                await logAsync("Built Parakeet transcriber")
-            } else {
-                await logAsync("Warning: Parakeet transcriber build failed (transcription will use Apple Speech instead)")
-                await logAsync(String(parakeetResult.suffix(200)))
-            }
+        let bundledParakeet = (Bundle.main.resourcePath ?? "") + "/tools/parakeet-transcriber"
+        if FileManager.default.fileExists(atPath: bundledParakeet) {
+            shell("cp '\(bundledParakeet)' '\(parakeetBin)'")
         }
 
         await completeStepAsync(.buildDylib)
@@ -511,7 +412,10 @@ class PatcherModel: ObservableObject {
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
             <plist version="1.0"><dict>
-            <key>com.apple.security.cs-disable-library-validation</key><true/>
+            <key>com.apple.security.app-sandbox</key><false/>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+            <key>com.apple.security.get-task-allow</key><true/>
             </dict></plist>
             """
         try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)
@@ -591,64 +495,25 @@ class PatcherModel: ObservableObject {
         let buildDir = NSTemporaryDirectory() + "SpliceKit_build"
         shell("mkdir -p '\(buildDir)'")
 
+        // Use pre-built dylib from app bundle
         let bundledDylib = (Bundle.main.resourcePath ?? "") + "/SpliceKit"
-        if FileManager.default.fileExists(atPath: bundledDylib) {
-            await logAsync("Using pre-built SpliceKit dylib from app bundle")
-            shell("cp '\(bundledDylib)' '\(buildDir)/SpliceKit'")
-        } else {
-            await logAsync("Compiling SpliceKit dylib...")
-            let sources = ["SpliceKit.m", "SpliceKitRuntime.m", "SpliceKitSwizzle.m", "SpliceKitServer.m", "SpliceKitTranscriptPanel.m", "SpliceKitCommandPalette.m"]
-                .map { "'\(repoDir)/Sources/\($0)'" }.joined(separator: " ")
-            let buildResult = shell("""
-                clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
-                -framework Foundation -framework AppKit -framework AVFoundation \
-                -fobjc-arc -fmodules -Wno-deprecated-declarations \
-                -undefined dynamic_lookup -dynamiclib \
-                -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
-                -I '\(repoDir)/Sources' \
-                \(sources) -o '\(buildDir)/SpliceKit' 2>&1
-                """)
-            guard FileManager.default.fileExists(atPath: buildDir + "/SpliceKit") else {
-                throw PatchError.msg("Build failed:\n\(buildResult)")
-            }
-            await logAsync("Built universal dylib (arm64 + x86_64)")
+        guard FileManager.default.fileExists(atPath: bundledDylib) else {
+            throw PatchError.msg("Pre-built SpliceKit dylib not found in app bundle. Please re-download the patcher app.")
         }
+        await logAsync("Using pre-built SpliceKit dylib")
+        shell("cp '\(bundledDylib)' '\(buildDir)/SpliceKit'")
 
-        // Build tools
-        let silenceSwift = repoDir + "/tools/silence-detector.swift"
+        // Copy pre-built tools from app bundle
         let silenceBin = buildDir + "/silence-detector"
-        if FileManager.default.fileExists(atPath: silenceSwift) {
-            _ = shell("swiftc -O -suppress-warnings -o '\(silenceBin)' '\(silenceSwift)' 2>&1")
-        } else {
-            let prebuilt = repoDir + "/tools/silence-detector"
-            if FileManager.default.fileExists(atPath: prebuilt) {
-                shell("cp '\(prebuilt)' '\(silenceBin)'")
-            }
+        let bundledSilence = (Bundle.main.resourcePath ?? "") + "/tools/silence-detector"
+        if FileManager.default.fileExists(atPath: bundledSilence) {
+            shell("cp '\(bundledSilence)' '\(silenceBin)'")
         }
 
-        let parakeetSrcDir = repoDir + "/patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakeet-transcriber"
         let parakeetBin = buildDir + "/parakeet-transcriber"
-        if FileManager.default.fileExists(atPath: parakeetSrcDir + "/Package.swift") {
-            let parakeetCacheDir = NSHomeDirectory() + "/Library/Caches/SpliceKit/tools/parakeet-transcriber"
-            let sourcePath = URL(fileURLWithPath: parakeetSrcDir).standardizedFileURL.path
-            let cachePath = URL(fileURLWithPath: parakeetCacheDir).standardizedFileURL.path
-            let parakeetPkgDir: String
-            if sourcePath == cachePath {
-                parakeetPkgDir = parakeetSrcDir
-            } else {
-                shell("""
-                    rm -rf '\(parakeetCacheDir)' && \
-                    mkdir -p '\((parakeetCacheDir as NSString).deletingLastPathComponent)' && \
-                    ditto '\(parakeetSrcDir)' '\(parakeetCacheDir)' && \
-                    rm -rf '\(parakeetCacheDir)/.build' '\(parakeetCacheDir)/.swiftpm' 2>&1
-                    """)
-                parakeetPkgDir = parakeetCacheDir
-            }
-            let parakeetResult = shell("cd '\(parakeetPkgDir)' && swift build -c release 2>&1")
-            let parakeetBuilt = parakeetPkgDir + "/.build/release/parakeet-transcriber"
-            if FileManager.default.fileExists(atPath: parakeetBuilt) {
-                shell("cp '\(parakeetBuilt)' '\(parakeetBin)'")
-            }
+        let bundledParakeet = (Bundle.main.resourcePath ?? "") + "/tools/parakeet-transcriber"
+        if FileManager.default.fileExists(atPath: bundledParakeet) {
+            shell("cp '\(bundledParakeet)' '\(parakeetBin)'")
         }
         await completeStepAsync(.buildDylib)
 
@@ -701,7 +566,10 @@ class PatcherModel: ObservableObject {
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
             <plist version="1.0"><dict>
-            <key>com.apple.security.cs-disable-library-validation</key><true/>
+            <key>com.apple.security.app-sandbox</key><false/>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+            <key>com.apple.security.get-task-allow</key><true/>
             </dict></plist>
             """
         try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)
@@ -811,11 +679,36 @@ class PatcherModel: ObservableObject {
         return identities.first?.hash
     }
 
+    // File logging — writes to ~/Library/Logs/SpliceKit/patcher.log
+    private static let logFileURL: URL = {
+        let logDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/SpliceKit")
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        let logFile = logDir.appendingPathComponent("patcher.log")
+        let prev = logDir.appendingPathComponent("patcher.previous.log")
+        try? FileManager.default.removeItem(at: prev)
+        try? FileManager.default.moveItem(at: logFile, to: prev)
+        FileManager.default.createFile(atPath: logFile.path, contents: nil)
+        return logFile
+    }()
+
+    private nonisolated func writeLogFile(_ text: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(timestamp)] \(text)\n"
+        if let handle = try? FileHandle(forWritingTo: Self.logFileURL) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8) ?? Data())
+            handle.closeFile()
+        }
+    }
+
     private func appendLog(_ text: String) {
         log += text + "\n"
+        writeLogFile(text)
     }
 
     private nonisolated func logAsync(_ text: String) async {
+        writeLogFile(text)
         await MainActor.run { self.log += text + "\n" }
     }
 

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+
+<fcpxml version="1.14">
+    <resources>
+        <format id="r1" name="FFVideoFormat1080p30" frameDuration="100/3000s" width="1920" height="1080" colorSpace="1-1-1 (Rec. 709)"/>
+        <asset id="r2" name="Clip_A" uid="TRANS0001" src="file:///Volumes/Media/Clip_A.mov" start="0s" duration="300/30s" hasVideo="1" format="r1" hasAudio="1"/>
+        <asset id="r3" name="Clip_B" uid="TRANS0002" src="file:///Volumes/Media/Clip_B.mov" start="0s" duration="300/30s" hasVideo="1" format="r1" hasAudio="1"/>
+        <asset id="r4" name="Clip_C" uid="TRANS0003" src="file:///Volumes/Media/Clip_C.mov" start="0s" duration="300/30s" hasVideo="1" format="r1" hasAudio="1"/>
+        <effect id="r5" name="Cross Dissolve" uid="FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265"/>
+        <effect id="r6" name="Audio Crossfade" uid="FFAudioTransition"/>
+    </resources>
+    <project name="Transitions_Test_Project" uid="TEST-TRANS-001">
+        <sequence format="r1" duration="28s" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
+            <spine>
+                <clip name="Clip_A" offset="0s" duration="10s" tcFormat="NDF">
+                    <video offset="0s" ref="r2" duration="300/30s"/>
+                </clip>
+                <transition name="Cross Dissolve" offset="28500/3000s" duration="1s">
+                    <filter-video ref="r5" name="Cross Dissolve">
+                        <param name="Look" key="1" value="11 (Video)"/>
+                        <param name="Amount" key="2" value="50"/>
+                        <param name="Ease" key="50" value="2 (In &amp; Out)"/>
+                        <param name="Ease Amount" key="51" value="0"/>
+                    </filter-video>
+                    <filter-audio ref="r6" name="Audio Crossfade"/>
+                </transition>
+                <clip name="Clip_B" offset="28500/3000s" duration="10s" tcFormat="NDF">
+                    <video offset="0s" ref="r3" duration="300/30s"/>
+                </clip>
+                <transition name="Cross Dissolve" offset="57000/3000s" duration="1s">
+                    <filter-video ref="r5" name="Cross Dissolve">
+                        <param name="Look" key="1" value="11 (Video)"/>
+                        <param name="Amount" key="2" value="50"/>
+                        <param name="Ease" key="50" value="2 (In &amp; Out)"/>
+                        <param name="Ease Amount" key="51" value="0"/>
+                    </filter-video>
+                    <filter-audio ref="r6" name="Audio Crossfade"/>
+                </transition>
+                <clip name="Clip_C" offset="57000/3000s" duration="10s" tcFormat="NDF">
+                    <video offset="0s" ref="r4" duration="300/30s"/>
+                </clip>
+            </spine>
+        </sequence>
+    </project>
+</fcpxml>

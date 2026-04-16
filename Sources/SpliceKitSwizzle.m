@@ -11,6 +11,7 @@
 //
 
 #import "SpliceKit.h"
+#import <dlfcn.h>
 
 // Keeps the original IMP for every method we've replaced.
 // Keyed by "ClassName.selectorName" so we can reverse any swizzle cleanly.
@@ -31,6 +32,20 @@ IMP SpliceKit_swizzleMethod(Class cls, SEL selector, IMP newImpl) {
         NSLog(@"[SpliceKit] Swizzle FAIL: -%@ not found on %@",
               NSStringFromSelector(selector), NSStringFromClass(cls));
         return NULL;
+    }
+
+    // Validate the current IMP resolves to a loaded Mach-O image.
+    // If dladdr fails, the implementation pointer may be a trampoline, stub,
+    // or point into freed memory — swizzling it would leave the method in a
+    // broken state and likely crash when called.
+    IMP currentImp = method_getImplementation(method);
+    if (currentImp) {
+        Dl_info dlInfo;
+        if (dladdr((void *)currentImp, &dlInfo) == 0) {
+            NSLog(@"[SpliceKit] Swizzle SKIP: -%@ on %@ — IMP %p does not resolve to any loaded image",
+                  NSStringFromSelector(selector), NSStringFromClass(cls), (void *)currentImp);
+            return NULL;
+        }
     }
 
     // Atomically swap in our implementation and grab the old one

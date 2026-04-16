@@ -70,6 +70,8 @@ typedef NS_ENUM(NSInteger, SpliceKitTranscriptEngine) {
 // State
 - (NSDictionary *)getState;
 - (void)restorePersistedStateForCurrentSequenceIfNeeded;
+- (void)ensurePersistedStateLoaded;  // restore if needed, handles project switches
+- (void)clearTranscript;  // clear all words/silences from memory and disk cache
 @property (nonatomic, readonly) SpliceKitTranscriptStatus status;
 @property (nonatomic, readonly) NSArray<SpliceKitTranscriptWord *> *words;
 @property (nonatomic, readonly) NSArray<SpliceKitTranscriptSilence *> *silences;
@@ -85,6 +87,8 @@ typedef NS_ENUM(NSInteger, SpliceKitTranscriptEngine) {
 
 // Silence operations
 @property (nonatomic) double silenceThreshold;  // seconds, default 0.3
+- (void)detectSilences;                          // recompute silences from word timings
+- (void)redetectSilencesAndRefreshUI;            // detectSilences + rebuild text view
 - (NSDictionary *)deleteAllSilences;
 - (NSDictionary *)deleteSilencesLongerThan:(double)minDuration;
 

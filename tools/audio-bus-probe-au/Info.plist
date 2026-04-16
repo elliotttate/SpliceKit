@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>SpliceKitAudioBusProbe</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.splicekit.AudioBusProbe</string>
+	<key>CFBundleName</key>
+	<string>SpliceKit Audio Bus Probe</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright SpliceKit. Internal diagnostics only.</string>
+	<key>AudioComponents</key>
+	<array>
+		<dict>
+			<key>type</key>
+			<string>aufx</string>
+			<key>subtype</key>
+			<string>SkBP</string>
+			<key>manufacturer</key>
+			<string>SpKt</string>
+			<key>name</key>
+			<string>SpliceKit: Audio Bus Probe</string>
+			<key>version</key>
+			<integer>1</integer>
+			<key>factoryFunction</key>
+			<string>SpliceKitAudioBusProbeFactory</string>
+			<key>resourceUsage</key>
+			<dict>
+				<key>temporary-exception.files.all.read-write</key>
+				<true/>
+			</dict>
+			<key>tags</key>
+			<array>
+				<string>Effect</string>
+				<string>Analyzer</string>
+				<string>Meter</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
