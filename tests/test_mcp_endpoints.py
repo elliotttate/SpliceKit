@@ -394,7 +394,7 @@ def test_transcript_grep():
         return
 
     r = rpc("transcriptGrep.analyze", {
-        "query": r"\\bsplicekit_transcript_grep_zero_hit_sentinel\\b",
+        "query": r"\bsplicekit_transcript_grep_zero_hit_sentinel\b",
         "scope": "timeline",
         "searchMode": "regex",
     })

@@ -314,31 +314,67 @@ static NSString *SpliceKitURLImportDownloadedFileMatchingPrefix(NSString *direct
     return bestPath;
 }
 
+static const void *SpliceKitURLImportStateQueueSpecificKey = &SpliceKitURLImportStateQueueSpecificKey;
+
+static void SpliceKitURLImportPerformStateBlock(dispatch_queue_t stateQueue, dispatch_block_t block) {
+    if (!stateQueue || !block) return;
+    if (dispatch_get_specific(SpliceKitURLImportStateQueueSpecificKey)) {
+        block();
+        return;
+    }
+    dispatch_sync(stateQueue, block);
+}
+
+static BOOL SpliceKitURLImportJobIsCancelled(dispatch_queue_t stateQueue, id job) {
+    __block BOOL cancelled = NO;
+    SpliceKitURLImportPerformStateBlock(stateQueue, ^{
+        cancelled = ((BOOL (*)(id, SEL))objc_msgSend)(job, @selector(cancelled));
+    });
+    return cancelled;
+}
+
+static BOOL SpliceKitURLImportHostMatchesDomain(NSString *host, NSString *domain) {
+    if (host.length == 0 || domain.length == 0) return NO;
+    if ([host isEqualToString:domain]) return YES;
+    NSString *suffix = [@"." stringByAppendingString:domain];
+    return [host hasSuffix:suffix];
+}
+
+static BOOL SpliceKitURLImportHostMatchesAnyDomain(NSString *host, NSArray<NSString *> *domains) {
+    for (NSString *domain in domains) {
+        if (SpliceKitURLImportHostMatchesDomain(host, domain)) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 @interface SpliceKitURLImportJob : NSObject
-@property (nonatomic, copy) NSString *jobID;
-@property (nonatomic, copy) NSString *sourceURL;
-@property (nonatomic, copy) NSString *sourceType;
-@property (nonatomic, copy) NSString *state;
-@property (nonatomic, copy) NSString *message;
-@property (nonatomic, copy) NSString *mode;
-@property (nonatomic, copy) NSString *targetEvent;
-@property (nonatomic, copy) NSString *titleOverride;
-@property (nonatomic, copy) NSString *clipName;
-@property (nonatomic, copy) NSString *downloadPath;
-@property (nonatomic, copy) NSString *normalizedPath;
-@property (nonatomic, copy) NSString *errorMessage;
-@property (nonatomic, assign) double progress;
-@property (nonatomic, assign) BOOL success;
-@property (nonatomic, assign) BOOL imported;
-@property (nonatomic, assign) BOOL timelineInserted;
-@property (nonatomic, assign) BOOL transcoded;
-@property (nonatomic, assign) BOOL cancelled;
-@property (nonatomic, strong) NSDate *createdAt;
-@property (nonatomic, strong) NSDate *updatedAt;
-@property (nonatomic, strong) NSTask *resolverTask;
-@property (nonatomic, strong) NSURLSessionDownloadTask *downloadTask;
-@property (nonatomic, strong) AVAssetExportSession *exportSession;
+@property (copy) NSString *jobID;
+@property (copy) NSString *sourceURL;
+@property (copy) NSString *sourceType;
+@property (copy) NSString *state;
+@property (copy) NSString *message;
+@property (copy) NSString *mode;
+@property (copy) NSString *targetEvent;
+@property (copy) NSString *titleOverride;
+@property (copy) NSString *clipName;
+@property (copy) NSString *downloadPath;
+@property (copy) NSString *normalizedPath;
+@property (copy) NSString *errorMessage;
+@property (assign) double progress;
+@property (assign) BOOL success;
+@property (assign) BOOL imported;
+@property (assign) BOOL timelineInserted;
+@property (assign) BOOL transcoded;
+@property (assign) BOOL cancelled;
+@property (strong) NSDate *createdAt;
+@property (strong) NSDate *updatedAt;
+@property (strong) NSTask *resolverTask;
+@property (strong) NSURLSessionDownloadTask *downloadTask;
+@property (strong) AVAssetExportSession *exportSession;
 @property (nonatomic) dispatch_semaphore_t completionSemaphore;
+@property (strong) dispatch_queue_t stateQueue;
 - (NSDictionary *)snapshot;
 - (BOOL)isFinished;
 @end
@@ -431,7 +467,7 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
     SpliceKit_log(@"[URLImport] Starting %@ resolve for %@", provider ?: @"provider", url.absoluteString ?: @"");
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        if (job.cancelled) {
+        if (SpliceKitURLImportJobIsCancelled(job.stateQueue, job)) {
             completion(nil, nil, nil, @"URL import was cancelled.");
             return;
         }
@@ -569,11 +605,11 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
                 }
             }
 
-            @synchronized (job) {
+            SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
                 job.resolverTask = nil;
-            }
+            });
 
-            if (job.cancelled) {
+            if (SpliceKitURLImportJobIsCancelled(job.stateQueue, job)) {
                 completion(nil, resolvedTitle, nil, @"URL import was cancelled.");
                 return;
             }
@@ -610,16 +646,16 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
         };
 
         NSError *launchError = nil;
-        @synchronized (job) {
+        SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
             job.resolverTask = task;
-        }
+        });
         SpliceKit_log(@"[URLImport] Launching %@ download task via yt-dlp for %@",
                       provider ?: @"provider", url.absoluteString ?: @"");
         if (![task launchAndReturnError:&launchError]) {
             readHandle.readabilityHandler = nil;
-            @synchronized (job) {
+            SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
                 job.resolverTask = nil;
-            }
+            });
             completion(nil,
                        resolvedTitle,
                        nil,
@@ -656,7 +692,8 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
 
 - (BOOL)canResolveURL:(NSURL *)url {
     NSString *host = [[url host] lowercaseString];
-    return [host containsString:@"youtube.com"] || [host containsString:@"youtu.be"];
+    return [host isEqualToString:@"youtu.be"] ||
+           SpliceKitURLImportHostMatchesAnyDomain(host, @[@"youtube.com", @"youtube-nocookie.com"]);
 }
 
 - (void)resolveURL:(NSURL *)url
@@ -674,7 +711,7 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
 
 - (BOOL)canResolveURL:(NSURL *)url {
     NSString *host = [[url host] lowercaseString];
-    return [host containsString:@"vimeo.com"];
+    return SpliceKitURLImportHostMatchesAnyDomain(host, @[@"vimeo.com"]);
 }
 
 - (void)resolveURL:(NSURL *)url
@@ -713,6 +750,8 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
     self = [super init];
     if (self) {
         _stateQueue = dispatch_queue_create("com.splicekit.urlimport.state", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_set_specific(_stateQueue, SpliceKitURLImportStateQueueSpecificKey,
+                                    (void *)SpliceKitURLImportStateQueueSpecificKey, NULL);
         _jobs = [NSMutableDictionary dictionary];
         _taskToJob = [NSMutableDictionary dictionary];
         _resolvers = @[
@@ -765,7 +804,7 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
             state:(NSString *)state
           message:(NSString *)message
          progress:(double)progress {
-    dispatch_async(self.stateQueue, ^{
+    SpliceKitURLImportPerformStateBlock(self.stateQueue, ^{
         NSString *safeState = SpliceKitURLImportDiagnosticString(state);
         NSString *safeMessage = SpliceKitURLImportDiagnosticString(message);
         if (safeState.length > 0) job.state = safeState;
@@ -780,7 +819,7 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
             state:(NSString *)state
           message:(NSString *)message
             error:(NSString *)errorMessage {
-    dispatch_async(self.stateQueue, ^{
+    SpliceKitURLImportPerformStateBlock(self.stateQueue, ^{
         job.success = success;
         NSString *safeState = SpliceKitURLImportDiagnosticString(state);
         NSString *safeMessage = SpliceKitURLImportDiagnosticString(message);
@@ -1250,7 +1289,7 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
             return;
         }
 
-        dispatch_async(self.stateQueue, ^{
+        SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
             job.timelineInserted = YES;
         });
         NSString *message = nil;
@@ -1272,7 +1311,7 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
 
     NSString *eventName = job.targetEvent.length > 0 ? job.targetEvent : [self currentTimelineEventName];
     if (eventName.length == 0) eventName = @"URL Imports";
-    dispatch_async(self.stateQueue, ^{
+    SpliceKitURLImportPerformStateBlock(self.stateQueue, ^{
         job.targetEvent = eventName;
     });
 
@@ -1291,7 +1330,7 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
         return;
     }
 
-    dispatch_async(self.stateQueue, ^{
+    SpliceKitURLImportPerformStateBlock(self.stateQueue, ^{
         job.imported = YES;
     });
 
@@ -1323,7 +1362,9 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
 
     BOOL requiresNormalization = [mediaInfo[@"requiresNormalization"] boolValue];
     if (!requiresNormalization) {
-        job.normalizedPath = sourcePath;
+        SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
+            job.normalizedPath = sourcePath;
+        });
         [self importJobIntoFinalCut:job mediaInfo:mediaInfo];
         return;
     }
@@ -1356,14 +1397,14 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
         : export.supportedFileTypes.firstObject;
     export.shouldOptimizeForNetworkUse = YES;
 
-    dispatch_async(self.stateQueue, ^{
+    SpliceKitURLImportPerformStateBlock(self.stateQueue, ^{
         job.exportSession = export;
     });
 
     [export exportAsynchronouslyWithCompletionHandler:^{
         switch (export.status) {
             case AVAssetExportSessionStatusCompleted: {
-                dispatch_async(self.stateQueue, ^{
+                SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
                     job.normalizedPath = outputPath;
                     job.transcoded = YES;
                     job.exportSession = nil;
@@ -1398,7 +1439,7 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
             message:@"Downloading media..."
            progress:0.05];
     NSURLSessionDownloadTask *task = [self.session downloadTaskWithURL:downloadURL];
-    dispatch_async(self.stateQueue, ^{
+    SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
         job.downloadTask = task;
         self.taskToJob[@(task.taskIdentifier)] = job.jobID;
     });
@@ -1425,16 +1466,19 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
     }
 
     SpliceKitURLImportJob *job = [[SpliceKitURLImportJob alloc] init];
-    job.jobID = [[NSUUID UUID] UUIDString];
-    job.sourceURL = urlString;
-    job.sourceType = [resolver sourceType];
-    job.mode = [self resolvedModeFromParams:params];
-    job.targetEvent = SpliceKitURLImportTrimmedString(params[@"target_event"]);
-    job.titleOverride = SpliceKitURLImportTrimmedString(params[@"title"]);
-    job.clipName = [self defaultClipNameForURL:url titleOverride:job.titleOverride];
-    job.progress = 0.01;
-    job.message = @"Resolving URL...";
-    job.state = SpliceKitURLImportStateResolving;
+    job.stateQueue = self.stateQueue;
+    SpliceKitURLImportPerformStateBlock(self.stateQueue, ^{
+        job.jobID = [[NSUUID UUID] UUIDString];
+        job.sourceURL = urlString;
+        job.sourceType = [resolver sourceType];
+        job.mode = [self resolvedModeFromParams:params];
+        job.targetEvent = SpliceKitURLImportTrimmedString(params[@"target_event"]);
+        job.titleOverride = SpliceKitURLImportTrimmedString(params[@"title"]);
+        job.clipName = [self defaultClipNameForURL:url titleOverride:job.titleOverride];
+        job.progress = 0.01;
+        job.message = @"Resolving URL...";
+        job.state = SpliceKitURLImportStateResolving;
+    });
 
     dispatch_sync(self.stateQueue, ^{
         self.jobs[job.jobID] = job;
@@ -1457,11 +1501,11 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
                             message:message
                            progress:progress];
                 }
-              completion:^(NSURL *downloadURL,
-                           NSString *resolvedTitle,
-                           NSString *localPath,
-                           NSString *errorMessage) {
-        if (job.cancelled) return;
+            completion:^(NSURL *downloadURL,
+                         NSString *resolvedTitle,
+                         NSString *localPath,
+                         NSString *errorMessage) {
+        if (SpliceKitURLImportJobIsCancelled(job.stateQueue, job)) return;
 
         if (errorMessage.length > 0 || (!downloadURL && localPath.length == 0)) {
             [self finishJob:job
@@ -1473,17 +1517,21 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
         }
 
         if (resolvedTitle.length > 0 && job.titleOverride.length == 0) {
-            job.clipName = SpliceKitURLImportSanitizeFilename(resolvedTitle);
+            SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
+                job.clipName = SpliceKitURLImportSanitizeFilename(resolvedTitle);
+            });
         }
 
         if (localPath.length > 0) {
-            job.downloadPath = localPath;
-            if (job.titleOverride.length == 0) {
-                NSString *downloadName = [[localPath lastPathComponent] stringByDeletingPathExtension];
-                if (downloadName.length > 0) {
-                    job.clipName = SpliceKitURLImportSanitizeFilename(downloadName);
+            SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
+                job.downloadPath = localPath;
+                if (job.titleOverride.length == 0) {
+                    NSString *downloadName = [[localPath lastPathComponent] stringByDeletingPathExtension];
+                    if (downloadName.length > 0) {
+                        job.clipName = SpliceKitURLImportSanitizeFilename(downloadName);
+                    }
                 }
-            }
+            });
             [self updateJob:job
                       state:SpliceKitURLImportStateNormalizing
                     message:@"Download complete. Inspecting media..."
@@ -1536,19 +1584,17 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
         }
 
         job.cancelled = YES;
-        @synchronized (job) {
-            if (job.resolverTask) {
-                [job.resolverTask terminate];
-                job.resolverTask = nil;
-            }
-            if (job.downloadTask) {
-                [job.downloadTask cancel];
-                job.downloadTask = nil;
-            }
-            if (job.exportSession) {
-                [job.exportSession cancelExport];
-                job.exportSession = nil;
-            }
+        if (job.resolverTask) {
+            [job.resolverTask terminate];
+            job.resolverTask = nil;
+        }
+        if (job.downloadTask) {
+            [job.downloadTask cancel];
+            job.downloadTask = nil;
+        }
+        if (job.exportSession) {
+            [job.exportSession cancelExport];
+            job.exportSession = nil;
         }
         if (![job isFinished]) {
             job.state = SpliceKitURLImportStateCancelled;
@@ -1593,7 +1639,7 @@ didFinishDownloadingToURL:(NSURL *)location {
         [self.taskToJob removeObjectForKey:@(downloadTask.taskIdentifier)];
         if (job) job.downloadTask = nil;
     });
-    if (!job || job.cancelled) return;
+    if (!job || SpliceKitURLImportJobIsCancelled(job.stateQueue, job)) return;
 
     NSString *filename = [self filenameForJob:job response:downloadTask.response];
     NSString *destinationPath = [self pathForFilename:filename directory:[self downloadsDirectory]];
@@ -1611,13 +1657,15 @@ didFinishDownloadingToURL:(NSURL *)location {
         return;
     }
 
-    job.downloadPath = destinationPath;
-    if (job.titleOverride.length == 0) {
-        NSString *downloadName = [[destinationPath lastPathComponent] stringByDeletingPathExtension];
-        if (downloadName.length > 0) {
-            job.clipName = SpliceKitURLImportSanitizeFilename(downloadName);
+    SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
+        job.downloadPath = destinationPath;
+        if (job.titleOverride.length == 0) {
+            NSString *downloadName = [[destinationPath lastPathComponent] stringByDeletingPathExtension];
+            if (downloadName.length > 0) {
+                job.clipName = SpliceKitURLImportSanitizeFilename(downloadName);
+            }
         }
-    }
+    });
 
     [self normalizeJob:job];
 }
@@ -1635,9 +1683,15 @@ didCompleteWithError:(NSError *)error {
         [self.taskToJob removeObjectForKey:@(task.taskIdentifier)];
         if (job) job.downloadTask = nil;
     });
-    if (!job || [job isFinished]) return;
+    __block BOOL finished = NO;
+    if (job) {
+        SpliceKitURLImportPerformStateBlock(job.stateQueue, ^{
+            finished = [job isFinished];
+        });
+    }
+    if (!job || finished) return;
 
-    NSString *state = (error.code == NSURLErrorCancelled || job.cancelled)
+    NSString *state = (error.code == NSURLErrorCancelled || SpliceKitURLImportJobIsCancelled(job.stateQueue, job))
         ? SpliceKitURLImportStateCancelled
         : SpliceKitURLImportStateFailed;
     NSString *message = [state isEqualToString:SpliceKitURLImportStateCancelled]

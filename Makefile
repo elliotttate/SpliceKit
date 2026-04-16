@@ -7,26 +7,8 @@ OBJC_FLAGS = -fobjc-arc -fmodules -fmodules-cache-path=$(abspath $(MODULE_CACHE_
 LINKER_FLAGS = -undefined dynamic_lookup -dynamiclib
 INSTALL_NAME = -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit
 
-SOURCES = Sources/SpliceKit.m \
-          Sources/SpliceKitDualTimeline.m \
-          Sources/SpliceKitDualTimelineDrag.m \
-          Sources/SpliceKitRuntime.m \
-          Sources/SpliceKitSwizzle.m \
-          Sources/SpliceKitServer.m \
-          Sources/SpliceKitURLImport.m \
-          Sources/SpliceKitLogPanel.m \
-          Sources/SpliceKitTranscriptPanel.m \
-          Sources/SpliceKitTranscriptGrep.m \
-          Sources/SpliceKitCaptionPanel.m \
-          Sources/SpliceKitCommandPalette.m \
-          Sources/SpliceKitDebugUI.m \
-          Sources/SpliceKitStructureBlocks.m \
-          Sources/SpliceKitSectionsBar.m \
-          Sources/SpliceKitLiveCam.m \
-          Sources/SpliceKitUprezzer.m \
-          Sources/SpliceKitLua.m \
-          Sources/SpliceKitLuaPanel.m \
-          Sources/SpliceKitPlugins.m
+SOURCES_FILE = Sources/SOURCES.txt
+SOURCES = $(addprefix Sources/,$(shell awk 'NF && $$0 !~ /^[[:space:]]*\#/ { print }' $(SOURCES_FILE)))
 
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)/SpliceKit
@@ -58,7 +40,7 @@ PARAKEET_PKG_DIR = patcher/SpliceKitPatcher.app/Contents/Resources/tools/parakee
 PARAKEET_RELEASE_BIN = $(PARAKEET_PKG_DIR)/.build/release/parakeet-transcriber
 PARAKEET_DEBUG_BIN = $(PARAKEET_PKG_DIR)/.build/debug/parakeet-transcriber
 
-.PHONY: all clean deploy launch tools url-import-tools install-hooks
+.PHONY: all clean deploy launch tools audio-bus-probe install-audio-bus-probe uninstall-audio-bus-probe url-import-tools install-hooks
 
 all: $(OUTPUT)
 
@@ -136,7 +118,7 @@ $(LUA_LIB): $(LUA_OBJS) | $(BUILD_DIR)
 	libtool -static -o $@ $^
 	@echo "Built: $(LUA_LIB)"
 
-$(OUTPUT): $(SOURCES) Sources/SpliceKit.h $(LUA_LIB) | $(BUILD_DIR)
+$(OUTPUT): $(SOURCES_FILE) $(SOURCES) Sources/SpliceKit.h $(LUA_LIB) | $(BUILD_DIR)
 	$(CC) $(ARCHS) $(MIN_VERSION) $(FRAMEWORKS) $(OBJC_FLAGS) $(LINKER_FLAGS) \
 		$(INSTALL_NAME) -I Sources -I $(LUA_DIR) \
 		$(SOURCES) $(LUA_LIB) -o $(OUTPUT)

@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		226FB5362F823A28004BCB44 /* Configuration.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = 22D74E232F8235FE00A9252B /* Configuration.xcconfig */; };
 		22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 22D74E1E2F81FBD900A9252B /* Credits.rtf */; };
 		BB0000000000000000000001 /* SpliceKitApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* SpliceKitApp.swift */; };
 		BB0000000000000000000002 /* PatcherModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000002 /* PatcherModel.swift */; };
@@ -37,7 +36,6 @@
 
 /* Begin PBXFileReference section */
 		22D74E1E2F81FBD900A9252B /* Credits.rtf */ = {isa = PBXFileReference; lastKnownFileType = text.rtf; path = Credits.rtf; sourceTree = "<group>"; };
-		22D74E232F8235FE00A9252B /* Configuration.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration.xcconfig; sourceTree = "<group>"; };
 		AA0000000000000000000001 /* SpliceKitApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpliceKitApp.swift; sourceTree = "<group>"; };
 		AA0000000000000000000002 /* PatcherModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatcherModel.swift; sourceTree = "<group>"; };
 		AA0000000000000000000003 /* WizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WizardView.swift; sourceTree = "<group>"; };
@@ -81,14 +79,6 @@
 			path = Code;
 			sourceTree = "<group>";
 		};
-		22D74E242F8235FE00A9252B /* Configuration */ = {
-			isa = PBXGroup;
-			children = (
-				22D74E232F8235FE00A9252B /* Configuration.xcconfig */,
-			);
-			path = Configuration;
-			sourceTree = "<group>";
-		};
 		CC0000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
@@ -101,7 +91,6 @@
 		CC0000000000000000000002 /* SpliceKit */ = {
 			isa = PBXGroup;
 			children = (
-				22D74E242F8235FE00A9252B /* Configuration */,
 				22D74E222F81FDCB00A9252B /* Code */,
 				CC0000000000000000000003 /* Models */,
 				CC0000000000000000000004 /* Views */,
@@ -196,7 +185,6 @@
 			files = (
 				BB0000000000000000000008 /* Assets.xcassets in Resources */,
 				22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */,
-				226FB5362F823A28004BCB44 /* Configuration.xcconfig in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -209,6 +197,8 @@
 			files = (
 			);
 			inputPaths = (
+				"$(PROJECT_DIR)/scripts/build_dylib.sh",
+				"$(PROJECT_DIR)/../Sources/SOURCES.txt",
 				"$(PROJECT_DIR)/../Sources/SpliceKit.m",
 				"$(PROJECT_DIR)/../Sources/SpliceKit.h",
 				"$(PROJECT_DIR)/../Sources/SpliceKitRuntime.m",
@@ -241,12 +231,16 @@
 			files = (
 			);
 			inputPaths = (
+				"$(PROJECT_DIR)/scripts/bundle_resources.sh",
+				"$(BUILT_PRODUCTS_DIR)/SpliceKit_prebuilt/silence-detector",
 				"$(BUILT_PRODUCTS_DIR)/SpliceKit_prebuilt/SpliceKit",
 				"$(PROJECT_DIR)/../mcp/server.py",
 			);
 			name = "Bundle SpliceKit Resources";
 			outputPaths = (
 				"$(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/Resources/SpliceKit",
+				"$(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/Resources/mcp/server.py",
+				"$(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/Resources/tools/silence-detector",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
@@ -388,7 +382,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3.1.7;
+				CURRENT_PROJECT_VERSION = 3.1.148;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "$(HARDCODED_DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -403,7 +397,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.0.0;
+				MARKETING_VERSION = 3.1.148;
 				PRODUCT_BUNDLE_IDENTIFIER = com.splicekit.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -419,7 +413,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3.1.7;
+				CURRENT_PROJECT_VERSION = 3.1.148;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "$(HARDCODED_DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -434,7 +428,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.0.0;
+				MARKETING_VERSION = 3.1.148;
 				PRODUCT_BUNDLE_IDENTIFIER = com.splicekit.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

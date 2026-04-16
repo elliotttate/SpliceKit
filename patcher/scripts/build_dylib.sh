@@ -15,8 +15,14 @@ else
     BUILD_OUT="$REPO_DIR/build/SpliceKit_prebuilt"
 fi
 CANONICAL_DYLIB_OUT="$REPO_DIR/build/SpliceKit"
+SOURCE_MANIFEST="$REPO_DIR/Sources/SOURCES.txt"
 
 mkdir -p "$BUILD_OUT"
+
+if [ ! -f "$SOURCE_MANIFEST" ]; then
+    echo "Missing source manifest: $SOURCE_MANIFEST" >&2
+    exit 1
+fi
 
 # Build Lua 5.4.7 static library
 LUA_DIR="$REPO_DIR/vendor/lua-5.4.7/src"
@@ -36,32 +42,14 @@ if [ -d "$LUA_DIR" ]; then
     echo "Built: $LUA_LIB"
 fi
 
-SOURCES=(
-    "$REPO_DIR/Sources/SpliceKit.m"
-    "$REPO_DIR/Sources/SpliceKitDualTimeline.m"
-    "$REPO_DIR/Sources/SpliceKitDualTimelineDrag.m"
-    "$REPO_DIR/Sources/SpliceKitRuntime.m"
-    "$REPO_DIR/Sources/SpliceKitSwizzle.m"
-    "$REPO_DIR/Sources/SpliceKitServer.m"
-    "$REPO_DIR/Sources/SpliceKitURLImport.m"
-    "$REPO_DIR/Sources/SpliceKitLogPanel.m"
-    "$REPO_DIR/Sources/SpliceKitTranscriptPanel.m"
-    "$REPO_DIR/Sources/SpliceKitTranscriptGrep.m"
-    "$REPO_DIR/Sources/SpliceKitCaptionPanel.m"
-    "$REPO_DIR/Sources/SpliceKitCommandPalette.m"
-    "$REPO_DIR/Sources/SpliceKitDebugUI.m"
-    "$REPO_DIR/Sources/SpliceKitStructureBlocks.m"
-    "$REPO_DIR/Sources/SpliceKitSectionsBar.m"
-    "$REPO_DIR/Sources/SpliceKitLiveCam.m"
-    "$REPO_DIR/Sources/SpliceKitUprezzer.m"
-    "$REPO_DIR/Sources/SpliceKitLua.m"
-    "$REPO_DIR/Sources/SpliceKitLuaPanel.m"
-    "$REPO_DIR/Sources/SpliceKitPlugins.m"
-)
+SOURCES=()
+while IFS= read -r source; do
+    SOURCES+=("$REPO_DIR/Sources/$source")
+done < <(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$SOURCE_MANIFEST")
 
-LUA_FLAGS=""
+LUA_FLAGS=()
 if [ -f "$LUA_LIB" ]; then
-    LUA_FLAGS="-I $LUA_DIR $LUA_LIB"
+    LUA_FLAGS=(-I "$LUA_DIR" "$LUA_LIB")
 fi
 
 echo "Building SpliceKit dylib..."
@@ -72,7 +60,7 @@ clang -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
     -undefined dynamic_lookup -dynamiclib \
     -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
     -I "$REPO_DIR/Sources" \
-    "${SOURCES[@]}" $LUA_FLAGS -o "$BUILD_OUT/SpliceKit"
+    "${SOURCES[@]}" "${LUA_FLAGS[@]}" -o "$BUILD_OUT/SpliceKit"
 
 # Keep the repo's canonical deploy target in sync when the script is run directly.
 # This prevents `make deploy` from accidentally shipping a stale dylib after a
@@ -86,7 +74,7 @@ fi
 echo "Building silence-detector..."
 SILENCE_SRC="$REPO_DIR/tools/silence-detector.swift"
 if [ -f "$SILENCE_SRC" ]; then
-    swiftc -O -suppress-warnings -o "$BUILD_OUT/silence-detector" "$SILENCE_SRC" 2>&1 || true
+    swiftc -O -suppress-warnings -o "$BUILD_OUT/silence-detector" "$SILENCE_SRC"
 fi
 
 echo "Build complete: $BUILD_OUT"

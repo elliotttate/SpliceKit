@@ -13336,14 +13336,71 @@ static NSDictionary *SpliceKit_browserPlacementSnapshot(id timelineModule, id cl
     return snapshot;
 }
 
+static double SpliceKit_browserPlacementSnapshotSeconds(NSDictionary *snapshot, NSString *key) {
+    NSDictionary *timeInfo = [snapshot[key] isKindOfClass:[NSDictionary class]] ? snapshot[key] : nil;
+    NSNumber *secondsNum = [timeInfo[@"seconds"] isKindOfClass:[NSNumber class]] ? timeInfo[@"seconds"] : nil;
+    if (!secondsNum) return -1.0;
+    return [secondsNum doubleValue];
+}
+
+static double SpliceKit_browserPlacementTargetSeconds(NSDictionary *snapshot) {
+    double seconds = SpliceKit_browserPlacementSnapshotSeconds(snapshot, @"currentSequenceTime");
+    if (seconds >= 0.0) return seconds;
+    seconds = SpliceKit_browserPlacementSnapshotSeconds(snapshot, @"playheadTime");
+    if (seconds >= 0.0) return seconds;
+    return SpliceKit_browserPlacementSnapshotSeconds(snapshot, @"committedPlayheadTime");
+}
+
+static NSSet *SpliceKit_browserTimelineItemHandleSet(NSArray *items) {
+    NSMutableSet *handles = [NSMutableSet set];
+    for (id item in items) {
+        NSString *handle = SpliceKit_storeHandle(item);
+        if (handle.length > 0) {
+            [handles addObject:handle];
+        }
+    }
+    return [handles copy];
+}
+
+static NSDictionary *SpliceKit_browserFindNewTimelineItemSummary(NSArray *items,
+                                                                  NSSet *beforeHandles,
+                                                                  id container,
+                                                                  NSString *expectedName,
+                                                                  double targetSeconds,
+                                                                  double tolerance) {
+    if (![items isKindOfClass:[NSArray class]]) return nil;
+
+    for (id item in items) {
+        NSString *handle = SpliceKit_storeHandle(item);
+        if (handle.length > 0 && [beforeHandles containsObject:handle]) {
+            continue;
+        }
+
+        NSDictionary *summary = SpliceKit_browserTimelineItemSummary(item, container);
+        NSString *itemName = summary[@"name"] ?: @"";
+        if (expectedName.length > 0 && ![itemName isEqualToString:expectedName]) {
+            continue;
+        }
+
+        if (targetSeconds >= 0.0) {
+            NSDictionary *startInfo = summary[@"startTime"];
+            NSNumber *startNum = [startInfo[@"seconds"] isKindOfClass:[NSNumber class]] ? startInfo[@"seconds"] : nil;
+            if (!startNum || fabs([startNum doubleValue] - targetSeconds) > tolerance) {
+                continue;
+            }
+        }
+
+        return summary;
+    }
+
+    return nil;
+}
+
 static BOOL SpliceKit_browserPrepareExplicitPasteboard(id clip,
                                                        id mediaRange,
                                                        NSString **outPasteboardName,
                                                        NSMutableDictionary *debugInfo,
                                                        NSString **outError) {
-    NSPasteboard *generalPB = [NSPasteboard generalPasteboard];
-    [generalPB clearContents];
-
     Class ffPasteboardClass = objc_getClass("FFPasteboard");
     if (!ffPasteboardClass) {
         if (outError) *outError = @"FFPasteboard class not found";
@@ -13401,8 +13458,17 @@ static NSDictionary *SpliceKit_browserInsertExplicitClipAtPlayhead(id timelineMo
                                                                    NSString *pasteboardName) {
     NSMutableDictionary *debugInfo = [NSMutableDictionary dictionary];
     debugInfo[@"primitive"] = @"explicit_paste_at_playhead";
-    debugInfo[@"before"] = SpliceKit_browserPlacementSnapshot(timelineModule, clip);
+    NSDictionary *before = SpliceKit_browserPlacementSnapshot(timelineModule, clip);
+    debugInfo[@"before"] = before;
     debugInfo[@"pasteboardName"] = pasteboardName ?: @"";
+    id sequence = SpliceKit_browserSequenceForTimeline(timelineModule);
+    id container = SpliceKit_browserPrimaryContainerForSequence(sequence);
+    NSArray *beforeItems = SpliceKit_browserContainedItems(sequence, container);
+    NSSet *beforeHandles = SpliceKit_browserTimelineItemHandleSet(beforeItems);
+    NSString *expectedName = SpliceKit_browserClipName(clip);
+    double targetSeconds = SpliceKit_browserPlacementTargetSeconds(before);
+    double frameSeconds = SpliceKit_transitionFrameDurationSeconds(timelineModule);
+    double tolerance = MAX(frameSeconds * 2.0, 0.05);
 
     SEL pasteSel = NSSelectorFromString(@"paste:");
     if (![timelineModule respondsToSelector:pasteSel]) {
@@ -13415,10 +13481,27 @@ static NSDictionary *SpliceKit_browserInsertExplicitClipAtPlayhead(id timelineMo
 
     NSDictionary *after = SpliceKit_browserPlacementSnapshot(timelineModule, clip);
     debugInfo[@"after"] = after;
+    sequence = SpliceKit_browserSequenceForTimeline(timelineModule);
+    container = SpliceKit_browserPrimaryContainerForSequence(sequence);
+    NSArray *afterItems = SpliceKit_browserContainedItems(sequence, container);
+    NSDictionary *match = SpliceKit_browserFindNewTimelineItemSummary(afterItems,
+                                                                      beforeHandles,
+                                                                      container,
+                                                                      expectedName,
+                                                                      targetSeconds,
+                                                                      tolerance);
+    BOOL verified = (match != nil);
+    debugInfo[@"verified"] = @(verified);
+    debugInfo[@"targetSeconds"] = @(targetSeconds);
+    debugInfo[@"verificationToleranceSeconds"] = @(tolerance);
+    if (match) debugInfo[@"matchedInsertedItem"] = match;
+    if (!verified) {
+        debugInfo[@"verificationReason"] = @"Could not confirm a new timeline item after paste.";
+    }
 
     return @{@"status": @"ok",
              @"primitive": @"explicit_paste_at_playhead",
-             @"placementVerified": @YES,
+             @"placementVerified": @(verified),
              @"placementDebug": debugInfo};
 }
 
@@ -13431,6 +13514,10 @@ static NSDictionary *SpliceKit_browserAppendExplicitClipToTimelineEnd(id timelin
 
     NSDictionary *before = SpliceKit_browserPlacementSnapshot(timelineModule, clip);
     debugInfo[@"before"] = before;
+    id sequence = SpliceKit_browserSequenceForTimeline(timelineModule);
+    id container = SpliceKit_browserPrimaryContainerForSequence(sequence);
+    NSArray *beforeItems = SpliceKit_browserContainedItems(sequence, container);
+    NSSet *beforeHandles = SpliceKit_browserTimelineItemHandleSet(beforeItems);
 
     NSDictionary *durationInfo = before[@"sequenceDuration"];
     NSDictionary *containerEndInfo = before[@"containerEndTime"];
@@ -13534,19 +13621,12 @@ static NSDictionary *SpliceKit_browserAppendExplicitClipToTimelineEnd(id timelin
         id sequence = SpliceKit_browserSequenceForTimeline(timelineModule);
         id container = SpliceKit_browserPrimaryContainerForSequence(sequence);
         NSArray *items = SpliceKit_browserContainedItems(sequence, container);
-        match = nil;
-
-        for (id item in items) {
-            NSString *itemName = SpliceKit_browserClipName(item);
-            if (expectedName.length == 0 || ![itemName isEqualToString:expectedName]) continue;
-
-            NSDictionary *summary = SpliceKit_browserTimelineItemSummary(item, container);
-            double startSeconds = [summary[@"startTime"][@"seconds"] doubleValue];
-            if (fabs(startSeconds - targetSeconds) <= tolerance) {
-                match = summary;
-                break;
-            }
-        }
+        match = SpliceKit_browserFindNewTimelineItemSummary(items,
+                                                            beforeHandles,
+                                                            container,
+                                                            expectedName,
+                                                            targetSeconds,
+                                                            tolerance);
     } while ((match == nil || !tailAdvanced) &&
              [verificationDeadline timeIntervalSinceNow] > 0.0);
 
@@ -13599,8 +13679,17 @@ static NSDictionary *SpliceKit_browserConnectExplicitClipAtPlayhead(id timelineM
                                                                     NSString *pasteboardName) {
     NSMutableDictionary *debugInfo = [NSMutableDictionary dictionary];
     debugInfo[@"primitive"] = @"explicit_paste_anchored";
-    debugInfo[@"before"] = SpliceKit_browserPlacementSnapshot(timelineModule, clip);
+    NSDictionary *before = SpliceKit_browserPlacementSnapshot(timelineModule, clip);
+    debugInfo[@"before"] = before;
     debugInfo[@"pasteboardName"] = pasteboardName ?: @"";
+    id sequence = SpliceKit_browserSequenceForTimeline(timelineModule);
+    id container = SpliceKit_browserPrimaryContainerForSequence(sequence);
+    NSArray *beforeItems = SpliceKit_browserContainedItems(sequence, container);
+    NSSet *beforeHandles = SpliceKit_browserTimelineItemHandleSet(beforeItems);
+    NSString *expectedName = SpliceKit_browserClipName(clip);
+    double targetSeconds = SpliceKit_browserPlacementTargetSeconds(before);
+    double frameSeconds = SpliceKit_transitionFrameDurationSeconds(timelineModule);
+    double tolerance = MAX(frameSeconds * 2.0, 0.05);
 
     SEL pasteAnchoredSel = NSSelectorFromString(@"pasteAnchored:");
     SEL anchorSel = NSSelectorFromString(@"anchorWithPasteboard:backtimed:trackType:");
@@ -13622,10 +13711,27 @@ static NSDictionary *SpliceKit_browserConnectExplicitClipAtPlayhead(id timelineM
 
     NSDictionary *after = SpliceKit_browserPlacementSnapshot(timelineModule, clip);
     debugInfo[@"after"] = after;
+    sequence = SpliceKit_browserSequenceForTimeline(timelineModule);
+    container = SpliceKit_browserPrimaryContainerForSequence(sequence);
+    NSArray *afterItems = SpliceKit_browserContainedItems(sequence, container);
+    NSDictionary *match = SpliceKit_browserFindNewTimelineItemSummary(afterItems,
+                                                                      beforeHandles,
+                                                                      container,
+                                                                      expectedName,
+                                                                      targetSeconds,
+                                                                      tolerance);
+    BOOL verified = (match != nil);
+    debugInfo[@"verified"] = @(verified);
+    debugInfo[@"targetSeconds"] = @(targetSeconds);
+    debugInfo[@"verificationToleranceSeconds"] = @(tolerance);
+    if (match) debugInfo[@"matchedInsertedItem"] = match;
+    if (!verified) {
+        debugInfo[@"verificationReason"] = @"Could not confirm a new anchored timeline item after paste.";
+    }
 
     return @{@"status": @"ok",
              @"primitive": @"explicit_paste_anchored",
-             @"placementVerified": @YES,
+             @"placementVerified": @(verified),
              @"placementDebug": debugInfo};
 }
 

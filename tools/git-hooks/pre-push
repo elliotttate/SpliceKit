@@ -8,6 +8,7 @@ if [[ -z "$repo_root" ]]; then
 fi
 cd "$repo_root"
 
+remote_name="${1:-}"
 home_path="${HOME%/}"
 home_name="$(basename "$HOME")"
 issues=()
@@ -54,6 +55,24 @@ scan_commit() {
   done < <(git diff-tree --no-commit-id --name-only -r --diff-filter=ACMR "$commit")
 }
 
+resolve_base_commit() {
+  local local_ref="$1"
+  local remote_ref="$2"
+  local remote_name="$3"
+  local remote_branch tracking_ref
+
+  if [[ -n "$remote_name" && "$remote_ref" == refs/heads/* ]]; then
+    remote_branch="${remote_ref#refs/heads/}"
+    tracking_ref="refs/remotes/$remote_name/$remote_branch"
+    if git cat-file -e "${tracking_ref}^{commit}" 2>/dev/null; then
+      git rev-parse "$tracking_ref"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 while read -r local_ref local_sha remote_ref remote_sha; do
   [[ "$local_ref" == refs/heads/* ]] || continue
   [[ "$local_sha" =~ ^0+$ ]] && continue
@@ -62,16 +81,17 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   if [[ ! "$remote_sha" =~ ^0+$ ]] && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
     base_commit="$remote_sha"
   else
-    upstream_ref="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
-    if [[ -n "$upstream_ref" ]] && git cat-file -e "${upstream_ref}^{commit}" 2>/dev/null; then
-      base_commit="$(git rev-parse "$upstream_ref")"
-    fi
+    base_commit="$(resolve_base_commit "$local_ref" "$remote_ref" "$remote_name" || true)"
   fi
 
   if [[ -n "$base_commit" ]]; then
     commits="$(git rev-list --reverse "$base_commit..$local_sha")"
   else
-    commits="$(git rev-list --reverse "$local_sha")"
+    if [[ -n "$remote_name" ]]; then
+      commits="$(git rev-list --reverse "$local_sha" --not --remotes="$remote_name")"
+    else
+      commits="$(git rev-list --reverse "$local_sha" --not --remotes)"
+    fi
   fi
 
   while IFS= read -r commit; do
