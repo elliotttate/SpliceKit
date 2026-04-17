@@ -2993,7 +2993,15 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameIntoPixelBuffer(
 
 SPLICEKIT_BRAW_EXTERN_C void SpliceKitBRAW_ReleaseClip(CFStringRef pathRef) {
     if (!pathRef) return;
-    SpliceKitBRAWHostReleaseEntry((__bridge NSString *)pathRef);
+    // Serialize release through the same work queue that runs decode jobs so a
+    // VT-thread release can't tear down the callback/clip while the work queue
+    // is mid-Unbind (std::mutex::lock() in Unbind() throws system_error when
+    // the mutex has been freed underneath it — that's the SIGABRT we hit
+    // previously on a Metal-pipeline decode).
+    NSString *path = (__bridge NSString *)pathRef;
+    dispatch_sync(SpliceKitBRAWWorkQueue(), ^{
+        SpliceKitBRAWHostReleaseEntry(path);
+    });
 }
 
 // Query audio track metadata for a clip. Returns YES if the clip has audio and
