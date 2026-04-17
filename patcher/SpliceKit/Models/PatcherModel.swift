@@ -533,6 +533,33 @@ class PatcherModel: ObservableObject {
             shell("cp '\(sentryConfig.path)' '\(fwDir)/Versions/A/Resources/SpliceKitSentryConfig.plist'")
         }
 
+        // Install BRAW plugin bundles into FCP.app/Contents/PlugIns/
+        // Without these, FCP has no registered VideoToolbox decoder or
+        // MediaToolbox format reader for .braw files — drag/drop and Import
+        // Media both silently fail. The bundles were staged into our app
+        // Resources by bundle_resources.sh.
+        let brawBundleSource = (Bundle.main.resourcePath ?? "") + "/BRAWPlugins"
+        if FileManager.default.fileExists(atPath: brawBundleSource) {
+            let moddedPlugIns = moddedApp + "/Contents/PlugIns"
+            let moddedCodecs = moddedPlugIns + "/Codecs"
+            let moddedFormatReaders = moddedPlugIns + "/FormatReaders"
+            shell("mkdir -p '\(moddedCodecs)' '\(moddedFormatReaders)'")
+            let decoderSource = brawBundleSource + "/Codecs/SpliceKitBRAWDecoder.bundle"
+            let readerSource = brawBundleSource + "/FormatReaders/SpliceKitBRAWImport.bundle"
+            if FileManager.default.fileExists(atPath: decoderSource) {
+                shell("rm -rf '\(moddedCodecs)/SpliceKitBRAWDecoder.bundle'")
+                shell("cp -R '\(decoderSource)' '\(moddedCodecs)/SpliceKitBRAWDecoder.bundle'")
+                await logAsync("Installed SpliceKitBRAWDecoder.bundle")
+            }
+            if FileManager.default.fileExists(atPath: readerSource) {
+                shell("rm -rf '\(moddedFormatReaders)/SpliceKitBRAWImport.bundle'")
+                shell("cp -R '\(readerSource)' '\(moddedFormatReaders)/SpliceKitBRAWImport.bundle'")
+                await logAsync("Installed SpliceKitBRAWImport.bundle")
+            }
+        } else {
+            await logAsync("WARNING: BRAW plugin bundles missing from patcher Resources")
+        }
+
         // Deploy tools
         let toolsDir = NSHomeDirectory() + "/Applications/SpliceKit/tools"
         shell("mkdir -p '\(toolsDir)'")
@@ -594,7 +621,21 @@ class PatcherModel: ObservableObject {
         shell("/usr/libexec/PlistBuddy -c \"Add :NSSpeechRecognitionUsageDescription string 'SpliceKit uses speech recognition to transcribe timeline audio for text-based editing.'\" '\(moddedApp)/Contents/Info.plist' 2>/dev/null")
 
         let quotedIdentity = shellQuote(signIdentity)
+        // Sign inside-out: BRAW plugin bundles (innermost) → framework → app.
+        let brawDecoderBundle = moddedApp + "/Contents/PlugIns/Codecs/SpliceKitBRAWDecoder.bundle"
+        let brawImportBundle = moddedApp + "/Contents/PlugIns/FormatReaders/SpliceKitBRAWImport.bundle"
+        let signBRAW: (String) -> String = { ident in
+            var parts: [String] = []
+            if FileManager.default.fileExists(atPath: brawDecoderBundle) {
+                parts.append("codesign --force --sign \(ident) '\(brawDecoderBundle)' 2>&1")
+            }
+            if FileManager.default.fileExists(atPath: brawImportBundle) {
+                parts.append("codesign --force --sign \(ident) '\(brawImportBundle)' 2>&1")
+            }
+            return parts.isEmpty ? "true" : parts.joined(separator: " && ")
+        }
         var signResult = shellResult("""
+            \(signBRAW(quotedIdentity)) && \
             codesign --force --sign \(quotedIdentity) '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
             codesign --force --sign \(quotedIdentity) --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
             """)
@@ -605,6 +646,7 @@ class PatcherModel: ObservableObject {
             }
             signIdentity = "-"
             signResult = shellResult("""
+                \(signBRAW("-")) && \
                 codesign --force --sign - '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
                 codesign --force --sign - --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
                 """)
@@ -748,6 +790,29 @@ class PatcherModel: ObservableObject {
             shell("cp '\(sentryConfig.path)' '\(fwDir)/Versions/A/Resources/SpliceKitSentryConfig.plist'")
         }
 
+        // Refresh BRAW plugin bundles on upgrade. Same reasoning as fresh
+        // install — FCP needs the VT decoder + FormatReader bundles in
+        // PlugIns/ for .braw files to be recognized and playable.
+        let brawBundleSource = (Bundle.main.resourcePath ?? "") + "/BRAWPlugins"
+        if FileManager.default.fileExists(atPath: brawBundleSource) {
+            let moddedPlugIns = moddedApp + "/Contents/PlugIns"
+            let moddedCodecs = moddedPlugIns + "/Codecs"
+            let moddedFormatReaders = moddedPlugIns + "/FormatReaders"
+            shell("mkdir -p '\(moddedCodecs)' '\(moddedFormatReaders)'")
+            let decoderSource = brawBundleSource + "/Codecs/SpliceKitBRAWDecoder.bundle"
+            let readerSource = brawBundleSource + "/FormatReaders/SpliceKitBRAWImport.bundle"
+            if FileManager.default.fileExists(atPath: decoderSource) {
+                shell("rm -rf '\(moddedCodecs)/SpliceKitBRAWDecoder.bundle'")
+                shell("cp -R '\(decoderSource)' '\(moddedCodecs)/SpliceKitBRAWDecoder.bundle'")
+                await logAsync("Updated SpliceKitBRAWDecoder.bundle")
+            }
+            if FileManager.default.fileExists(atPath: readerSource) {
+                shell("rm -rf '\(moddedFormatReaders)/SpliceKitBRAWImport.bundle'")
+                shell("cp -R '\(readerSource)' '\(moddedFormatReaders)/SpliceKitBRAWImport.bundle'")
+                await logAsync("Updated SpliceKitBRAWImport.bundle")
+            }
+        }
+
         // Deploy tools
         let toolsDir = NSHomeDirectory() + "/Applications/SpliceKit/tools"
         shell("mkdir -p '\(toolsDir)'")
@@ -786,7 +851,21 @@ class PatcherModel: ObservableObject {
         try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)
 
         let quotedIdentity = shellQuote(signIdentity)
+        // Sign inside-out: BRAW plugin bundles (innermost) → framework → app.
+        let brawDecoderBundle = moddedApp + "/Contents/PlugIns/Codecs/SpliceKitBRAWDecoder.bundle"
+        let brawImportBundle = moddedApp + "/Contents/PlugIns/FormatReaders/SpliceKitBRAWImport.bundle"
+        let signBRAW: (String) -> String = { ident in
+            var parts: [String] = []
+            if FileManager.default.fileExists(atPath: brawDecoderBundle) {
+                parts.append("codesign --force --sign \(ident) '\(brawDecoderBundle)' 2>&1")
+            }
+            if FileManager.default.fileExists(atPath: brawImportBundle) {
+                parts.append("codesign --force --sign \(ident) '\(brawImportBundle)' 2>&1")
+            }
+            return parts.isEmpty ? "true" : parts.joined(separator: " && ")
+        }
         var signResult = shellResult("""
+            \(signBRAW(quotedIdentity)) && \
             codesign --force --sign \(quotedIdentity) '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
             codesign --force --sign \(quotedIdentity) --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
             """)
@@ -797,6 +876,7 @@ class PatcherModel: ObservableObject {
             }
             signIdentity = "-"
             signResult = shellResult("""
+                \(signBRAW("-")) && \
                 codesign --force --sign - '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
                 codesign --force --sign - --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
                 """)
