@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>SpliceKit BRAW Format Reader</string>
+	<key>CFBundleExecutable</key>
+	<string>SpliceKitBRAWFormatReader</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.splicekit.mediaextension.formatreader.blackmagic-raw</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>SpliceKitBRAWFormatReader</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>EXAppExtensionAttributes</key>
+	<dict>
+		<key>ClassImplementationID</key>
+		<string>com.splicekit.mediaextension.formatreader.blackmagic-raw</string>
+		<key>EXExtensionPointIdentifier</key>
+		<string>com.apple.mediaextension.formatreader</string>
+		<key>EXPrincipalClass</key>
+		<string>BRAWMEFormatReaderFactory</string>
+		<key>MTFileNameExtensionArray</key>
+		<array>
+			<string>braw</string>
+			<string>BRAW</string>
+			<string>sidecar</string>
+		</array>
+		<key>MTUTTypeArray</key>
+		<array>
+			<string>com.blackmagic-design.braw-movie</string>
+			<string>com.blackmagic-design.braw-sidecar</string>
+		</array>
+		<key>ObjectName</key>
+		<string>SpliceKit BRAW support</string>
+	</dict>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.mediaextension-content</string>
+				<string>public.movie</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Blackmagic RAW Clip</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.blackmagic-design.braw-movie</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>braw</string>
+					<string>BRAW</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>video/x-braw</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.mediaextension-content</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Blackmagic RAW Sidecar</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.blackmagic-design.braw-sidecar</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>sidecar</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

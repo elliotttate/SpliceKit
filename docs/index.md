@@ -9,6 +9,7 @@ title: SpliceKit Documentation
 
 - [FxPlug 4 Plugin Development Guide](FXPLUG_PLUGIN_GUIDE.md) — Complete guide to building FxPlug video effects: XPC architecture, Metal rendering, parameters, plugin state, thread safety, color management, onscreen controls, testing, and notarization. Includes the LUT plugin as a reference implementation
 - [Workflow Extensions Guide](WORKFLOW_EXTENSIONS_GUIDE.md) — Build extensions that embed inside FCP's UI: ProExtensionHost framework, timeline proxy objects, observer pattern, data exchange, and comparison with SpliceKit
+- [Writing an MKV MediaExtension for Final Cut Pro](MKV_MEDIAEXTENSION_GUIDE.md) — Build a modern `MEFormatReader` for Matroska/WebM: plist and entitlements, `MEByteSource`, `METrackReader`, `MESampleCursor`, MKV indexing, sample delivery strategies, codec handoff, and FCP-specific behavior
 - [FCPXML Format Reference](FCPXML_FORMAT_REFERENCE.md) — Complete XML interchange format reference: document structure, story elements, assets, timing attributes, effects, transitions, markers, video formats, bundles, and bookmarks
 - [Content Exchange Guide](CONTENT_EXCHANGE_GUIDE.md) — Sending and receiving media between apps and FCP: FCPXML, drag-and-drop, Apple Events, growing files, custom share destinations, metadata, roles, and encoder extensions
 

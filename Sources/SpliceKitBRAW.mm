@@ -1,7 +1,10 @@
 #import "SpliceKit.h"
 
 #include <dlfcn.h>
+#include <sys/clonefile.h>
+#include <sys/stat.h>
 #import <MediaToolbox/MTProfessionalVideoWorkflow.h>
+#import <VideoToolbox/VideoToolbox.h>
 #import <VideoToolbox/VTProfessionalVideoWorkflow.h>
 #import <VideoToolbox/VTUtilities.h>
 #import <AVFoundation/AVFoundation.h>
@@ -654,6 +657,394 @@ static BOOL SpliceKitBRAWIsBRAWExtension(NSString *ext) {
     return [ext caseInsensitiveCompare:@"braw"] == NSOrderedSame;
 }
 
+// MARK: - fourcc shim (patch unsupported BRAW fourccs so AVFoundation exposes the video track)
+
+// AVFoundation's MOV parser only exposes a video track if it recognizes the
+// sample-description fourcc as a known video codec. braw/brxq/brst slip through;
+// brvn and other newer variants get silently dropped. To work around this we
+// APFS-clone the .braw file, patch just the 4-byte fourcc in the video stsd
+// from the unknown code to 'brxq', and hand AVAsset the clone. Decode still
+// runs against the original file via our host SDK path (the clone→original map
+// ensures the VT decoder resolves to the real path).
+
+static NSMutableDictionary<NSString *, NSString *> *SpliceKitBRAWShimCloneToOriginal() {
+    static NSMutableDictionary *map;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ map = [NSMutableDictionary dictionary]; });
+    return map;
+}
+
+static NSString *SpliceKitBRAWShimDirectory() {
+    static NSString *dir;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+        NSString *base = paths.firstObject ?: NSTemporaryDirectory();
+        dir = [[base stringByAppendingPathComponent:@"SpliceKitBRAWShims"] copy];
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+    });
+    return dir;
+}
+
+// Read a 32-bit BE value at (buf+off) with bounds check.
+static inline uint32_t SpliceKitBRAWReadU32BE(const uint8_t *buf, size_t len, size_t off) {
+    if (off + 4 > len) return 0;
+    return ((uint32_t)buf[off] << 24) | ((uint32_t)buf[off+1] << 16)
+         | ((uint32_t)buf[off+2] << 8)  | (uint32_t)buf[off+3];
+}
+
+// Walk moov and collect offsets (within the full buffer) of every trak atom
+// whose mdia/hdlr handler_type is 'meta'. Returns the list via out vec.
+// Used to strip metadata tracks by rewriting them to 'skip' (AVFoundation
+// ignores any atom whose fourcc it doesn't recognize).
+static void SpliceKitBRAWFindMetaTrakOffsets(const uint8_t *moovBuf, size_t moovLen, std::vector<size_t> &outOffsets) {
+    if (moovLen < 16) return;
+    size_t p = 8;
+    while (p + 8 <= moovLen) {
+        uint32_t atomSize = SpliceKitBRAWReadU32BE(moovBuf, moovLen, p);
+        if (atomSize < 8 || p + atomSize > moovLen) return;
+        if (moovBuf[p+4] == 't' && moovBuf[p+5] == 'r' && moovBuf[p+6] == 'a' && moovBuf[p+7] == 'k') {
+            size_t trakEnd = p + atomSize;
+            size_t tp = p + 8;
+            while (tp + 8 <= trakEnd) {
+                uint32_t tsz = SpliceKitBRAWReadU32BE(moovBuf, moovLen, tp);
+                if (tsz < 8 || tp + tsz > trakEnd) break;
+                if (moovBuf[tp+4] == 'm' && moovBuf[tp+5] == 'd' && moovBuf[tp+6] == 'i' && moovBuf[tp+7] == 'a') {
+                    size_t mp = tp + 8;
+                    size_t mdiaEnd = tp + tsz;
+                    while (mp + 8 <= mdiaEnd) {
+                        uint32_t msz = SpliceKitBRAWReadU32BE(moovBuf, moovLen, mp);
+                        if (msz < 8 || mp + msz > mdiaEnd) break;
+                        if (moovBuf[mp+4] == 'h' && moovBuf[mp+5] == 'd' && moovBuf[mp+6] == 'l' && moovBuf[mp+7] == 'r') {
+                            if (mp + 20 <= mdiaEnd &&
+                                moovBuf[mp+16] == 'm' && moovBuf[mp+17] == 'e' &&
+                                moovBuf[mp+18] == 't' && moovBuf[mp+19] == 'a') {
+                                outOffsets.push_back(p); // offset of trak fourcc header
+                            }
+                        }
+                        mp += msz;
+                    }
+                }
+                tp += tsz;
+            }
+        }
+        p += atomSize;
+    }
+}
+
+// Walk moov payload to find the offset (within the full buffer) of the 4-byte
+// fourcc field inside the FIRST video trak's stsd entry. Returns 0 on failure.
+static size_t SpliceKitBRAWFindVideoFourCCOffset(const uint8_t *moovBuf, size_t moovLen, uint32_t *outFourCC) {
+    // moov header: 8 bytes (size + 'moov')
+    if (moovLen < 16) return 0;
+    // iterate moov children
+    size_t p = 8; // skip moov size+type
+    while (p + 8 <= moovLen) {
+        uint32_t atomSize = SpliceKitBRAWReadU32BE(moovBuf, moovLen, p);
+        if (atomSize < 8 || p + atomSize > moovLen) return 0;
+        if (moovBuf[p+4] == 't' && moovBuf[p+5] == 'r' && moovBuf[p+6] == 'a' && moovBuf[p+7] == 'k') {
+            // Descend into trak → mdia → minf → stbl → stsd
+            // First, check mdia/hdlr for handler_type == 'vide'
+            size_t trakEnd = p + atomSize;
+            size_t tp = p + 8;
+            BOOL isVideo = NO;
+            size_t stsdFourCCOffset = 0;
+            while (tp + 8 <= trakEnd) {
+                uint32_t tsz = SpliceKitBRAWReadU32BE(moovBuf, moovLen, tp);
+                if (tsz < 8 || tp + tsz > trakEnd) break;
+                if (moovBuf[tp+4] == 'm' && moovBuf[tp+5] == 'd' && moovBuf[tp+6] == 'i' && moovBuf[tp+7] == 'a') {
+                    // iterate mdia children
+                    size_t mp = tp + 8;
+                    size_t mdiaEnd = tp + tsz;
+                    while (mp + 8 <= mdiaEnd) {
+                        uint32_t msz = SpliceKitBRAWReadU32BE(moovBuf, moovLen, mp);
+                        if (msz < 8 || mp + msz > mdiaEnd) break;
+                        if (moovBuf[mp+4] == 'h' && moovBuf[mp+5] == 'd' && moovBuf[mp+6] == 'l' && moovBuf[mp+7] == 'r') {
+                            // handler_type at offset 8(hdr)+4(vflags)+4(pre_defined) = +16
+                            if (mp + 20 <= mdiaEnd &&
+                                moovBuf[mp+16] == 'v' && moovBuf[mp+17] == 'i' &&
+                                moovBuf[mp+18] == 'd' && moovBuf[mp+19] == 'e') {
+                                isVideo = YES;
+                            }
+                        } else if (moovBuf[mp+4] == 'm' && moovBuf[mp+5] == 'i' && moovBuf[mp+6] == 'n' && moovBuf[mp+7] == 'f') {
+                            // iterate minf children to find stbl → stsd
+                            size_t np = mp + 8;
+                            size_t minfEnd = mp + msz;
+                            while (np + 8 <= minfEnd) {
+                                uint32_t nsz = SpliceKitBRAWReadU32BE(moovBuf, moovLen, np);
+                                if (nsz < 8 || np + nsz > minfEnd) break;
+                                if (moovBuf[np+4] == 's' && moovBuf[np+5] == 't' && moovBuf[np+6] == 'b' && moovBuf[np+7] == 'l') {
+                                    // iterate stbl children for stsd
+                                    size_t sp = np + 8;
+                                    size_t stblEnd = np + nsz;
+                                    while (sp + 8 <= stblEnd) {
+                                        uint32_t ssz = SpliceKitBRAWReadU32BE(moovBuf, moovLen, sp);
+                                        if (ssz < 8 || sp + ssz > stblEnd) break;
+                                        if (moovBuf[sp+4] == 's' && moovBuf[sp+5] == 't' && moovBuf[sp+6] == 's' && moovBuf[sp+7] == 'd') {
+                                            // stsd body: 4 version+flags, 4 entry_count, then entries.
+                                            // first entry: 4 size, 4 fourcc
+                                            size_t entryOff = sp + 8 + 4 + 4; // stsd_size+stsd_type + vflags + entry_count
+                                            if (entryOff + 8 <= sp + ssz) {
+                                                stsdFourCCOffset = entryOff + 4; // skip entry size → fourcc
+                                            }
+                                            break;
+                                        }
+                                        sp += ssz;
+                                    }
+                                }
+                                np += nsz;
+                            }
+                        }
+                        mp += msz;
+                    }
+                }
+                tp += tsz;
+            }
+            if (isVideo && stsdFourCCOffset != 0) {
+                if (outFourCC) {
+                    *outFourCC = SpliceKitBRAWReadU32BE(moovBuf, moovLen, stsdFourCCOffset);
+                }
+                return stsdFourCCOffset;
+            }
+        }
+        p += atomSize;
+    }
+    return 0;
+}
+
+// Read the full moov buffer from the .braw file; caller frees the buffer via
+// free(). On success sets *outBufLen and returns the absolute file offset of
+// the moov atom. Returns 0 on failure.
+static uint64_t SpliceKitBRAWReadMoovBuffer(NSString *path, uint8_t **outBuf, size_t *outBufLen) {
+    if (outBuf) *outBuf = nullptr;
+    if (outBufLen) *outBufLen = 0;
+
+    FILE *f = fopen(path.UTF8String, "rb");
+    if (!f) return 0;
+    uint64_t offset = 0;
+    uint64_t moovFileOffset = 0;
+    uint64_t moovSize = 0;
+    while (1) {
+        uint8_t hdr[16];
+        if (fread(hdr, 1, 8, f) != 8) break;
+        uint64_t atomSize = ((uint64_t)hdr[0] << 24) | ((uint64_t)hdr[1] << 16) | ((uint64_t)hdr[2] << 8) | hdr[3];
+        uint32_t fourcc = ((uint32_t)hdr[4] << 24) | ((uint32_t)hdr[5] << 16) | ((uint32_t)hdr[6] << 8) | hdr[7];
+        size_t hdrLen = 8;
+        if (atomSize == 1) {
+            if (fread(hdr + 8, 1, 8, f) != 8) break;
+            atomSize = ((uint64_t)hdr[8] << 56) | ((uint64_t)hdr[9] << 48) | ((uint64_t)hdr[10] << 40) | ((uint64_t)hdr[11] << 32)
+                     | ((uint64_t)hdr[12] << 24) | ((uint64_t)hdr[13] << 16) | ((uint64_t)hdr[14] << 8) | hdr[15];
+            hdrLen = 16;
+        }
+        if (atomSize < hdrLen) break;
+        if (fourcc == 'moov') {
+            moovFileOffset = offset;
+            moovSize = atomSize;
+            break;
+        }
+        if (fseeko(f, (off_t)(offset + atomSize), SEEK_SET) != 0) break;
+        offset += atomSize;
+    }
+    if (moovSize == 0 || moovSize > 32 * 1024 * 1024) { fclose(f); return 0; }
+
+    uint8_t *buf = (uint8_t *)malloc((size_t)moovSize);
+    if (!buf) { fclose(f); return 0; }
+    if (fseeko(f, (off_t)moovFileOffset, SEEK_SET) != 0 || fread(buf, 1, (size_t)moovSize, f) != moovSize) {
+        free(buf); fclose(f); return 0;
+    }
+    fclose(f);
+
+    *outBuf = buf;
+    *outBufLen = (size_t)moovSize;
+    return moovFileOffset;
+}
+
+// Open the .braw file, locate the moov atom, read it, find the fourcc offset.
+// Returns the absolute file offset of the video fourcc on success, else 0.
+// Populates outFourCC with the existing fourcc.
+static uint64_t SpliceKitBRAWFindFileFourCCOffset(NSString *path, uint32_t *outFourCC) {
+    if (outFourCC) *outFourCC = 0;
+    uint8_t *buf = nullptr;
+    size_t bufLen = 0;
+    uint64_t moovFileOffset = SpliceKitBRAWReadMoovBuffer(path, &buf, &bufLen);
+    if (!buf) return 0;
+    size_t relOff = SpliceKitBRAWFindVideoFourCCOffset(buf, bufLen, outFourCC);
+    free(buf);
+    if (relOff == 0) return 0;
+    return moovFileOffset + (uint64_t)relOff;
+}
+
+// Returns absolute file offsets of trak-atom FOURCC bytes for every 'meta'
+// handler track in the file's moov. Caller can rewrite these to 'skip' to
+// make AVFoundation ignore the track entirely.
+// outOffsets is populated with offsets pointing at the 4-byte 'trak' fourcc
+// field (i.e. the byte AFTER the size field).
+static void SpliceKitBRAWFindMetaTrakFileOffsets(NSString *path, std::vector<uint64_t> &outOffsets) {
+    uint8_t *buf = nullptr;
+    size_t bufLen = 0;
+    uint64_t moovFileOffset = SpliceKitBRAWReadMoovBuffer(path, &buf, &bufLen);
+    if (!buf) return;
+    std::vector<size_t> rel;
+    SpliceKitBRAWFindMetaTrakOffsets(buf, bufLen, rel);
+    for (size_t r : rel) {
+        // r is offset of the atom header (size field); fourcc lives at +4
+        outOffsets.push_back(moovFileOffset + (uint64_t)r + 4);
+    }
+    free(buf);
+}
+
+static BOOL SpliceKitBRAWIsAVFriendlyFourCC(uint32_t fourcc) {
+    // Empirically: braw, brxq, brst make it through AVFoundation's track filter.
+    // brvn and future variants get dropped — we rewrite those to brxq in a clone.
+    return fourcc == 'braw' || fourcc == 'brxq' || fourcc == 'brst';
+}
+
+// Ensure the shim file exists for `originalPath`. Returns the shim path, or
+// nil if shimming isn't needed (fourcc already friendly) or failed.
+// When a shim is created, records clone→original mapping in the shim registry.
+static NSString *SpliceKitBRAWEnsureFourCCShim(NSString *originalPath) {
+    if (originalPath.length == 0) return nil;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:originalPath]) return nil;
+
+    uint32_t fourcc = 0;
+    uint64_t fourccOffset = SpliceKitBRAWFindFileFourCCOffset(originalPath, &fourcc);
+    if (fourccOffset == 0 || fourcc == 0) {
+        return nil; // couldn't parse — let AVAsset try the real file
+    }
+    if (SpliceKitBRAWIsAVFriendlyFourCC(fourcc)) {
+        return nil; // AVFoundation already handles this fourcc → no shim needed
+    }
+
+    // Cache shim by (path, fourcc). Filename is deterministic from inode+mtime
+    // so stale shims don't accumulate.
+    NSError *err = nil;
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:originalPath error:&err];
+    if (!attrs) return nil;
+    NSNumber *size = attrs[NSFileSize];
+    NSDate *mtime = attrs[NSFileModificationDate];
+    NSString *ident = [NSString stringWithFormat:@"%@-%.0f-%llu",
+                       [[originalPath lastPathComponent] stringByDeletingPathExtension],
+                       mtime.timeIntervalSince1970, size.unsignedLongLongValue];
+    NSString *shimPath = [[SpliceKitBRAWShimDirectory() stringByAppendingPathComponent:ident] stringByAppendingPathExtension:@"braw"];
+
+    if (![[NSFileManager defaultManager] fileExistsAtPath:shimPath]) {
+        // APFS clone (COW): near-zero cost on same volume; falls back to copy
+        // otherwise. Use clonefile() directly so we can pass proper flags.
+        int rc = clonefile(originalPath.UTF8String, shimPath.UTF8String, 0);
+        if (rc != 0) {
+            NSError *copyErr = nil;
+            if (![[NSFileManager defaultManager] copyItemAtPath:originalPath toPath:shimPath error:&copyErr]) {
+                SpliceKitBRAWTrace([NSString stringWithFormat:@"[fourcc-shim] clonefile+copy failed for %@: %@", originalPath, copyErr.localizedDescription]);
+                return nil;
+            }
+        }
+        // Patch the stsd video entry to look like brxq's: fourcc → 'brxq',
+        // entry size → 110 (truncating extension atoms so AVFoundation doesn't
+        // choke on bfdn/vsrc/unknown atoms), and the fixed-layout fields at
+        // offsets 16..31 (version, revision, vendor, temporalQ, spatialQ) to
+        // known-good values. We preserve dimensions, hres/vres, data_size,
+        // frame_count, compressor_name, depth, color_table at offsets 32..85.
+        // This matches Clip.braw's entry exactly for the header, diverging
+        // only in media-specific fields that AVFoundation appears not to care
+        // about.
+        FILE *shim = fopen(shimPath.UTF8String, "r+b");
+        if (!shim) {
+            SpliceKitBRAWTrace([NSString stringWithFormat:@"[fourcc-shim] cannot reopen shim for patching: %@", shimPath]);
+            return nil;
+        }
+        // Overwrite the ENTIRE video stsd entry with Clip.braw's 110-byte entry
+        // (fourcc='brxq', known-good header + bver/ctrn extension atoms). This
+        // replaces 110 of the original 134 bytes; the remaining 24 bytes of the
+        // original entry become trailing junk after the entry boundary, which
+        // AVFoundation skips. We overwrite width/height with A001's real dims,
+        // and we stamp 8 bytes of per-file identity into the zero-filled
+        // compressor_name region so AVFoundation doesn't de-dup two different
+        // BRAW files into a single shared CMFormatDescription (if every file
+        // produced byte-identical stsd entries, AVFoundation would coalesce
+        // them into one FD and our path registry would alias multiple clips
+        // onto whichever was registered last — exactly what happened with two
+        // URSA Cine brvn clips showing each other's content).
+        static const uint8_t kClipBRXQStsdEntry[110] = {
+            0x00, 0x00, 0x00, 0x6e, 0x62, 0x72, 0x78, 0x71, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0xd9, 0x4d, 0x55, 0x22, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x18, 0x20, 0x0d, 0x90, 0x00, 0x48, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x0c, 0x62, 0x76, 0x65, 0x72, 0x00, 0x00,
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x63, 0x74, 0x72, 0x6e, 0x00, 0x00, 0x00, 0x01,
+        };
+        FILE *orig = fopen(originalPath.UTF8String, "rb");
+        uint8_t actualW[2] = {0}, actualH[2] = {0};
+        if (orig) {
+            fseeko(orig, (off_t)(fourccOffset - 4 + 32), SEEK_SET);
+            fread(actualW, 1, 2, orig);
+            fread(actualH, 1, 2, orig);
+            fclose(orig);
+        }
+
+        uint64_t entryStart = fourccOffset - 4;
+        if (fseeko(shim, (off_t)entryStart, SEEK_SET) != 0 ||
+            fwrite(kClipBRXQStsdEntry, 1, sizeof(kClipBRXQStsdEntry), shim) != sizeof(kClipBRXQStsdEntry)) {
+            fclose(shim);
+            return nil;
+        }
+        if (actualW[0] || actualW[1] || actualH[0] || actualH[1]) {
+            if (fseeko(shim, (off_t)(entryStart + 32), SEEK_SET) == 0) {
+                fwrite(actualW, 1, 2, shim);
+                fwrite(actualH, 1, 2, shim);
+            }
+        }
+        // Stamp a per-path 8-byte identifier into the compressor_name bytes
+        // (offset 50..57 of the entry — the first 8 bytes of the 32-byte
+        // Pascal-name field that's normally zero in Clip.braw's entry). Using
+        // the Apple NSString hash is fine: we just need distinct-bytes-per-path
+        // so AVFoundation doesn't coalesce FDs.
+        NSUInteger hash = originalPath.hash;
+        uint8_t identTag[8] = {
+            (uint8_t)(hash >> 56), (uint8_t)(hash >> 48),
+            (uint8_t)(hash >> 40), (uint8_t)(hash >> 32),
+            (uint8_t)(hash >> 24), (uint8_t)(hash >> 16),
+            (uint8_t)(hash >> 8),  (uint8_t)(hash),
+        };
+        if (fseeko(shim, (off_t)(entryStart + 50), SEEK_SET) == 0) {
+            fwrite(identTag, 1, sizeof(identTag), shim);
+        }
+
+        // 4) Hide metadata (mebx) traks — rewrite their trak fourcc to 'skip'
+        // so AVFoundation doesn't count them against the video-track filter.
+        // AVFoundation ignores atoms it doesn't recognize at the moov-child level.
+        std::vector<uint64_t> metaOffsets;
+        SpliceKitBRAWFindMetaTrakFileOffsets(originalPath, metaOffsets);
+        uint8_t skipFCC[4] = { 's', 'k', 'i', 'p' };
+        for (uint64_t metaOff : metaOffsets) {
+            if (fseeko(shim, (off_t)metaOff, SEEK_SET) != 0) continue;
+            if (fwrite(skipFCC, 1, 4, shim) != 4) continue;
+        }
+        if (!metaOffsets.empty()) {
+            SpliceKitBRAWTrace([NSString stringWithFormat:@"[fourcc-shim] stripped %lu meta trak(s) for %@",
+                                (unsigned long)metaOffsets.size(), originalPath]);
+        }
+        fclose(shim);
+        char oldFCC[5] = { (char)((fourcc>>24)&0xff), (char)((fourcc>>16)&0xff), (char)((fourcc>>8)&0xff), (char)(fourcc&0xff), 0 };
+        SpliceKitBRAWTrace([NSString stringWithFormat:@"[fourcc-shim] created %@ (patched '%s'→'brxq', entry=110, header @%llu) for %@",
+                            shimPath, oldFCC, fourccOffset, originalPath]);
+    }
+
+    SpliceKitBRAWShimCloneToOriginal()[shimPath] = originalPath;
+    return shimPath;
+}
+
+// Given a (possibly shim) path, return the original BRAW path the caller cares
+// about — either the path itself (if not shimmed) or the pre-shim original.
+static NSString *SpliceKitBRAWResolveOriginalPath(NSString *path) {
+    if (path.length == 0) return path;
+    NSString *original = SpliceKitBRAWShimCloneToOriginal()[path];
+    return original ?: path;
+}
+
 static IMP sSpliceKitBRAWOriginalUTTypeConformsToIMP = NULL;
 static IMP sSpliceKitBRAWOriginalAVURLAssetInitIMP = NULL;
 static IMP sSpliceKitBRAWOriginalAVURLAssetClassMethodIMP = NULL;
@@ -740,7 +1131,8 @@ static NSUInteger SpliceKitBRAWWalkAssetTracks(id asset, NSString *path) {
                 if (!fdRef) continue;
                 if (CMFormatDescriptionGetMediaType(fdRef) == kCMMediaType_Video) {
                     FourCharCode subType = CMFormatDescriptionGetMediaSubType(fdRef);
-                    if (subType == 'brxq' || subType == 'braw') {
+                    if (subType == 'brxq' || subType == 'braw' || subType == 'brst' ||
+                        subType == 'brvn' || subType == 'brs2' || subType == 'brxh') {
                         SpliceKitBRAWRegisterFormatDescriptionPath(fdRef, path);
                         registered++;
                     }
@@ -784,66 +1176,108 @@ static void SpliceKitBRAWRegisterAssetTracks(id asset, NSString *path) {
     }
 }
 
+// Inject AVURLAssetOverrideMIMETypeKey=video/quicktime so AVFoundation parses
+// .braw as QuickTime. This works for brxq/brst; brvn and unknown variants are
+// silently dropped by AVFoundation's video track filter. Disable with
+// SPLICEKIT_BRAW_MIME_OFF=1 in the environment for debugging.
+static BOOL SpliceKitBRAWMIMEOverrideEnabled() {
+    static BOOL value;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *off = getenv("SPLICEKIT_BRAW_MIME_OFF");
+        value = (off && (off[0] == '1' || off[0] == 'y' || off[0] == 'Y')) ? NO : YES;
+    });
+    return value;
+}
+
+// Redirect to a fourcc-shim URL if the real file's stsd fourcc is one
+// AVFoundation won't accept. Also returns the path we should register FDs
+// against — always the original.
+static NSURL *SpliceKitBRAWMaybeRewriteBRAWURL(NSURL *url, NSString **outOriginalPath) {
+    *outOriginalPath = url.path;
+    NSString *shim = SpliceKitBRAWEnsureFourCCShim(url.path);
+    if (!shim) return url;
+    NSURL *shimURL = [NSURL fileURLWithPath:shim];
+    SpliceKitBRAWTrace([NSString stringWithFormat:@"[av-hook] redirecting %@ -> shim %@", url.path, shim]);
+    return shimURL;
+}
+
 static id SpliceKitBRAWAVURLAssetInitOverride(id self, SEL _cmd, NSURL *url, NSDictionary *options) {
     NSDictionary *effectiveOptions = options;
+    NSURL *effectiveURL = url;
+    NSString *registrationPath = url.path;
     BOOL isBRAW = NO;
     @try {
         if ([url isKindOfClass:[NSURL class]] && url.isFileURL) {
             NSString *ext = url.pathExtension ?: @"";
             if (SpliceKitBRAWIsBRAWExtension(ext)) {
                 isBRAW = YES;
-                NSMutableDictionary *modified = options ? [options mutableCopy] : [NSMutableDictionary dictionary];
-                if (!modified[AVURLAssetOverrideMIMETypeKey]) {
-                    modified[AVURLAssetOverrideMIMETypeKey] = @"video/quicktime";
-                    SpliceKitBRAWTrace([NSString stringWithFormat:@"[av-hook] initWithURL:options: injecting MIME override for %@", url.path]);
+                if (SpliceKitBRAWMIMEOverrideEnabled()) {
+                    NSMutableDictionary *modified = options ? [options mutableCopy] : [NSMutableDictionary dictionary];
+                    if (!modified[AVURLAssetOverrideMIMETypeKey]) {
+                        modified[AVURLAssetOverrideMIMETypeKey] = @"video/quicktime";
+                        SpliceKitBRAWTrace([NSString stringWithFormat:@"[av-hook] initWithURL:options: injecting MIME override for %@", url.path]);
+                    }
+                    effectiveOptions = modified;
+                    effectiveURL = SpliceKitBRAWMaybeRewriteBRAWURL(url, &registrationPath);
+                } else {
+                    SpliceKitBRAWTrace([NSString stringWithFormat:@"[av-hook] initWithURL:options: saw .braw, letting AVAsset fail for %@", url.path]);
                 }
-                effectiveOptions = modified;
             }
         }
     } @catch (NSException *exception) {
         effectiveOptions = options;
+        effectiveURL = url;
     }
 
     id result = nil;
     if (sSpliceKitBRAWOriginalAVURLAssetInitIMP) {
-        result = ((id (*)(id, SEL, NSURL *, NSDictionary *))sSpliceKitBRAWOriginalAVURLAssetInitIMP)(self, _cmd, url, effectiveOptions);
+        result = ((id (*)(id, SEL, NSURL *, NSDictionary *))sSpliceKitBRAWOriginalAVURLAssetInitIMP)(self, _cmd, effectiveURL, effectiveOptions);
     } else {
         result = self;
     }
 
-    if (isBRAW && result) {
-        SpliceKitBRAWRegisterAssetTracks(result, url.path);
+    if (isBRAW && result && SpliceKitBRAWMIMEOverrideEnabled()) {
+        // Register tracks against the ORIGINAL path, so the VT decoder's host
+        // lookup resolves to the real file (not the fourcc-patched shim).
+        SpliceKitBRAWRegisterAssetTracks(result, registrationPath);
     }
     return result;
 }
 
 static id SpliceKitBRAWAVURLAssetClassMethodOverride(id self, SEL _cmd, NSURL *url, NSDictionary *options) {
     NSDictionary *effectiveOptions = options;
+    NSURL *effectiveURL = url;
+    NSString *registrationPath = url.path;
     BOOL isBRAW = NO;
     @try {
         if ([url isKindOfClass:[NSURL class]] && url.isFileURL) {
             NSString *ext = url.pathExtension ?: @"";
             if (SpliceKitBRAWIsBRAWExtension(ext)) {
                 isBRAW = YES;
-                NSMutableDictionary *modified = options ? [options mutableCopy] : [NSMutableDictionary dictionary];
-                if (!modified[AVURLAssetOverrideMIMETypeKey]) {
-                    modified[AVURLAssetOverrideMIMETypeKey] = @"video/quicktime";
-                    SpliceKitBRAWTrace([NSString stringWithFormat:@"[av-hook] +URLAssetWithURL:options: injecting MIME override for %@", url.path]);
+                if (SpliceKitBRAWMIMEOverrideEnabled()) {
+                    NSMutableDictionary *modified = options ? [options mutableCopy] : [NSMutableDictionary dictionary];
+                    if (!modified[AVURLAssetOverrideMIMETypeKey]) {
+                        modified[AVURLAssetOverrideMIMETypeKey] = @"video/quicktime";
+                        SpliceKitBRAWTrace([NSString stringWithFormat:@"[av-hook] +URLAssetWithURL:options: injecting MIME override for %@", url.path]);
+                    }
+                    effectiveOptions = modified;
+                    effectiveURL = SpliceKitBRAWMaybeRewriteBRAWURL(url, &registrationPath);
                 }
-                effectiveOptions = modified;
             }
         }
     } @catch (NSException *exception) {
         effectiveOptions = options;
+        effectiveURL = url;
     }
 
     id result = nil;
     if (sSpliceKitBRAWOriginalAVURLAssetClassMethodIMP) {
-        result = ((id (*)(id, SEL, NSURL *, NSDictionary *))sSpliceKitBRAWOriginalAVURLAssetClassMethodIMP)(self, _cmd, url, effectiveOptions);
+        result = ((id (*)(id, SEL, NSURL *, NSDictionary *))sSpliceKitBRAWOriginalAVURLAssetClassMethodIMP)(self, _cmd, effectiveURL, effectiveOptions);
     }
 
-    if (isBRAW && result) {
-        SpliceKitBRAWRegisterAssetTracks(result, url.path);
+    if (isBRAW && result && SpliceKitBRAWMIMEOverrideEnabled()) {
+        SpliceKitBRAWRegisterAssetTracks(result, registrationPath);
     }
     return result;
 }
@@ -1726,6 +2160,95 @@ SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWProbe(NSDictionary *pa
     };
 }
 
+SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWAVProbe(NSDictionary *params) {
+    NSString *path = params[@"path"];
+    if (![path isKindOfClass:[NSString class]] || path.length == 0) {
+        return SpliceKitBRAWErrorResult(@"avProbe requires `path`");
+    }
+    NSURL *url = [NSURL fileURLWithPath:path];
+    NSDictionary *opts = @{ @"AVURLAssetOverrideMIMETypeKey": @"video/quicktime" };
+    AVURLAsset *asset = [[AVURLAsset alloc] initWithURL:url options:opts];
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"path"] = path;
+
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [asset loadValuesAsynchronouslyForKeys:@[@"tracks", @"duration", @"playable"] completionHandler:^{
+        dispatch_semaphore_signal(sem);
+    }];
+    (void)dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10LL * NSEC_PER_SEC));
+
+    NSError *err = nil;
+    AVKeyValueStatus status = [asset statusOfValueForKey:@"tracks" error:&err];
+    result[@"tracksStatus"] = @((int)status);
+    if (err) result[@"tracksError"] = err.localizedDescription ?: err.description;
+    result[@"trackCount"] = @(asset.tracks.count);
+    result[@"playable"] = @(asset.isPlayable);
+    result[@"readable"] = @(asset.isReadable);
+
+    NSMutableArray *tracks = [NSMutableArray array];
+    for (AVAssetTrack *track in asset.tracks) {
+        NSMutableDictionary *t = [NSMutableDictionary dictionary];
+        t[@"type"] = track.mediaType ?: @"?";
+        t[@"enabled"] = @(track.isEnabled);
+        t[@"playable"] = @(track.isPlayable);
+        t[@"decodable"] = @(track.isDecodable);
+        NSMutableArray *fds = [NSMutableArray array];
+        for (id fd in track.formatDescriptions) {
+            CMFormatDescriptionRef f = (__bridge CMFormatDescriptionRef)fd;
+            FourCharCode st = CMFormatDescriptionGetMediaSubType(f);
+            char c[5] = { (char)((st>>24)&0xff), (char)((st>>16)&0xff), (char)((st>>8)&0xff), (char)(st&0xff), 0 };
+            NSMutableDictionary *fdDict = [NSMutableDictionary dictionary];
+            fdDict[@"fourcc"] = [NSString stringWithUTF8String:c];
+            if (CMFormatDescriptionGetMediaType(f) == kCMMediaType_Video) {
+                CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(f);
+                fdDict[@"width"] = @(dims.width);
+                fdDict[@"height"] = @(dims.height);
+                fdDict[@"hasExtensions"] = @(CMFormatDescriptionGetExtensions(f) != NULL);
+            }
+            [fds addObject:fdDict];
+        }
+        t[@"formatDescriptions"] = fds;
+        [tracks addObject:t];
+    }
+    result[@"tracks"] = tracks;
+
+    AVAssetTrack *videoTrack = [[asset tracksWithMediaType:AVMediaTypeVideo] firstObject];
+    if (videoTrack) {
+        NSError *readerErr = nil;
+        AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&readerErr];
+        if (readerErr) result[@"readerInitError"] = readerErr.localizedDescription;
+        if (reader) {
+            NSDictionary *outputSettings = @{ (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA) };
+            AVAssetReaderTrackOutput *output = [[AVAssetReaderTrackOutput alloc] initWithTrack:videoTrack outputSettings:outputSettings];
+            if ([reader canAddOutput:output]) {
+                [reader addOutput:output];
+                BOOL started = [reader startReading];
+                result[@"readerStartReading"] = @(started);
+                if (started) {
+                    CMSampleBufferRef sample = [output copyNextSampleBuffer];
+                    if (sample) {
+                        CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sample);
+                        result[@"sampleValid"] = @(pb != NULL);
+                        if (pb) {
+                            result[@"sampleWidth"] = @(CVPixelBufferGetWidth(pb));
+                            result[@"sampleHeight"] = @(CVPixelBufferGetHeight(pb));
+                        }
+                        CFRelease(sample);
+                    } else {
+                        result[@"sampleValid"] = @NO;
+                        if (reader.error) result[@"readerError"] = reader.error.localizedDescription;
+                        result[@"readerStatus"] = @(reader.status);
+                    }
+                    [reader cancelReading];
+                }
+            } else {
+                result[@"canAddOutput"] = @NO;
+            }
+        }
+    }
+    return @{ @"status": @"ok", @"result": result };
+}
+
 SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWProviderProbe(NSDictionary *params) {
     SpliceKitBRAWTrace([NSString stringWithFormat:@"[providerProbe] begin params=%@", params ?: @{}]);
     NSMutableArray<NSDictionary *> *skipped = [NSMutableArray array];
@@ -2101,6 +2624,7 @@ struct SpliceKitBRAWHostClipEntry {
     IBlackmagicRaw *codec { nullptr };
     IBlackmagicRawConfiguration *config { nullptr };
     IBlackmagicRawClip *clip { nullptr };
+    IBlackmagicRawClipAudio *audioClip { nullptr };
     SpliceKitBRAWHostDecodeCallback *callback { nullptr };
 };
 
@@ -2197,6 +2721,11 @@ static SpliceKitBRAWHostClipEntry *SpliceKitBRAWHostAcquireEntry(NSString *path,
     entry->codec = codec;
     entry->config = config;
     entry->clip = clip;
+    // Audio is optional; query and cache the interface if present.
+    IBlackmagicRawClipAudio *audioClip = nullptr;
+    if (clip->QueryInterface(IID_IBlackmagicRawClipAudio, (LPVOID *)&audioClip) == S_OK && audioClip) {
+        entry->audioClip = audioClip;
+    }
     entry->callback = new SpliceKitBRAWHostDecodeCallback();
     codec->SetCallback(entry->callback);
 
@@ -2206,6 +2735,7 @@ static SpliceKitBRAWHostClipEntry *SpliceKitBRAWHostAcquireEntry(NSString *path,
     if (existing) {
         auto *other = static_cast<SpliceKitBRAWHostClipEntry *>([existing pointerValue]);
         // Tear down the entry we just built; use the existing one.
+        if (entry->audioClip) entry->audioClip->Release();
         if (entry->clip) entry->clip->Release();
         if (entry->config) entry->config->Release();
         if (entry->codec) entry->codec->Release();
@@ -2233,6 +2763,7 @@ static void SpliceKitBRAWHostReleaseEntry(NSString *path) {
     if (!entry) return;
     entry->callback->Unbind();
     if (entry->codec) entry->codec->FlushJobs();
+    if (entry->audioClip) entry->audioClip->Release();
     if (entry->clip) entry->clip->Release();
     if (entry->config) entry->config->Release();
     if (entry->codec) entry->codec->Release();
@@ -2465,6 +2996,85 @@ SPLICEKIT_BRAW_EXTERN_C void SpliceKitBRAW_ReleaseClip(CFStringRef pathRef) {
     SpliceKitBRAWHostReleaseEntry((__bridge NSString *)pathRef);
 }
 
+// Query audio track metadata for a clip. Returns YES if the clip has audio and
+// all fields were populated. The host's cached BRAW SDK clip is reused (the
+// audio clip interface is acquired once per-entry).
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_GetAudioMetadata(
+    CFStringRef pathRef,
+    uint32_t *outSampleRate,
+    uint32_t *outChannelCount,
+    uint32_t *outBitDepth,
+    uint64_t *outSampleCount)
+{
+    if (!pathRef) return NO;
+    if (outSampleRate) *outSampleRate = 0;
+    if (outChannelCount) *outChannelCount = 0;
+    if (outBitDepth) *outBitDepth = 0;
+    if (outSampleCount) *outSampleCount = 0;
+
+    NSString *path = (__bridge NSString *)pathRef;
+    __block BOOL result = NO;
+    __block uint32_t sr = 0, ch = 0, bd = 0;
+    __block uint64_t sc = 0;
+    dispatch_sync(SpliceKitBRAWWorkQueue(), ^{
+        std::string error;
+        SpliceKitBRAWHostClipEntry *entry = SpliceKitBRAWHostAcquireEntry(path, error);
+        if (!entry || !entry->audioClip) {
+            return;
+        }
+        HRESULT a = entry->audioClip->GetAudioSampleRate(&sr);
+        HRESULT b = entry->audioClip->GetAudioChannelCount(&ch);
+        HRESULT c = entry->audioClip->GetAudioBitDepth(&bd);
+        HRESULT d = entry->audioClip->GetAudioSampleCount(&sc);
+        result = (a == S_OK && b == S_OK && c == S_OK && d == S_OK && sr > 0 && ch > 0 && bd > 0 && sc > 0) ? YES : NO;
+    });
+    if (result) {
+        if (outSampleRate) *outSampleRate = sr;
+        if (outChannelCount) *outChannelCount = ch;
+        if (outBitDepth) *outBitDepth = bd;
+        if (outSampleCount) *outSampleCount = sc;
+    }
+    return result;
+}
+
+// Read a range of audio samples via the host's cached BRAW SDK clip. Caller
+// provides the destination buffer + capacity. Returns YES on success with the
+// actual counts via out params.
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_ReadAudioSamples(
+    CFStringRef pathRef,
+    uint64_t startSample,
+    uint32_t maxSampleCount,
+    void *buffer,
+    uint32_t bufferSizeBytes,
+    uint32_t *outSamplesRead,
+    uint32_t *outBytesRead)
+{
+    if (!pathRef || !buffer || bufferSizeBytes == 0 || maxSampleCount == 0) return NO;
+    if (outSamplesRead) *outSamplesRead = 0;
+    if (outBytesRead) *outBytesRead = 0;
+
+    NSString *path = (__bridge NSString *)pathRef;
+    __block BOOL result = NO;
+    __block uint32_t samplesRead = 0, bytesRead = 0;
+    dispatch_sync(SpliceKitBRAWWorkQueue(), ^{
+        std::string error;
+        SpliceKitBRAWHostClipEntry *entry = SpliceKitBRAWHostAcquireEntry(path, error);
+        if (!entry || !entry->audioClip) {
+            return;
+        }
+        HRESULT hr = entry->audioClip->GetAudioSamples((int64_t)startSample,
+                                                        buffer,
+                                                        bufferSizeBytes,
+                                                        maxSampleCount,
+                                                        &samplesRead,
+                                                        &bytesRead);
+        result = (hr == S_OK) ? YES : NO;
+    });
+    if (outSamplesRead) *outSamplesRead = samplesRead;
+    if (outBytesRead) *outBytesRead = bytesRead;
+    return result;
+}
+
 // Read clip metadata via the host's BRAW SDK state. Lets the decoder bundle
 // avoid touching the SDK directly in its StartDecoderSession path. Runs on
 // the BRAW work queue so the SDK sees a stable thread context.
@@ -2580,6 +3190,37 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameIntoPixelBuffer(
     (void)pathRef; (void)frameIndex; (void)scaleHint; (void)destPixelBuffer;
     if (outWidth) *outWidth = 0;
     if (outHeight) *outHeight = 0;
+    return NO;
+}
+
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_GetAudioMetadata(
+    CFStringRef pathRef,
+    uint32_t *outSampleRate,
+    uint32_t *outChannelCount,
+    uint32_t *outBitDepth,
+    uint64_t *outSampleCount)
+{
+    (void)pathRef;
+    if (outSampleRate) *outSampleRate = 0;
+    if (outChannelCount) *outChannelCount = 0;
+    if (outBitDepth) *outBitDepth = 0;
+    if (outSampleCount) *outSampleCount = 0;
+    return NO;
+}
+
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_ReadAudioSamples(
+    CFStringRef pathRef,
+    uint64_t startSample,
+    uint32_t maxSampleCount,
+    void *buffer,
+    uint32_t bufferSizeBytes,
+    uint32_t *outSamplesRead,
+    uint32_t *outBytesRead)
+{
+    (void)pathRef; (void)startSample; (void)maxSampleCount;
+    (void)buffer; (void)bufferSizeBytes;
+    if (outSamplesRead) *outSamplesRead = 0;
+    if (outBytesRead) *outBytesRead = 0;
     return NO;
 }
 

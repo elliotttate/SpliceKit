@@ -14,7 +14,9 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-#define SPLICEKIT_VERSION "2.6.0"
+#ifndef SPLICEKIT_VERSION
+#define SPLICEKIT_VERSION "3.1.148"
+#endif
 
 // We keep strong refs to ObjC objects the caller might need later.
 // Cap it so a forgetful client can't balloon our memory.

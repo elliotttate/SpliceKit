@@ -68,6 +68,7 @@ private func patcherLogWrite(_ text: String) {
         handle.write(line.data(using: .utf8) ?? Data())
         handle.closeFile()
     }
+    PatcherSentry.addBreadcrumb(text)
 }
 
 // MARK: - Model
@@ -296,6 +297,9 @@ class PatcherModel: ObservableObject {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
                     self.appendLog("ERROR: \(error.localizedDescription)")
+                    PatcherSentry.capture(error: error,
+                                          context: "patch.run",
+                                          extras: ["current_step": self.currentStep?.rawValue ?? "unknown"])
                 }
             }
             await MainActor.run {
@@ -339,6 +343,9 @@ class PatcherModel: ObservableObject {
         } catch {
             launchedFCPProcess = nil
             appendLog("Failed to launch Final Cut Pro: \(error.localizedDescription)")
+            PatcherSentry.capture(error: error,
+                                  context: "patcher.launch",
+                                  extras: ["binary": binary])
             return
         }
 
@@ -406,6 +413,9 @@ class PatcherModel: ObservableObject {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
                     self.appendLog("ERROR: \(error.localizedDescription)")
+                    PatcherSentry.capture(error: error,
+                                          context: "patch.update",
+                                          extras: ["current_step": self.currentStep?.rawValue ?? "unknown"])
                 }
             }
             await MainActor.run {
@@ -519,6 +529,9 @@ class PatcherModel: ObservableObject {
             </dict></plist>
             """
         try plist.write(toFile: fwDir + "/Versions/A/Resources/Info.plist", atomically: true, encoding: .utf8)
+        if let sentryConfig = Bundle.main.url(forResource: "SpliceKitSentryConfig", withExtension: "plist") {
+            shell("cp '\(sentryConfig.path)' '\(fwDir)/Versions/A/Resources/SpliceKitSentryConfig.plist'")
+        }
 
         // Deploy tools
         let toolsDir = NSHomeDirectory() + "/Applications/SpliceKit/tools"
@@ -731,6 +744,9 @@ class PatcherModel: ObservableObject {
             </dict></plist>
             """
         try plist.write(toFile: fwDir + "/Versions/A/Resources/Info.plist", atomically: true, encoding: .utf8)
+        if let sentryConfig = Bundle.main.url(forResource: "SpliceKitSentryConfig", withExtension: "plist") {
+            shell("cp '\(sentryConfig.path)' '\(fwDir)/Versions/A/Resources/SpliceKitSentryConfig.plist'")
+        }
 
         // Deploy tools
         let toolsDir = NSHomeDirectory() + "/Applications/SpliceKit/tools"
@@ -1038,6 +1054,20 @@ class PatcherModel: ObservableObject {
             ) {
                 appendLog(line)
             }
+            PatcherSentry.captureMessage(
+                "Final Cut Pro terminated shortly after launch",
+                level: .error,
+                context: "patcher.launch_termination",
+                extras: [
+                    "termination_reason": reason,
+                    "termination_status": process.terminationStatus,
+                    "runtime_seconds": runtime,
+                    "diagnostics": launchDiagnostics(
+                        launchTime: launchTime,
+                        spliceKitLogDateBeforeLaunch: spliceKitLogDateBeforeLaunch
+                    )
+                ]
+            )
         }
         if launchedFCPProcess?.processIdentifier == process.processIdentifier {
             launchedFCPProcess = nil
@@ -1070,10 +1100,16 @@ class PatcherModel: ObservableObject {
     }
 
     private nonisolated func setStepAsync(_ step: PatchStep) async {
+        PatcherSentry.addBreadcrumb(step.rawValue,
+                                    category: "patch.step",
+                                    data: ["step": step.rawValue])
         await MainActor.run { self.currentStep = step }
     }
 
     private nonisolated func completeStepAsync(_ step: PatchStep) async {
+        PatcherSentry.addBreadcrumb("Completed \(step.rawValue)",
+                                    category: "patch.step",
+                                    data: ["step": step.rawValue, "status": "completed"])
         await MainActor.run { _ = self.completedSteps.insert(step) }
     }
 }

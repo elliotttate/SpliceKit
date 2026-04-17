@@ -33,6 +33,7 @@ struct SpliceKitApp: App {
     @StateObject private var model = PatcherModel()
 
     init() {
+        PatcherSentry.start()
         let controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,

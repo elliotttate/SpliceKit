@@ -19,6 +19,8 @@
 		BB0000000000000000000009 /* ShellHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000C /* ShellHelpers.swift */; };
 		BB000000000000000000000A /* Sparkle.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000A /* Sparkle.framework */; };
 		BB000000000000000000000B /* Sparkle.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000A /* Sparkle.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		BB000000000000000000000C /* PatcherSentry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000D /* PatcherSentry.swift */; };
+		BB000000000000000000000D /* Sentry.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000E /* Sentry.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -49,6 +51,8 @@
 		AA0000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000000000000000000000A /* Sparkle.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Sparkle.framework; path = Frameworks/Sparkle.framework; sourceTree = "<group>"; };
 		AA000000000000000000000C /* ShellHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellHelpers.swift; sourceTree = "<group>"; };
+		AA000000000000000000000D /* PatcherSentry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatcherSentry.swift; sourceTree = "<group>"; };
+		AA000000000000000000000E /* Sentry.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Sentry.framework; path = Frameworks/Sentry.framework; sourceTree = "<group>"; };
 		FF0000000000000000000001 /* SpliceKit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpliceKit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -58,6 +62,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				BB000000000000000000000A /* Sparkle.framework in Frameworks */,
+				BB000000000000000000000D /* Sentry.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -95,6 +100,7 @@
 			children = (
 				CC0000000000000000000002 /* SpliceKit */,
 				AA000000000000000000000A /* Sparkle.framework */,
+				AA000000000000000000000E /* Sentry.framework */,
 				CC0000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -115,6 +121,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000000002 /* PatcherModel.swift */,
+				AA000000000000000000000D /* PatcherSentry.swift */,
 				AA000000000000000000000C /* ShellHelpers.swift */,
 			);
 			path = Models;
@@ -251,6 +258,7 @@
 				BB0000000000000000000006 /* StatusPanel.swift in Sources */,
 				BB0000000000000000000007 /* LogPanelView.swift in Sources */,
 				BB0000000000000000000009 /* ShellHelpers.swift in Sources */,
+				BB000000000000000000000C /* PatcherSentry.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -373,7 +381,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3.1.148;
+				CURRENT_PROJECT_VERSION = "$(SPLICEKIT_VERSION)";
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "$(HARDCODED_DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -388,7 +396,11 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.1.148;
+				MARKETING_VERSION = "$(SPLICEKIT_VERSION)";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.splicekit.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -404,7 +416,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3.1.148;
+				CURRENT_PROJECT_VERSION = "$(SPLICEKIT_VERSION)";
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "$(HARDCODED_DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -419,7 +431,11 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.1.148;
+				MARKETING_VERSION = "$(SPLICEKIT_VERSION)";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.splicekit.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

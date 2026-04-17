@@ -4,6 +4,7 @@
 #include <CoreMedia/CMFormatDescription.h>
 #include <CoreMedia/CMSampleBuffer.h>
 #include <cmath>
+#include <dlfcn.h>
 #include <unistd.h>
 
 using namespace SpliceKitBRAW;
@@ -14,6 +15,21 @@ __attribute__((constructor))
 static void BRAWFormatReaderBundleDidLoad()
 {
     Log(@"reader", @"bundle loaded pid=%d", getpid());
+}
+
+// Host bridge: the reader asks the host (SpliceKit dylib) to read audio samples
+// through its cached BRAW SDK clip. Keeps the SDK clip open across reads rather
+// than re-opening per sample buffer.
+typedef BOOL (*SKBRAWReadAudioFn)(CFStringRef, uint64_t, uint32_t, void *, uint32_t, uint32_t *, uint32_t *);
+
+static SKBRAWReadAudioFn ResolveHostReadAudioFn()
+{
+    static SKBRAWReadAudioFn fn = (SKBRAWReadAudioFn)-1;
+    if (fn == (SKBRAWReadAudioFn)-1) {
+        fn = (SKBRAWReadAudioFn)dlsym(RTLD_DEFAULT, "SpliceKitBRAW_ReadAudioSamples");
+        Log(@"reader", @"host ReadAudioSamples fn %@", fn ? @"available" : @"unavailable");
+    }
+    return fn;
 }
 
 #if defined(__x86_64__)
@@ -58,6 +74,7 @@ struct BRAWFormatReader {
     CFStringRef filePath { nullptr };
     ClipInfo info {};
     CMVideoFormatDescriptionRef formatDescription { nullptr };
+    CMAudioFormatDescriptionRef audioFormatDescription { nullptr };
     OSStatus status { noErr };
 
     BRAWFormatReader(CFAllocatorRef inAllocator, MTPluginByteSourceRef source)
@@ -91,12 +108,27 @@ struct BRAWFormatReader {
             return;
         }
 
+        if (info.audio.present) {
+            audioFormatDescription = CreateAudioFormatDescription(allocator, info.audio);
+            if (audioFormatDescription) {
+                Log(@"reader", @"audio track: %u Hz, %u ch, %u-bit, %llu samples",
+                    info.audio.sampleRate, info.audio.channelCount,
+                    info.audio.bitDepth, info.audio.sampleCount);
+            } else {
+                Log(@"reader", @"failed to build audio FD (%u Hz, %u ch, %u-bit) — skipping audio track",
+                    info.audio.sampleRate, info.audio.channelCount, info.audio.bitDepth);
+            }
+        }
+
         Log(@"reader", @"prepared %@ (%ux%u %.3f fps %llu frames)",
             CopyNSString(filePath), info.width, info.height, info.frameRate, info.frameCount);
     }
 
     ~BRAWFormatReader()
     {
+        if (audioFormatDescription) {
+            CFRelease(audioFormatDescription);
+        }
         if (formatDescription) {
             CFRelease(formatDescription);
         }
@@ -112,23 +144,51 @@ struct BRAWFormatReader {
     }
 };
 
+// Audio chunk size — 1024 samples per CMSampleBuffer is a common AVFoundation-friendly cadence.
+constexpr uint32_t kAudioSamplesPerChunk = 1024;
+
 struct BRAWTrackReader {
     CFAllocatorRef allocator { nullptr };
     MTPluginFormatReaderRef owner { nullptr };
-    CMVideoFormatDescriptionRef formatDescription { nullptr };
+    CMFormatDescriptionRef formatDescription { nullptr };
     ClipInfo info {};
     MTPersistentTrackID trackID { 1 };
+    CMMediaType mediaType { kCMMediaType_Video };
+    CFStringRef filePath { nullptr }; // retained; used for audio reads via host RPC
 
-    BRAWTrackReader(CFAllocatorRef inAllocator, MTPluginFormatReaderRef readerRef, const ClipInfo &clipInfo, CMVideoFormatDescriptionRef description)
+    // Precomputed for audio tracks; zero for video.
+    uint32_t audioChunkCount { 0 };
+    uint32_t audioBytesPerChunk { 0 };
+    CMTime audioChunkDuration { kCMTimeInvalid };
+
+    BRAWTrackReader(CFAllocatorRef inAllocator,
+                    MTPluginFormatReaderRef readerRef,
+                    const ClipInfo &clipInfo,
+                    CMFormatDescriptionRef description,
+                    CMMediaType type,
+                    CFStringRef path,
+                    MTPersistentTrackID ident)
         : allocator((CFAllocatorRef)CFRetain(inAllocator ?: kCFAllocatorDefault))
         , owner((MTPluginFormatReaderRef)CFRetain(readerRef))
-        , formatDescription((CMVideoFormatDescriptionRef)CFRetain(description))
+        , formatDescription((CMFormatDescriptionRef)CFRetain(description))
         , info(clipInfo)
+        , trackID(ident)
+        , mediaType(type)
+        , filePath(path ? (CFStringRef)CFRetain(path) : nullptr)
     {
+        if (type == kCMMediaType_Audio && info.audio.present && info.audio.sampleRate > 0) {
+            audioBytesPerChunk = kAudioSamplesPerChunk * (info.audio.bitDepth / 8) * info.audio.channelCount;
+            uint64_t total = info.audio.sampleCount;
+            audioChunkCount = (uint32_t)((total + kAudioSamplesPerChunk - 1) / kAudioSamplesPerChunk);
+            audioChunkDuration = CMTimeMake((int32_t)kAudioSamplesPerChunk, (int32_t)info.audio.sampleRate);
+        }
     }
 
     ~BRAWTrackReader()
     {
+        if (filePath) {
+            CFRelease(filePath);
+        }
         if (formatDescription) {
             CFRelease(formatDescription);
         }
@@ -240,6 +300,8 @@ static OSStatus TrackCopyProperty(CMBaseObjectRef object, CFStringRef key, CFAll
         return kCMBaseObjectError_ValueNotAvailable;
     }
 
+    bool isAudio = (track->mediaType == kCMMediaType_Audio);
+
     if (CFEqual(key, kMTPluginTrackReaderProperty_Enabled)) {
         *reinterpret_cast<CFBooleanRef *>(valueOut) = kCFBooleanTrue;
         return noErr;
@@ -256,6 +318,9 @@ static OSStatus TrackCopyProperty(CMBaseObjectRef object, CFStringRef key, CFAll
     }
 
     if (CFEqual(key, kMTPluginTrackReaderProperty_Dimensions)) {
+        if (isAudio) {
+            return kCMBaseObjectError_ValueNotAvailable;
+        }
         int32_t dimensions[2] = {
             (int32_t)track->info.width,
             (int32_t)track->info.height,
@@ -268,6 +333,9 @@ static OSStatus TrackCopyProperty(CMBaseObjectRef object, CFStringRef key, CFAll
     }
 
     if (CFEqual(key, kMTPluginTrackReaderProperty_NominalFrameRate)) {
+        if (isAudio) {
+            return kCMBaseObjectError_ValueNotAvailable;
+        }
         float rate = track->info.frameRate;
         *reinterpret_cast<CFNumberRef *>(valueOut) = CFNumberCreate(
             allocator ?: track->allocator,
@@ -277,7 +345,10 @@ static OSStatus TrackCopyProperty(CMBaseObjectRef object, CFStringRef key, CFAll
     }
 
     if (CFEqual(key, kMTPluginTrackReaderProperty_NaturalTimescale)) {
-        int32_t timescale = track->info.frameDuration.timescale > 0 ? track->info.frameDuration.timescale : 600000;
+        int32_t timescale = isAudio
+            ? (int32_t)track->info.audio.sampleRate
+            : (track->info.frameDuration.timescale > 0 ? track->info.frameDuration.timescale : 600000);
+        if (timescale <= 0) timescale = 48000;
         *reinterpret_cast<CFNumberRef *>(valueOut) = CFNumberCreate(
             allocator ?: track->allocator,
             kCFNumberSInt32Type,
@@ -286,14 +357,23 @@ static OSStatus TrackCopyProperty(CMBaseObjectRef object, CFStringRef key, CFAll
     }
 
     if (CFEqual(key, kMTPluginTrackReaderProperty_UneditedDuration)) {
+        CMTime duration;
+        if (isAudio) {
+            duration = CMTimeMake((int64_t)track->info.audio.sampleCount,
+                                  (int32_t)track->info.audio.sampleRate);
+        } else {
+            duration = track->info.duration;
+        }
         *reinterpret_cast<CFDictionaryRef *>(valueOut) = CMTimeCopyAsDictionary(
-            track->info.duration,
+            duration,
             allocator ?: track->allocator);
         return *reinterpret_cast<CFDictionaryRef *>(valueOut) ? noErr : kCMBaseObjectError_ValueNotAvailable;
     }
 
     if (CFEqual(key, kMTPluginTrackReaderProperty_TotalSampleDataLength)) {
-        int64_t totalLength = (int64_t)track->info.frameCount * (int64_t)sizeof(uint32_t);
+        int64_t totalLength = isAudio
+            ? (int64_t)track->info.audio.sampleCount * (int64_t)(track->info.audio.bitDepth / 8) * (int64_t)track->info.audio.channelCount
+            : (int64_t)track->info.frameCount * (int64_t)sizeof(uint32_t);
         *reinterpret_cast<CFNumberRef *>(valueOut) = CFNumberCreate(
             allocator ?: track->allocator,
             kCFNumberSInt64Type,
@@ -302,8 +382,12 @@ static OSStatus TrackCopyProperty(CMBaseObjectRef object, CFStringRef key, CFAll
     }
 
     if (CFEqual(key, kMTPluginTrackReaderProperty_EstimatedDataRate)) {
-        Float64 bytesPerFrame = sizeof(uint32_t);
-        Float64 dataRate = bytesPerFrame * 8.0 * (track->info.frameRate > 0.0 ? track->info.frameRate : 24.0);
+        Float64 dataRate;
+        if (isAudio) {
+            dataRate = (Float64)track->info.audio.sampleRate * 8.0 * (track->info.audio.bitDepth / 8) * track->info.audio.channelCount;
+        } else {
+            dataRate = (Float64)sizeof(uint32_t) * 8.0 * (track->info.frameRate > 0.0 ? track->info.frameRate : 24.0);
+        }
         *reinterpret_cast<CFNumberRef *>(valueOut) = CFNumberCreate(
             allocator ?: track->allocator,
             kCFNumberFloat64Type,
@@ -312,6 +396,9 @@ static OSStatus TrackCopyProperty(CMBaseObjectRef object, CFStringRef key, CFAll
     }
 
     if (CFEqual(key, kMTPluginTrackReaderProperty_PreferredTransform)) {
+        if (isAudio) {
+            return kCMBaseObjectError_ValueNotAvailable;
+        }
         CGAffineTransform identity = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         *reinterpret_cast<CFDataRef *>(valueOut) = CFDataCreate(
             allocator ?: track->allocator,
@@ -374,17 +461,58 @@ static const BRAWTrackReader *TrackForCursor(const BRAWSampleCursor *cursor)
     return cursor ? TrackFromRef(cursor->track) : nullptr;
 }
 
+// Number of cursor-addressable units in the track: video frames or audio chunks.
+static uint64_t TrackCursorUnitCount(const BRAWTrackReader *track)
+{
+    if (!track) return 0;
+    if (track->mediaType == kCMMediaType_Audio) {
+        return (uint64_t)track->audioChunkCount;
+    }
+    return track->info.frameCount;
+}
+
+static uint64_t ClampUnit(const BRAWTrackReader *track, uint64_t unit)
+{
+    uint64_t count = TrackCursorUnitCount(track);
+    if (count == 0) return 0;
+    return std::min(unit, count - 1);
+}
+
+// Back-compat alias for the video-specific helper used in timing lookups.
 static uint64_t ClampFrameIndex(const BRAWTrackReader *track, uint64_t frameIndex)
 {
-    if (!track || track->info.frameCount == 0) {
-        return 0;
+    return ClampUnit(track, frameIndex);
+}
+
+static CMTime PresentationTimeForUnit(const BRAWTrackReader *track, uint64_t unit)
+{
+    if (track->mediaType == kCMMediaType_Audio) {
+        // Audio: unit == chunk index → time = chunk * chunkDuration.
+        return CMTimeMake((int64_t)unit * (int64_t)kAudioSamplesPerChunk,
+                          (int32_t)track->info.audio.sampleRate);
     }
-    return std::min(frameIndex, track->info.frameCount - 1);
+    return CMTimeMultiply(track->info.frameDuration, (int32_t)unit);
 }
 
 static CMTime PresentationTimeForFrame(const BRAWTrackReader *track, uint64_t frameIndex)
 {
-    return CMTimeMultiply(track->info.frameDuration, (int32_t)frameIndex);
+    return PresentationTimeForUnit(track, frameIndex);
+}
+
+static CMTime UnitDuration(const BRAWTrackReader *track)
+{
+    if (track->mediaType == kCMMediaType_Audio) {
+        return track->audioChunkDuration;
+    }
+    return track->info.frameDuration;
+}
+
+static double UnitsPerSecond(const BRAWTrackReader *track)
+{
+    if (track->mediaType == kCMMediaType_Audio) {
+        return (double)track->info.audio.sampleRate / (double)kAudioSamplesPerChunk;
+    }
+    return (double)track->info.frameRate;
 }
 
 static OSStatus CursorCopyProperty(CMBaseObjectRef, CFStringRef, CFAllocatorRef, void *)
@@ -449,7 +577,14 @@ static const MTPluginSampleCursorVTable kCursorVTable = {
     nullptr,
 };
 
-static OSStatus CreateTrackReader(CFAllocatorRef allocator, MTPluginFormatReaderRef readerRef, const ClipInfo &info, CMVideoFormatDescriptionRef description, MTPluginTrackReaderRef *trackOut)
+static OSStatus CreateTrackReader(CFAllocatorRef allocator,
+                                  MTPluginFormatReaderRef readerRef,
+                                  const ClipInfo &info,
+                                  CMFormatDescriptionRef description,
+                                  CMMediaType mediaType,
+                                  CFStringRef filePath,
+                                  MTPersistentTrackID trackID,
+                                  MTPluginTrackReaderRef *trackOut)
 {
     CMBaseObjectRef object = nullptr;
     OSStatus status = CMDerivedObjectCreate(
@@ -461,7 +596,7 @@ static OSStatus CreateTrackReader(CFAllocatorRef allocator, MTPluginFormatReader
         return status ? status : kMTPluginFormatReaderError_AllocationFailure;
     }
 
-    new (Storage<BRAWTrackReader>(object)) BRAWTrackReader(allocator, readerRef, info, description);
+    new (Storage<BRAWTrackReader>(object)) BRAWTrackReader(allocator, readerRef, info, description, mediaType, filePath, trackID);
     *trackOut = reinterpret_cast<MTPluginTrackReaderRef>(object);
     return noErr;
 }
@@ -496,17 +631,35 @@ static OSStatus ReaderCopyTrackArray(MTPluginFormatReaderRef readerRef, CFArrayR
         return reader->status;
     }
 
-    Log(@"reader", @"copyTrackArray for %@", CopyNSString(reader->filePath));
+    Log(@"reader", @"copyTrackArray for %@ (audio=%@)",
+        CopyNSString(reader->filePath),
+        reader->audioFormatDescription ? @"yes" : @"no");
 
-    MTPluginTrackReaderRef track = nullptr;
-    OSStatus status = CreateTrackReader(reader->allocator, readerRef, reader->info, reader->formatDescription, &track);
-    if (status != noErr || !track) {
+    MTPluginTrackReaderRef videoTrack = nullptr;
+    OSStatus status = CreateTrackReader(reader->allocator, readerRef, reader->info,
+                                        reader->formatDescription, kCMMediaType_Video,
+                                        reader->filePath, 1, &videoTrack);
+    if (status != noErr || !videoTrack) {
         return status ? status : kMTPluginFormatReaderError_AllocationFailure;
     }
 
-    const void *values[1] = { track };
-    *trackArrayOut = CFArrayCreate(reader->allocator, values, 1, &kCFTypeArrayCallBacks);
-    CFRelease(track);
+    MTPluginTrackReaderRef audioTrack = nullptr;
+    if (reader->audioFormatDescription) {
+        status = CreateTrackReader(reader->allocator, readerRef, reader->info,
+                                   reader->audioFormatDescription, kCMMediaType_Audio,
+                                   reader->filePath, 2, &audioTrack);
+        if (status != noErr) {
+            Log(@"reader", @"failed to create audio track (status=0x%08x); continuing video-only",
+                (unsigned)status);
+            audioTrack = nullptr;
+        }
+    }
+
+    CFIndex trackCount = audioTrack ? 2 : 1;
+    const void *values[2] = { videoTrack, audioTrack };
+    *trackArrayOut = CFArrayCreate(reader->allocator, values, trackCount, &kCFTypeArrayCallBacks);
+    CFRelease(videoTrack);
+    if (audioTrack) CFRelease(audioTrack);
     return *trackArrayOut ? noErr : kMTPluginFormatReaderError_AllocationFailure;
 }
 
@@ -517,7 +670,7 @@ static OSStatus TrackGetTrackInfo(MTPluginTrackReaderRef trackRef, MTPersistentT
         return paramErr;
     }
     *trackIDOut = track->trackID;
-    *mediaTypeOut = kCMMediaType_Video;
+    *mediaTypeOut = track->mediaType;
     return noErr;
 }
 
@@ -534,10 +687,36 @@ static OSStatus TrackGetTrackEditWithIndex(MTPluginTrackReaderRef trackRef, CMIt
         return paramErr;
     }
 
+    CMTime duration;
+    if (track->mediaType == kCMMediaType_Audio) {
+        duration = CMTimeMake((int64_t)track->info.audio.sampleCount,
+                              (int32_t)track->info.audio.sampleRate);
+    } else {
+        duration = track->info.duration;
+    }
     mappingOut->source.start = kCMTimeZero;
-    mappingOut->source.duration = track->info.duration;
+    mappingOut->source.duration = duration;
     mappingOut->target = mappingOut->source;
     return noErr;
+}
+
+static uint64_t UnitForTime(const BRAWTrackReader *track, CMTime time)
+{
+    if (!track) return 0;
+    if (track->mediaType == kCMMediaType_Audio) {
+        if (!CMTIME_IS_NUMERIC(time) || CMTIME_COMPARE_INLINE(time, <=, kCMTimeZero)) {
+            return 0;
+        }
+        Float64 seconds = CMTimeGetSeconds(time);
+        if (!(seconds > 0.0)) return 0;
+        uint64_t sampleIdx = (uint64_t)floor(seconds * track->info.audio.sampleRate + 0.0001);
+        uint64_t chunkIdx = sampleIdx / kAudioSamplesPerChunk;
+        if (track->audioChunkCount && chunkIdx >= track->audioChunkCount) {
+            chunkIdx = track->audioChunkCount - 1;
+        }
+        return chunkIdx;
+    }
+    return FrameIndexForTime(time, track->info);
 }
 
 static OSStatus TrackCreateCursorAtPresentationTime(MTPluginTrackReaderRef trackRef, CMTime time, MTPluginSampleCursorRef *cursorOut)
@@ -549,8 +728,8 @@ static OSStatus TrackCreateCursorAtPresentationTime(MTPluginTrackReaderRef track
     if (!track) {
         return kMTPluginSampleCursorError_NoSamples;
     }
-    uint64_t frameIndex = FrameIndexForTime(time, track->info);
-    return CreateCursor(track->allocator, trackRef, frameIndex, cursorOut);
+    uint64_t unit = UnitForTime(track, time);
+    return CreateCursor(track->allocator, trackRef, unit, cursorOut);
 }
 
 static OSStatus TrackCreateCursorAtFirst(MTPluginTrackReaderRef trackRef, MTPluginSampleCursorRef *cursorOut)
@@ -568,8 +747,9 @@ static OSStatus TrackCreateCursorAtLast(MTPluginTrackReaderRef trackRef, MTPlugi
     if (!track || !cursorOut) {
         return paramErr;
     }
-    uint64_t lastFrame = track && track->info.frameCount ? track->info.frameCount - 1 : 0;
-    return CreateCursor(track->allocator, trackRef, lastFrame, cursorOut);
+    uint64_t total = TrackCursorUnitCount(track);
+    uint64_t last = total ? total - 1 : 0;
+    return CreateCursor(track->allocator, trackRef, last, cursorOut);
 }
 
 static OSStatus CursorCopy(MTPluginSampleCursorRef cursorRef, MTPluginSampleCursorRef *cursorOut)
@@ -587,12 +767,13 @@ static OSStatus StepCursor(BRAWSampleCursor *cursor, int64_t steps, int64_t *ste
     if (!track || !stepsTaken) {
         return paramErr;
     }
-    if (!track->info.frameCount) {
+    uint64_t total = TrackCursorUnitCount(track);
+    if (total == 0) {
         *stepsTaken = 0;
         return kMTPluginSampleCursorError_NoSamples;
     }
     int64_t target = (int64_t)cursor->frameIndex + steps;
-    target = std::max<int64_t>(0, std::min<int64_t>(target, (int64_t)track->info.frameCount - 1));
+    target = std::max<int64_t>(0, std::min<int64_t>(target, (int64_t)total - 1));
     *stepsTaken = target - (int64_t)cursor->frameIndex;
     cursor->frameIndex = (uint64_t)target;
     return noErr;
@@ -614,12 +795,13 @@ static OSStatus StepCursorByTime(BRAWSampleCursor *cursor, CMTime delta, Boolean
     if (!track || !wasPinned) {
         return paramErr;
     }
-    if (!track->info.frameCount || !CMTIME_IS_NUMERIC(track->info.frameDuration)) {
+    uint64_t total = TrackCursorUnitCount(track);
+    if (!total) {
         *wasPinned = true;
         return kMTPluginSampleCursorError_NoSamples;
     }
     Float64 seconds = CMTimeGetSeconds(delta);
-    int64_t steps = (int64_t)llround(seconds * track->info.frameRate);
+    int64_t steps = (int64_t)llround(seconds * UnitsPerSecond(track));
     int64_t taken = 0;
     OSStatus status = StepCursor(cursor, steps, &taken);
     *wasPinned = (taken != steps);
@@ -662,8 +844,9 @@ static OSStatus CursorGetSampleTiming(MTPluginSampleCursorRef cursorRef, CMSampl
     if (!cursor || !track || !timingOut) {
         return paramErr;
     }
-    timingOut->duration = track->info.frameDuration;
-    timingOut->presentationTimeStamp = PresentationTimeForFrame(track, ClampFrameIndex(track, cursor->frameIndex));
+    uint64_t unit = ClampUnit(track, cursor->frameIndex);
+    timingOut->duration = UnitDuration(track);
+    timingOut->presentationTimeStamp = PresentationTimeForUnit(track, unit);
     timingOut->decodeTimeStamp = timingOut->presentationTimeStamp;
     return noErr;
 }
@@ -695,15 +878,11 @@ static OSStatus CursorCopySampleLocation(MTPluginSampleCursorRef, MTPluginSample
     return kCMBaseObjectError_ValueNotAvailable;
 }
 
-static OSStatus CursorCreateSampleBuffer(MTPluginSampleCursorRef cursorRef, MTPluginSampleCursorRef, CMSampleBufferRef *sampleBufferOut)
+static OSStatus CursorCreateVideoSampleBuffer(BRAWSampleCursor *cursor,
+                                              const BRAWTrackReader *track,
+                                              CMSampleBufferRef *sampleBufferOut)
 {
-    BRAWSampleCursor *cursor = CursorFromRef(cursorRef);
-    const BRAWTrackReader *track = TrackForCursor(cursor);
-    if (!cursor || !track || !sampleBufferOut) {
-        return paramErr;
-    }
-
-    uint32_t frameIndex = (uint32_t)ClampFrameIndex(track, cursor->frameIndex);
+    uint32_t frameIndex = (uint32_t)ClampUnit(track, cursor->frameIndex);
     CMBlockBufferRef blockBuffer = nullptr;
     OSStatus status = CMBlockBufferCreateWithMemoryBlock(
         track->allocator,
@@ -727,8 +906,8 @@ static OSStatus CursorCreateSampleBuffer(MTPluginSampleCursorRef cursorRef, MTPl
 
     CMSampleTimingInfo timing = {
         .duration = track->info.frameDuration,
-        .presentationTimeStamp = PresentationTimeForFrame(track, frameIndex),
-        .decodeTimeStamp = PresentationTimeForFrame(track, frameIndex),
+        .presentationTimeStamp = PresentationTimeForUnit(track, frameIndex),
+        .decodeTimeStamp = PresentationTimeForUnit(track, frameIndex),
     };
     size_t sampleSize = sizeof(frameIndex);
     status = CMSampleBufferCreateReady(
@@ -745,6 +924,94 @@ static OSStatus CursorCreateSampleBuffer(MTPluginSampleCursorRef cursorRef, MTPl
     return status;
 }
 
+static OSStatus CursorCreateAudioSampleBuffer(BRAWSampleCursor *cursor,
+                                              const BRAWTrackReader *track,
+                                              CMSampleBufferRef *sampleBufferOut)
+{
+    if (!track->audioChunkCount || track->audioBytesPerChunk == 0) {
+        return kMTPluginSampleCursorError_NoSamples;
+    }
+
+    SKBRAWReadAudioFn readAudio = ResolveHostReadAudioFn();
+    if (!readAudio) {
+        Log(@"reader", @"audio read fn unavailable");
+        return kMTPluginFormatReaderError_ParsingFailure;
+    }
+
+    uint32_t chunkIndex = (uint32_t)ClampUnit(track, cursor->frameIndex);
+    uint64_t startSample = (uint64_t)chunkIndex * kAudioSamplesPerChunk;
+    uint64_t total = track->info.audio.sampleCount;
+    uint32_t requested = kAudioSamplesPerChunk;
+    if (startSample + requested > total) {
+        requested = (uint32_t)(total - startSample);
+    }
+    if (requested == 0) {
+        return kMTPluginSampleCursorError_NoSamples;
+    }
+    uint32_t bytesPerFrame = (track->info.audio.bitDepth / 8) * track->info.audio.channelCount;
+    uint32_t bufferBytes = requested * bytesPerFrame;
+
+    void *buffer = malloc(bufferBytes);
+    if (!buffer) {
+        return kMTPluginFormatReaderError_AllocationFailure;
+    }
+
+    uint32_t samplesRead = 0, bytesRead = 0;
+    BOOL ok = readAudio(track->filePath, startSample, requested, buffer, bufferBytes, &samplesRead, &bytesRead);
+    if (!ok || samplesRead == 0 || bytesRead == 0) {
+        free(buffer);
+        Log(@"reader", @"audio read failed (start=%llu requested=%u ok=%d samplesRead=%u bytesRead=%u)",
+            startSample, requested, (int)ok, samplesRead, bytesRead);
+        return kMTPluginSampleCursorError_NoSamples;
+    }
+
+    CMBlockBufferRef blockBuffer = nullptr;
+    OSStatus status = CMBlockBufferCreateWithMemoryBlock(
+        track->allocator,
+        buffer,
+        bytesRead,
+        kCFAllocatorMalloc,  // takes ownership of the malloc'd buffer
+        nullptr,
+        0,
+        bytesRead,
+        0,
+        &blockBuffer);
+    if (status != noErr || !blockBuffer) {
+        free(buffer);
+        return status ? status : kMTPluginFormatReaderError_AllocationFailure;
+    }
+
+    CMSampleTimingInfo timing = {
+        .duration = CMTimeMake((int32_t)samplesRead, (int32_t)track->info.audio.sampleRate),
+        .presentationTimeStamp = CMTimeMake((int64_t)startSample, (int32_t)track->info.audio.sampleRate),
+        .decodeTimeStamp = CMTimeMake((int64_t)startSample, (int32_t)track->info.audio.sampleRate),
+    };
+    status = CMSampleBufferCreateReady(
+        track->allocator,
+        blockBuffer,
+        track->formatDescription,
+        (CMItemCount)samplesRead,
+        1,
+        &timing,
+        0, nullptr,   // per-sample sizes omitted — all samples have equal size (ASBD mBytesPerFrame)
+        sampleBufferOut);
+    CFRelease(blockBuffer);
+    return status;
+}
+
+static OSStatus CursorCreateSampleBuffer(MTPluginSampleCursorRef cursorRef, MTPluginSampleCursorRef, CMSampleBufferRef *sampleBufferOut)
+{
+    BRAWSampleCursor *cursor = CursorFromRef(cursorRef);
+    const BRAWTrackReader *track = TrackForCursor(cursor);
+    if (!cursor || !track || !sampleBufferOut) {
+        return paramErr;
+    }
+    if (track->mediaType == kCMMediaType_Audio) {
+        return CursorCreateAudioSampleBuffer(cursor, track, sampleBufferOut);
+    }
+    return CursorCreateVideoSampleBuffer(cursor, track, sampleBufferOut);
+}
+
 static OSStatus CursorGetPlayableHorizon(MTPluginSampleCursorRef cursorRef, CMTime *horizonOut)
 {
     BRAWSampleCursor *cursor = CursorFromRef(cursorRef);
@@ -752,11 +1019,9 @@ static OSStatus CursorGetPlayableHorizon(MTPluginSampleCursorRef cursorRef, CMTi
     if (!cursor || !track || !horizonOut) {
         return paramErr;
     }
-    uint64_t remainingFrames = 0;
-    if (track->info.frameCount > cursor->frameIndex) {
-        remainingFrames = track->info.frameCount - cursor->frameIndex;
-    }
-    *horizonOut = CMTimeMultiply(track->info.frameDuration, (int32_t)remainingFrames);
+    uint64_t total = TrackCursorUnitCount(track);
+    uint64_t remaining = (total > cursor->frameIndex) ? (total - cursor->frameIndex) : 0;
+    *horizonOut = CMTimeMultiply(UnitDuration(track), (int32_t)remaining);
     return noErr;
 }
 

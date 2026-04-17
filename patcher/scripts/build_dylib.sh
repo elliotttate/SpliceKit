@@ -19,6 +19,9 @@ fi
 
 mkdir -p "$BUILD_OUT"
 
+# Ensure the vendored Sentry framework exists before Swift sources compile.
+bash "$REPO_DIR/Scripts/ensure_sentry_framework.sh"
+
 # Build everything via the Makefile (handles incremental builds)
 echo "Building SpliceKit via Makefile..."
 make -C "$REPO_DIR" all tools

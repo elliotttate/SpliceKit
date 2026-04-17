@@ -18,6 +18,14 @@ namespace SpliceKitBRAW {
 
 constexpr OSType kCodecType = 'braw';
 
+struct AudioClipInfo {
+    uint32_t sampleRate { 0 };
+    uint32_t channelCount { 0 };
+    uint32_t bitDepth { 0 };
+    uint64_t sampleCount { 0 };
+    bool present { false };
+};
+
 struct ClipInfo {
     uint32_t width { 0 };
     uint32_t height { 0 };
@@ -25,6 +33,7 @@ struct ClipInfo {
     uint64_t frameCount { 0 };
     CMTime frameDuration { kCMTimeInvalid };
     CMTime duration { kCMTimeInvalid };
+    AudioClipInfo audio {};
 };
 
 void Log(NSString *component, NSString *format, ...);
@@ -36,6 +45,7 @@ CFStringRef CopyStandardizedPathFromByteSource(MTPluginByteSourceRef byteSource)
 CFStringRef CopyPathFromFormatDescription(CMFormatDescriptionRef formatDescription);
 CFDictionaryRef CreatePathAtomDictionary(CFAllocatorRef allocator, CFStringRef filePath);
 CMVideoFormatDescriptionRef CreateVideoFormatDescription(CFAllocatorRef allocator, CFStringRef filePath, const ClipInfo &info);
+CMAudioFormatDescriptionRef CreateAudioFormatDescription(CFAllocatorRef allocator, const AudioClipInfo &audio);
 CMTime FrameDurationForRate(double frameRate);
 uint64_t FrameIndexForTime(CMTime time, const ClipInfo &info);
 

@@ -10,6 +10,8 @@
 
 HARDCODED_DEVELOPMENT_TEAM=RH4U5VJHM6
 
+#include "Version.xcconfig"
+
 //
 // This allows you to have an optional Configuration Settings File (xcconfig) downstream that overrides the above settings:
 //

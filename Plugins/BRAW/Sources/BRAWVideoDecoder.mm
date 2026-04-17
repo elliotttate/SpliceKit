@@ -975,11 +975,16 @@ static Boolean CanAcceptFormatDescription(VTVideoDecoderRef decoderRef, CMVideoF
         return false;
     }
     FourCharCode subType = CMFormatDescriptionGetMediaSubType(formatDescription);
-    if (subType != kCodecType && subType != 'brxq') {
+    if (subType != kCodecType && subType != 'brxq' && subType != 'brst' &&
+        subType != 'brvn' && subType != 'brs2' && subType != 'brxh') {
         return false;
     }
 
     BRAWVideoDecoder *decoder = DecoderFromRef(decoderRef);
+
+    CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(formatDescription);
+    char fcc[5] = { (char)((subType >> 24) & 0xff), (char)((subType >> 16) & 0xff),
+                    (char)((subType >> 8) & 0xff), (char)(subType & 0xff), 0 };
 
     // If VideoToolbox is probing whether it can keep using this decoder across
     // a session boundary, we MUST verify that the new format description still
@@ -994,11 +999,20 @@ static Boolean CanAcceptFormatDescription(VTVideoDecoderRef decoderRef, CMVideoF
 
     if (decoder && decoder->currentPath) {
         Boolean sameClip = resolved ? CFEqual(resolved, decoder->currentPath) : false;
+        Log(@"decoder", @"canAccept fcc=%s fd=%p dims=%dx%d resolved=%@ currentPath=%@ -> %s",
+            fcc, formatDescription, dims.width, dims.height,
+            resolved ? CopyNSString(resolved) : @"<nil>",
+            CopyNSString(decoder->currentPath),
+            sameClip ? "accept" : "reject");
         if (resolved) CFRelease(resolved);
         return sameClip;
     }
 
     Boolean haveAPath = resolved != nullptr;
+    Log(@"decoder", @"canAccept fcc=%s fd=%p dims=%dx%d resolved=%@ (fresh decoder) -> %s",
+        fcc, formatDescription, dims.width, dims.height,
+        resolved ? CopyNSString(resolved) : @"<nil>",
+        haveAPath ? "accept" : "reject");
     if (resolved) CFRelease(resolved);
     return haveAPath;
 }

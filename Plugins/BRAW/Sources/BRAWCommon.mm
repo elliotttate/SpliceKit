@@ -1,5 +1,6 @@
 #include "BRAWCommon.h"
 
+#include <AudioToolbox/AudioToolbox.h>
 #include <CoreMedia/CMFormatDescription.h>
 #include <VideoToolbox/VTDecompressionProperties.h>
 #include <dlfcn.h>
@@ -177,6 +178,37 @@ CMVideoFormatDescriptionRef CreateVideoFormatDescription(CFAllocatorRef allocato
     return formatDescription;
 }
 
+CMAudioFormatDescriptionRef CreateAudioFormatDescription(CFAllocatorRef allocator, const AudioClipInfo &audio)
+{
+    if (!audio.present || audio.sampleRate == 0 || audio.channelCount == 0 || audio.bitDepth == 0) {
+        return nullptr;
+    }
+    AudioStreamBasicDescription asbd = {};
+    asbd.mSampleRate = (Float64)audio.sampleRate;
+    asbd.mFormatID = kAudioFormatLinearPCM;
+    // BRAW SDK returns signed integer PCM interleaved packed.
+    asbd.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    asbd.mFramesPerPacket = 1;
+    asbd.mChannelsPerFrame = audio.channelCount;
+    asbd.mBitsPerChannel = audio.bitDepth;
+    asbd.mBytesPerFrame = (audio.bitDepth / 8) * audio.channelCount;
+    asbd.mBytesPerPacket = asbd.mBytesPerFrame;
+
+    CMAudioFormatDescriptionRef formatDescription = nullptr;
+    OSStatus status = CMAudioFormatDescriptionCreate(
+        allocator ?: kCFAllocatorDefault,
+        &asbd,
+        0, nullptr,
+        0, nullptr,
+        nullptr,
+        &formatDescription);
+    if (status != noErr) {
+        Log(@"common", @"CMAudioFormatDescriptionCreate failed %@", DescribeOSStatus(status));
+        return nullptr;
+    }
+    return formatDescription;
+}
+
 CMTime FrameDurationForRate(double frameRate)
 {
     if (!(frameRate > 0.0)) {
@@ -299,6 +331,26 @@ bool ReadClipInfo(CFStringRef path, ClipInfo &info, std::string &error)
     info.frameDuration = FrameDurationForRate(info.frameRate);
     info.duration = CMTimeMultiplyByFloat64(info.frameDuration, (Float64)info.frameCount);
 
+    // Audio (optional)
+    IBlackmagicRawClipAudio *audioClip = nullptr;
+    if (clip->QueryInterface(IID_IBlackmagicRawClipAudio, (LPVOID *)&audioClip) == S_OK && audioClip) {
+        uint32_t sampleRate = 0, channels = 0, bitDepth = 0;
+        uint64_t sampleCount = 0;
+        HRESULT srStatus = audioClip->GetAudioSampleRate(&sampleRate);
+        HRESULT chStatus = audioClip->GetAudioChannelCount(&channels);
+        HRESULT bdStatus = audioClip->GetAudioBitDepth(&bitDepth);
+        HRESULT scStatus = audioClip->GetAudioSampleCount(&sampleCount);
+        if (srStatus == S_OK && chStatus == S_OK && bdStatus == S_OK && scStatus == S_OK
+            && sampleRate > 0 && channels > 0 && bitDepth > 0 && sampleCount > 0) {
+            info.audio.sampleRate = sampleRate;
+            info.audio.channelCount = channels;
+            info.audio.bitDepth = bitDepth;
+            info.audio.sampleCount = sampleCount;
+            info.audio.present = true;
+        }
+        audioClip->Release();
+    }
+
     clip->Release();
     if (configuration) {
         configuration->Release();
@@ -312,6 +364,7 @@ bool ReadClipInfo(CFStringRef path, ClipInfo &info, std::string &error)
     }
     return true;
 }
+
 #endif
 
 } // namespace SpliceKitBRAW

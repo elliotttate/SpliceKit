@@ -13,6 +13,7 @@
 #import "SpliceKitPlugins.h"
 #import "SpliceKitCommandPalette.h"
 #import "SpliceKitDebugUI.h"
+#import "SpliceKitSentry.h"
 #import <AppKit/AppKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <Security/Security.h>
@@ -30,6 +31,8 @@ extern NSDictionary *SpliceKit_handleFCPXMLExport(NSDictionary *params);
 extern NSDictionary *SpliceKit_handleFCPXMLImport(NSDictionary *params);
 extern NSDictionary *SpliceKit_handleProjectOpen(NSDictionary *params);
 extern void SpliceKit_installMixerSkimHooks(void);
+extern void SpliceKit_installBRAWProviderShim(void);
+extern void SpliceKit_bootstrapBRAWAtLaunchPhase(NSString *phase);
 
 #pragma mark - Logging
 //
@@ -106,6 +109,8 @@ void SpliceKit_log(NSString *format, ...) {
             [sLogHandle synchronizeFile];
         });
     }
+
+    SpliceKit_sentryAddBreadcrumb(@"splicekit.log", message, nil);
 }
 
 #pragma mark - Startup Diagnostics
@@ -292,6 +297,7 @@ static CFAbsoluteTime sServerReadyTime = 0;
 
 void SpliceKit_markServerReady(void) {
     sServerReadyTime = CFAbsoluteTimeGetCurrent();
+    SpliceKit_sentrySetLaunchPhase(@"server-ready");
     double total = sServerReadyTime - sConstructorStart;
     double toLaunch = sDidLaunchTime - sConstructorStart;
     double toServer = sServerReadyTime - sDidLaunchTime;
@@ -2916,6 +2922,7 @@ static void SpliceKit_safeInstallHandler(int sig, siginfo_t *info, void *ctx) {
 }
 
 BOOL SpliceKit_safeInstall(const char *featureName, void (^block)(void)) {
+    NSString *feature = featureName ? [NSString stringWithUTF8String:featureName] : @"unknown";
     struct sigaction sa, prevSEGV, prevBUS;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = SpliceKit_safeInstallHandler;
@@ -2939,6 +2946,9 @@ BOOL SpliceKit_safeInstall(const char *featureName, void (^block)(void)) {
             sigaction(SIGBUS,  &prevBUS,  NULL);
             SpliceKit_log(@"[SafeInstall] %s threw %@: %@ — feature disabled",
                           featureName, e.name, e.reason);
+            SpliceKit_sentryCaptureException(e,
+                                             @"runtime.safe_install.exception",
+                                             @{@"feature": feature});
             return NO;
         }
         sSafeInstallActive = 0;
@@ -2958,6 +2968,10 @@ BOOL SpliceKit_safeInstall(const char *featureName, void (^block)(void)) {
         sigaction(SIGBUS,  &prevBUS,  NULL);
         SpliceKit_log(@"[SafeInstall] %s crashed (signal %d) — feature auto-disabled",
                       featureName, sig);
+        SpliceKit_sentryCaptureMessage([NSString stringWithFormat:@"Safe install crashed for %s (signal %d)",
+                                        featureName, sig],
+                                       @"runtime.safe_install.signal",
+                                       @{@"feature": feature, @"signal": @(sig)});
         return NO;
     }
 }
@@ -3087,12 +3101,15 @@ static void SpliceKit_scheduleSoundIsolationUnhideAttempt(NSUInteger attempt) {
 }
 
 static void SpliceKit_appDidLaunch(void) {
+    SpliceKit_sentrySetLaunchPhase(@"did-finish-launching");
     SpliceKit_log(@"================================================");
     SpliceKit_log(@"App launched. Starting control server...");
     SpliceKit_log(@"================================================");
 
     // Run compatibility check now that all frameworks are loaded
     SpliceKit_checkCompatibility();
+
+    SpliceKit_bootstrapBRAWAtLaunchPhase(@"did-launch");
 
     // Install focused editor routing before commands and menus start querying
     // activeEditorContainer, so the secondary timeline can participate in the
@@ -3717,6 +3734,7 @@ static void SpliceKit_handleSubscriptionValidation(void) {
 __attribute__((constructor))
 static void SpliceKit_init(void) {
     SpliceKit_initLogging();
+    SpliceKit_sentrySetLaunchPhase(@"constructor");
 
     SpliceKit_log(@"================================================");
     SpliceKit_log(@"SpliceKit v%s initializing...", SPLICEKIT_VERSION);
@@ -3762,9 +3780,14 @@ static void SpliceKit_init(void) {
 
     sConstructorStart = CFAbsoluteTimeGetCurrent();
 
-    // Install crash handlers FIRST so any crash during startup gets logged
-    SpliceKit_installCrashHandlers();
-    SpliceKit_log(@"Crash handlers installed (NSException + SIGTRAP/SIGABRT/SIGSEGV/SIGBUS)");
+    SpliceKit_sentryStartRuntime();
+    if (SpliceKit_sentryRuntimeEnabled()) {
+        SpliceKit_log(@"Sentry runtime crash handling enabled");
+    } else {
+        // Fall back to the legacy crash logger when Sentry isn't configured.
+        SpliceKit_installCrashHandlers();
+        SpliceKit_log(@"Legacy crash handlers installed (NSException + SIGTRAP/SIGABRT/SIGSEGV/SIGBUS)");
+    }
 
     // These patches need to land before FCP's own init code runs
     SpliceKit_disableCloudContent();
@@ -3778,11 +3801,13 @@ static void SpliceKit_init(void) {
         addObserverForName:NSApplicationWillFinishLaunchingNotification
         object:nil queue:nil usingBlock:^(NSNotification *note) {
             sWillLaunchTime = CFAbsoluteTimeGetCurrent();
+            SpliceKit_sentrySetLaunchPhase(@"will-finish-launching");
             SpliceKit_log(@"WillFinishLaunching (%.2fs after constructor)",
                           sWillLaunchTime - sConstructorStart);
             SpliceKit_swizzleCloudContentClasses("willLaunch");
             SpliceKit_logCloudContentGuardSummary(@"will-launch");
             SpliceKit_logLoadedFrameworks();
+            SpliceKit_bootstrapBRAWAtLaunchPhase(@"will-launch");
         }];
 
     // Everything else waits for the app to finish launching

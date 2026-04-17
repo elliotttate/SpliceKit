@@ -55,6 +55,7 @@ void SpliceKit_installEffectDragSwizzlesNow(void);
 BOOL SpliceKit_removeChannelKeyframes(id channel);
 NSDictionary *SpliceKit_handleBRAWProbe(NSDictionary *params);
 NSDictionary *SpliceKit_handleBRAWProviderProbe(NSDictionary *params);
+NSDictionary *SpliceKit_handleBRAWAVProbe(NSDictionary *params);
 
 #define SPLICEKIT_TCP_PORT 9876
 
@@ -26792,6 +26793,8 @@ NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleBRAWProbe(params);
     } else if ([method isEqualToString:@"braw.providerProbe"]) {
         result = SpliceKit_handleBRAWProviderProbe(params);
+    } else if ([method isEqualToString:@"braw.avProbe"]) {
+        result = SpliceKit_handleBRAWAVProbe(params);
     }
     // menu.* namespace
     else if ([method isEqualToString:@"menu.execute"]) {

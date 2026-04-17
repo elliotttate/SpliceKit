@@ -30,6 +30,8 @@ patcher/SpliceKit.xcodeproj/project.xcworkspace/xcuserdata/
 
 # Pre-built patcher app (generate via release.sh, distribute via GitHub Releases)
 patcher/SpliceKitPatcher.app/
+patcher/Frameworks/Sentry.framework/
+patcher/Frameworks/.sentry-sdk-version
 
 # Keys and credentials
 *.pem
@@ -49,3 +51,6 @@ patcher/SpliceKit-v*.dmg
 
 # Runtime metadata export (75MB+, regenerate with tools/fcp_runtime_export.py)
 ida_export/
+
+# Local scratch/test binaries and artifacts
+out/
