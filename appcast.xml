@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.1.150</title>
+      <sparkle:version>3.1.150</sparkle:version>
+      <sparkle:shortVersionString>3.1.150</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Fri, 17 Apr 2026 02:06:05 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.1.150</h2>
+        <p>Fix a BRAW decode crash: when VideoToolbox tore down a session while a decode was in flight on our BRAW serial queue, the race could free the host callback mid-Unbind and abort FCP. Release now serializes through the same queue as decode.</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.150/SpliceKit-v3.1.150.dmg"
+        sparkle:edSignature="pbt9b1UzFls4POLa56d6omWunvbtArSW5uasVzSHDsUQEikVZ3hyQIiU5W3FTK9FmL+8cCku/r+E4zsXXFbAAQ=="
+        length="18876206"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.1.149</title>
       <sparkle:version>3.1.149</sparkle:version>
       <sparkle:shortVersionString>3.1.149</sparkle:shortVersionString>
