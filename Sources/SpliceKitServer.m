@@ -18836,6 +18836,166 @@ static NSDictionary *SpliceKit_handleCaptureTimeline(NSDictionary *params) {
     return result;
 }
 
+#pragma mark - Capture Inspector Screenshot
+
+static NSDictionary *SpliceKit_handleCaptureInspector(NSDictionary *params) {
+    NSString *outputPath = params[@"path"] ?: @"/tmp/splicekit_inspector.png";
+
+    __block NSDictionary *result = nil;
+
+    SpliceKit_executeOnMainThread(^{
+        @try {
+            // Find the main FCP window
+            NSWindow *mainWindow = [NSApp mainWindow];
+            if (!mainWindow) {
+                for (NSWindow *w in [NSApp windows]) {
+                    if ([w isVisible] && (!mainWindow || w.frame.size.width > mainWindow.frame.size.width)) {
+                        mainWindow = w;
+                    }
+                }
+            }
+            if (!mainWindow) {
+                result = @{@"error": @"No visible FCP window found"};
+                return;
+            }
+
+            CGWindowID windowID = (CGWindowID)[mainWindow windowNumber];
+
+            CGImageRef fullImage = CGWindowListCreateImage(
+                CGRectNull,
+                kCGWindowListOptionIncludingWindow,
+                windowID,
+                kCGWindowImageBoundsIgnoreFraming | kCGWindowImageNominalResolution
+            );
+
+            if (!fullImage) {
+                result = @{@"error": @"CGWindowListCreateImage returned nil — screen recording permission may be needed"};
+                return;
+            }
+
+            // Walk view hierarchy and find the largest view matching one of FCP's inspector
+            // root view classes. Priority: caller-supplied class_name first, then known roots.
+            NSMutableArray<NSString *> *candidateClassNames = [NSMutableArray array];
+            NSString *requestedClass = params[@"class_name"];
+            if ([requestedClass isKindOfClass:[NSString class]] && requestedClass.length > 0) {
+                [candidateClassNames addObject:requestedClass];
+            }
+            // Verified via runtime introspection: actual inspector container NSViews are
+            // private (leading-underscore) classes. Walk in priority order.
+            [candidateClassNames addObjectsFromArray:@[
+                @"_FFInspectorContainerView",
+                @"_FFInspectorContainerStackView",
+                @"PEInspectorContainerBackgroundView",
+                @"LKFlippedInspectorView",
+                @"FFInspectorRootStackView",
+                @"FFInspectorRootOutlineView",
+                @"FFInspectorOutlineView",
+                @"FFInspectorControllerView",
+            ]];
+
+            // FCP has multiple panes sharing container view classes (Effects Browser,
+            // parameter Inspector, etc.). The parameter Inspector is anchored to the RIGHT
+            // 1/3 of the window AND is the tallest such matching view. Pick the candidate
+            // match satisfying: (origin.x > 0.65 * window.width) AND maximum height.
+            CGFloat winWidth = mainWindow.frame.size.width;
+            CGFloat rightThresholdX = winWidth * 0.55;
+
+            NSView *largestInspectorView = nil;
+            CGFloat bestHeight = 0;
+            NSString *matchedClassName = nil;
+
+            for (NSString *className in candidateClassNames) {
+                Class candidateClass = objc_getClass([className UTF8String]);
+                if (!candidateClass) continue;
+
+                NSMutableArray *queue = [NSMutableArray arrayWithObject:[mainWindow contentView]];
+                while (queue.count > 0) {
+                    NSView *view = queue.firstObject;
+                    [queue removeObjectAtIndex:0];
+                    if (!view) continue;
+                    if ([view isKindOfClass:candidateClass]) {
+                        if (view.bounds.size.width >= 200 && view.bounds.size.height >= 150 && !view.isHidden) {
+                            NSRect frameInWindow = [view convertRect:[view bounds] toView:nil];
+                            if (frameInWindow.origin.x >= rightThresholdX
+                                && frameInWindow.size.height > bestHeight) {
+                                bestHeight = frameInWindow.size.height;
+                                largestInspectorView = view;
+                                matchedClassName = className;
+                            }
+                        }
+                    }
+                    NSArray *subs = [view subviews];
+                    if (subs) [queue addObjectsFromArray:subs];
+                }
+                if (largestInspectorView) break;  // Stop at the first matching class
+            }
+
+            NSData *pngData = nil;
+            int outWidth = (int)CGImageGetWidth(fullImage);
+            int outHeight = (int)CGImageGetHeight(fullImage);
+            BOOL cropped = NO;
+
+            if (largestInspectorView) {
+                NSRect viewFrameInWindow = [largestInspectorView convertRect:[largestInspectorView bounds] toView:nil];
+                CGFloat imgScaleX = (CGFloat)CGImageGetWidth(fullImage) / mainWindow.frame.size.width;
+                CGFloat imgScaleY = (CGFloat)CGImageGetHeight(fullImage) / mainWindow.frame.size.height;
+                CGFloat windowHeight = mainWindow.frame.size.height;
+
+                CGRect cropRect = CGRectMake(
+                    viewFrameInWindow.origin.x * imgScaleX,
+                    (windowHeight - viewFrameInWindow.origin.y - viewFrameInWindow.size.height) * imgScaleY,
+                    viewFrameInWindow.size.width * imgScaleX,
+                    viewFrameInWindow.size.height * imgScaleY
+                );
+
+                CGImageRef croppedImage = CGImageCreateWithImageInRect(fullImage, cropRect);
+                if (croppedImage) {
+                    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:croppedImage];
+                    pngData = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+                    outWidth = (int)CGImageGetWidth(croppedImage);
+                    outHeight = (int)CGImageGetHeight(croppedImage);
+                    CGImageRelease(croppedImage);
+                    cropped = YES;
+                }
+            }
+
+            // Fallback: full window if no inspector view found
+            if (!pngData) {
+                NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:fullImage];
+                pngData = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            }
+
+            CGImageRelease(fullImage);
+
+            if (!pngData) {
+                result = @{@"error": @"Failed to generate PNG data"};
+                return;
+            }
+
+            BOOL written = [pngData writeToFile:outputPath atomically:YES];
+            if (!written) {
+                result = @{@"error": [NSString stringWithFormat:@"Failed to write to %@", outputPath]};
+                return;
+            }
+
+            NSMutableDictionary *r = [@{
+                @"status": @"ok",
+                @"path": outputPath,
+                @"width": @(outWidth),
+                @"height": @(outHeight),
+                @"bytes": @(pngData.length),
+                @"cropped": @(cropped),
+            } mutableCopy];
+            if (matchedClassName) r[@"matchedClass"] = matchedClassName;
+            result = r;
+        } @catch (NSException *e) {
+            result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+        }
+    });
+
+    return result;
+}
+
 #pragma mark - Export FCPXML Programmatically
 
 NSDictionary *SpliceKit_handleFCPXMLExport(NSDictionary *params) {
@@ -26899,6 +27059,10 @@ NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
     // timeline capture
     else if ([method isEqualToString:@"timeline.capture"]) {
         result = SpliceKit_handleCaptureTimeline(params);
+    }
+    // inspector capture
+    else if ([method isEqualToString:@"inspector.capture"]) {
+        result = SpliceKit_handleCaptureInspector(params);
     }
     // fcpxml export (programmatic, no dialog)
     else if ([method isEqualToString:@"fcpxml.export"]) {

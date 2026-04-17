@@ -282,7 +282,17 @@ SPLICEKIT_BRAW_EXTERN_C void SpliceKitBRAW_SetRAWSettingsForPath(CFStringRef pat
     SpliceKitBRAWTrace([NSString stringWithFormat:@"[raw-settings-cache] %@ %@",
                         sanitized.count > 0 ? @"store" : @"clear",
                         path]);
-    SpliceKitBRAWHostInvalidateEntry(path);
+
+    // DELIBERATELY do NOT invalidate the cached host BRAW SDK clip entry on
+    // settings changes. The decode path reads fresh settings per frame via
+    // SpliceKitBRAW_CopyRAWSettingsForPath and applies them through
+    // -[…ProcessingAttributes] passed to CreateJobDecodeAndProcessFrame. The
+    // SDK clip handle's state doesn't depend on the settings, so tearing it
+    // down forces an expensive reopen (file open + Metal pipeline rebuild)
+    // for every slider tick. Was causing visibly slow updates and the
+    // [host-decode] released/opened/invalidated log spam during HUD drags.
+    //
+    // (void)SpliceKitBRAWHostInvalidateEntry(path);  // intentionally disabled
 }
 
 SPLICEKIT_BRAW_EXTERN_C CFDictionaryRef SpliceKitBRAW_CopyRAWSettingsForPath(CFStringRef pathRef) {
@@ -1227,10 +1237,73 @@ static void SpliceKitBRAWFindStereoAtomFileOffsets(NSString *path, std::vector<u
     free(buf);
 }
 
+// Apple GPU max texture dimension. BRAW files above this per-axis (URSA Cine
+// Immersive @ 17520x8040, for example) can't be wrapped as a Metal texture
+// directly — CVMetalTextureCacheCreateTextureFromImage returns
+// kCVReturnPixelBufferNotMetalCompatible (-6684). To work around this we
+// pick a smaller SDK resolution scale and write the downscaled dims into
+// the shim's stsd so FCP allocates a Metal-compatible destination buffer.
+static const uint32_t kSpliceKitBRAWMaxMetalTextureDim = 16384;
+
+// original-path → (scale, width, height) picked at shim-creation time. The
+// decoder consults this to request the same SDK scale the shim advertised,
+// so source dims equal destination dims in the Metal blit.
+static NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *sSpliceKitBRAWDownscaleMap = nil;
+static std::mutex sSpliceKitBRAWDownscaleMapMutex;
+
+static void SpliceKitBRAWRecordPathScale(NSString *path,
+                                         BlackmagicRawResolutionScale scale,
+                                         uint32_t w, uint32_t h) {
+    if (path.length == 0) return;
+    std::lock_guard<std::mutex> lock(sSpliceKitBRAWDownscaleMapMutex);
+    if (!sSpliceKitBRAWDownscaleMap) sSpliceKitBRAWDownscaleMap = [NSMutableDictionary new];
+    sSpliceKitBRAWDownscaleMap[path] = @[@((int)scale), @(w), @(h)];
+}
+
+static BOOL SpliceKitBRAWLookupPathScale(NSString *path,
+                                          BlackmagicRawResolutionScale *outScale,
+                                          uint32_t *outW, uint32_t *outH) {
+    if (path.length == 0) return NO;
+    std::lock_guard<std::mutex> lock(sSpliceKitBRAWDownscaleMapMutex);
+    NSArray<NSNumber *> *entry = sSpliceKitBRAWDownscaleMap[path];
+    if (!entry || entry.count != 3) return NO;
+    if (outScale) *outScale = (BlackmagicRawResolutionScale)entry[0].intValue;
+    if (outW) *outW = entry[1].unsignedIntValue;
+    if (outH) *outH = entry[2].unsignedIntValue;
+    return YES;
+}
+
+// Forward decl — implementation lives after SpliceKitBRAWHostClipEntry and
+// SpliceKitBRAWRunDecodeJob are defined further down. The shim path
+// (SpliceKitBRAWEnsureFourCCShim, below) uses it to probe SDK dims at a
+// given scale.
+static BOOL SpliceKitBRAWProbeScaledDimsForPath(NSString *path,
+                                                BlackmagicRawResolutionScale scale,
+                                                uint32_t *outW, uint32_t *outH);
+
 static BOOL SpliceKitBRAWIsAVFriendlyFourCC(uint32_t fourcc) {
     // Empirically: braw, brxq, brst make it through AVFoundation's track filter.
     // brvn and future variants get dropped — we rewrite those to brxq in a clone.
     return fourcc == 'braw' || fourcc == 'brxq' || fourcc == 'brst';
+}
+
+// Our shim template writes a 110-byte stsd entry (standard 86 bytes + 'bver' +
+// 'ctrn' extension atoms). Blackmagic Cinema Camera 6K BRAWs (and some other
+// variants) emit a 122-byte entry with an additional 'bfdn' extension atom,
+// and AVFoundation silently drops their video track as a result. Anything
+// beyond 110 bytes is treated as "needs shimming even though the fourcc is
+// already AV-friendly".
+static uint32_t SpliceKitBRAWReadStsdEntrySize(NSString *path, uint64_t fourccFileOffset) {
+    if (fourccFileOffset < 4) return 0;
+    FILE *f = fopen(path.UTF8String, "rb");
+    if (!f) return 0;
+    if (fseeko(f, (off_t)(fourccFileOffset - 4), SEEK_SET) != 0) { fclose(f); return 0; }
+    uint8_t hdr[4] = {0};
+    size_t n = fread(hdr, 1, 4, f);
+    fclose(f);
+    if (n != 4) return 0;
+    return ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
+           ((uint32_t)hdr[2] << 8)  | ((uint32_t)hdr[3]);
 }
 
 // Forward decl — defined later in this TU. Called from EnsureFourCCShim to
@@ -1254,8 +1327,18 @@ static NSString *SpliceKitBRAWEnsureFourCCShim(NSString *originalPath) {
     if (fourccOffset == 0 || fourcc == 0) {
         return nil; // couldn't parse — let AVAsset try the real file
     }
-    if (SpliceKitBRAWIsAVFriendlyFourCC(fourcc)) {
-        return nil; // AVFoundation already handles this fourcc → no shim needed
+    BOOL friendlyFourCC = SpliceKitBRAWIsAVFriendlyFourCC(fourcc);
+    uint32_t entrySize = SpliceKitBRAWReadStsdEntrySize(originalPath, fourccOffset);
+    // Friendly fourcc + clean 110-byte entry = AVFoundation is happy. Anything
+    // larger means Blackmagic tacked on an extension atom (e.g. 'bfdn' from
+    // Cinema Camera 6K BRAWs) that AVFoundation's MOV parser rejects, so we
+    // shim those too and rewrite the entry to the 110-byte template.
+    if (friendlyFourCC && entrySize > 0 && entrySize <= 110) {
+        return nil;
+    }
+    if (friendlyFourCC) {
+        SpliceKitBRAWTrace([NSString stringWithFormat:@"[fourcc-shim] forcing shim for friendly fourcc 0x%08x with %u-byte stsd entry (%@)",
+                            fourcc, entrySize, originalPath]);
     }
 
     // Cache shim by (path, fourcc). Filename is deterministic from inode+mtime
@@ -1268,7 +1351,7 @@ static NSString *SpliceKitBRAWEnsureFourCCShim(NSString *originalPath) {
     // Include a shim-schema version so bumping the patch logic (e.g. adding a
     // de-stereo pass) invalidates cached shims on existing installs instead
     // of silently continuing to serve pre-fix files.
-    NSString *ident = [NSString stringWithFormat:@"%@-%.0f-%llu-v4",
+    NSString *ident = [NSString stringWithFormat:@"%@-%.0f-%llu-v5",
                        [[originalPath lastPathComponent] stringByDeletingPathExtension],
                        mtime.timeIntervalSince1970, size.unsignedLongLongValue];
     NSString *shimPath = [[SpliceKitBRAWShimDirectory() stringByAppendingPathComponent:ident] stringByAppendingPathExtension:@"braw"];
@@ -1341,6 +1424,38 @@ static NSString *SpliceKitBRAWEnsureFourCCShim(NSString *originalPath) {
         BOOL haveSDKDims = SpliceKitBRAW_ReadClipMetadata(
             (__bridge CFStringRef)originalPath,
             &sdkWidth, &sdkHeight, &sdkFrameRate, &sdkFrameCount);
+
+        // If the clip's native dims exceed Metal's max texture size, probe
+        // the SDK at Half / Quarter / Eighth scales until the output fits
+        // and use those dims in the shim. The decoder consults
+        // sSpliceKitBRAWDownscaleMap at runtime to request the same scale.
+        BlackmagicRawResolutionScale pickedScale = blackmagicRawResolutionScaleFull;
+        if (haveSDKDims && (sdkWidth > kSpliceKitBRAWMaxMetalTextureDim ||
+                            sdkHeight > kSpliceKitBRAWMaxMetalTextureDim)) {
+            BlackmagicRawResolutionScale try_[] = {
+                blackmagicRawResolutionScaleHalf,
+                blackmagicRawResolutionScaleQuarter,
+                blackmagicRawResolutionScaleEighth,
+            };
+            for (size_t i = 0; i < sizeof(try_) / sizeof(BlackmagicRawResolutionScale); ++i) {
+                uint32_t probedW = 0, probedH = 0;
+                if (SpliceKitBRAWProbeScaledDimsForPath(originalPath, try_[i], &probedW, &probedH) &&
+                    probedW > 0 && probedH > 0 &&
+                    probedW <= kSpliceKitBRAWMaxMetalTextureDim &&
+                    probedH <= kSpliceKitBRAWMaxMetalTextureDim) {
+                    sdkWidth = probedW;
+                    sdkHeight = probedH;
+                    pickedScale = try_[i];
+                    break;
+                }
+            }
+            SpliceKitBRAWRecordPathScale(originalPath, pickedScale, sdkWidth, sdkHeight);
+            SpliceKitBRAWTrace([NSString stringWithFormat:
+                @"[fourcc-shim] downscaled shim dims to %ux%u (scale=%d) for %@",
+                sdkWidth, sdkHeight, (int)pickedScale, originalPath]);
+        } else if (haveSDKDims) {
+            SpliceKitBRAWRecordPathScale(originalPath, blackmagicRawResolutionScaleFull, sdkWidth, sdkHeight);
+        }
 
         NSUInteger hash = originalPath.hash;
         uint8_t identTag[8] = {
@@ -1830,8 +1945,24 @@ SPLICEKIT_BRAW_EXTERN_C void SpliceKit_installBRAWProviderShim(void) {
     });
 }
 
+// Declared in SpliceKitBRAWDecoderInProcess.mm (same dylib — direct link).
+// Registers a VT video decoder for every BRAW FourCC via VTRegisterVideoDecoder,
+// so .braw decode dispatches into our process without any plugin bundle on disk.
+// Idempotent (dispatch_once-guarded internally).
+extern "C" BOOL SpliceKitBRAW_registerInProcessDecoder(void);
+
 SPLICEKIT_BRAW_EXTERN_C void SpliceKit_bootstrapBRAWAtLaunchPhase(NSString *phase) {
     NSString *phaseName = [phase isKindOfClass:[NSString class]] ? phase : @"unknown";
+
+    // In-process decoder registration runs every time regardless of whether
+    // the legacy MediaExtension bundles are present on disk. If a bundle IS
+    // also present it will register its own VT decoder for the same FourCC;
+    // VT dispatches to the most recent registration, and we run at dylib
+    // bootstrap before the bundle directory sweep, so ours ends up ordered
+    // correctly. We want the in-process path to become canonical and replace
+    // the bundle path entirely over time.
+    SpliceKitBRAW_registerInProcessDecoder();
+
     BOOL bundlesPresent =
         ([[NSFileManager defaultManager] fileExistsAtPath:SpliceKitBRAWBundlePath(@"FormatReaders/SpliceKitBRAWImport.bundle")] ||
          [[NSFileManager defaultManager] fileExistsAtPath:SpliceKitBRAWBundlePath(@"Codecs/SpliceKitBRAWDecoder.bundle")]);
@@ -3428,11 +3559,39 @@ static IBlackmagicRawClipProcessingAttributes *SpliceKitBRAWCreateClipProcessing
         return nullptr;
     }
 
-    NSNumber *saturation = SpliceKitBRAWRAWNumberForKey(settingsRef, @"saturation");
-    NSNumber *contrast = SpliceKitBRAWRAWNumberForKey(settingsRef, @"contrast");
-    NSNumber *highlights = SpliceKitBRAWRAWNumberForKey(settingsRef, @"highlights");
-    NSNumber *shadows = SpliceKitBRAWRAWNumberForKey(settingsRef, @"shadows");
-    if (!saturation && !contrast && !highlights && !shadows) {
+    NSNumber *saturation        = SpliceKitBRAWRAWNumberForKey(settingsRef, @"saturation");
+    NSNumber *contrast          = SpliceKitBRAWRAWNumberForKey(settingsRef, @"contrast");
+    NSNumber *highlights        = SpliceKitBRAWRAWNumberForKey(settingsRef, @"highlights");
+    NSNumber *shadows           = SpliceKitBRAWRAWNumberForKey(settingsRef, @"shadows");
+    NSNumber *midpoint          = SpliceKitBRAWRAWNumberForKey(settingsRef, @"midpoint");
+    NSNumber *blackLevel        = SpliceKitBRAWRAWNumberForKey(settingsRef, @"blackLevel");
+    NSNumber *whiteLevel        = SpliceKitBRAWRAWNumberForKey(settingsRef, @"whiteLevel");
+    NSNumber *videoBlackLevel   = SpliceKitBRAWRAWNumberForKey(settingsRef, @"videoBlackLevel");
+    NSNumber *highlightRecovery = SpliceKitBRAWRAWNumberForKey(settingsRef, @"highlightRecovery");
+    NSNumber *gamutCompression  = SpliceKitBRAWRAWNumberForKey(settingsRef, @"gamutCompression");
+    NSNumber *colorScienceGen   = SpliceKitBRAWRAWNumberForKey(settingsRef, @"colorScienceGen");
+    NSNumber *analogGainClip    = SpliceKitBRAWRAWNumberForKey(settingsRef, @"analogGainClip");
+
+    NSString *gammaString = nil;
+    NSString *gamutString = nil;
+    NSString *post3DLUTMode = nil;
+    {
+        NSDictionary *dict = (__bridge NSDictionary *)settingsRef;
+        id g = dict[@"gamma"];
+        if ([g isKindOfClass:[NSString class]]) gammaString = (NSString *)g;
+        id u = dict[@"gamut"];
+        if ([u isKindOfClass:[NSString class]]) gamutString = (NSString *)u;
+        id l = dict[@"post3DLUTMode"];
+        if ([l isKindOfClass:[NSString class]]) post3DLUTMode = (NSString *)l;
+    }
+
+    BOOL hasNumeric =
+        saturation || contrast || highlights || shadows ||
+        midpoint || blackLevel || whiteLevel || videoBlackLevel ||
+        highlightRecovery || gamutCompression || colorScienceGen ||
+        analogGainClip;
+    BOOL hasString = (gammaString.length > 0) || (gamutString.length > 0) || (post3DLUTMode.length > 0);
+    if (!hasNumeric && !hasString) {
         return nullptr;
     }
 
@@ -3441,41 +3600,79 @@ static IBlackmagicRawClipProcessingAttributes *SpliceKitBRAWCreateClipProcessing
         return nullptr;
     }
 
-    SpliceKitBRAWEnsureToneCurveModeIfNeeded(codec,
-                                             clip,
-                                             attributes,
-                                             saturation,
-                                             contrast,
-                                             highlights,
-                                             shadows,
-                                             path);
-
+    // String attributes go FIRST. Some tone-curve fields are gated by Gamma
+    // mode being "Custom"; setting Gamma early lets the subsequent SetClipAttribute
+    // calls land cleanly.
     BOOL touched = NO;
+    if (gammaString.length > 0) {
+        touched |= SpliceKitBRAWSetClipStringAttribute(attributes,
+                                                       blackmagicRawClipProcessingAttributeGamma,
+                                                       gammaString, @"gamma", path);
+    }
+    if (gamutString.length > 0) {
+        touched |= SpliceKitBRAWSetClipStringAttribute(attributes,
+                                                       blackmagicRawClipProcessingAttributeGamut,
+                                                       gamutString, @"gamut", path);
+    }
+    if (post3DLUTMode.length > 0) {
+        touched |= SpliceKitBRAWSetClipStringAttribute(attributes,
+                                                       blackmagicRawClipProcessingAttributePost3DLUTMode,
+                                                       post3DLUTMode, @"post3DLUTMode", path);
+    }
+
+    // Tone-curve overrides need Gamma=Custom; ensure that's set if any
+    // tone-curve numeric attribute changed and the user didn't explicitly pick
+    // a different gamma. The helper handles "Blackmagic Design Custom"
+    // switching idempotently.
+    SpliceKitBRAWEnsureToneCurveModeIfNeeded(codec, clip, attributes,
+                                             saturation, contrast, highlights, shadows, path);
+
+    // Tone-curve floats.
     touched |= SpliceKitBRAWApplyClipSetting(attributes,
                                              blackmagicRawClipProcessingAttributeToneCurveSaturation,
-                                             saturation,
-                                             @"saturation",
-                                             path);
+                                             saturation, @"saturation", path);
     touched |= SpliceKitBRAWApplyClipSetting(attributes,
                                              blackmagicRawClipProcessingAttributeToneCurveContrast,
-                                             contrast,
-                                             @"contrast",
-                                             path);
+                                             contrast, @"contrast", path);
     touched |= SpliceKitBRAWApplyClipSetting(attributes,
                                              blackmagicRawClipProcessingAttributeToneCurveHighlights,
-                                             highlights,
-                                             @"highlights",
-                                             path);
+                                             highlights, @"highlights", path);
     touched |= SpliceKitBRAWApplyClipSetting(attributes,
                                              blackmagicRawClipProcessingAttributeToneCurveShadows,
-                                             shadows,
-                                             @"shadows",
-                                             path);
+                                             shadows, @"shadows", path);
+    touched |= SpliceKitBRAWApplyClipSetting(attributes,
+                                             blackmagicRawClipProcessingAttributeToneCurveMidpoint,
+                                             midpoint, @"midpoint", path);
+    touched |= SpliceKitBRAWApplyClipSetting(attributes,
+                                             blackmagicRawClipProcessingAttributeToneCurveBlackLevel,
+                                             blackLevel, @"blackLevel", path);
+    touched |= SpliceKitBRAWApplyClipSetting(attributes,
+                                             blackmagicRawClipProcessingAttributeToneCurveWhiteLevel,
+                                             whiteLevel, @"whiteLevel", path);
+    touched |= SpliceKitBRAWApplyClipSetting(attributes,
+                                             blackmagicRawClipProcessingAttributeAnalogGain,
+                                             analogGainClip, @"analogGainClip", path);
+
+    // u16 attributes — apply via the same helper; the variant clamping handles
+    // the type coercion. ApplyClipSetting accepts any NSNumber and matches
+    // the Variant type the SDK reports for that attribute.
+    touched |= SpliceKitBRAWApplyClipSetting(attributes,
+                                             blackmagicRawClipProcessingAttributeToneCurveVideoBlackLevel,
+                                             videoBlackLevel, @"videoBlackLevel", path);
+    touched |= SpliceKitBRAWApplyClipSetting(attributes,
+                                             blackmagicRawClipProcessingAttributeHighlightRecovery,
+                                             highlightRecovery, @"highlightRecovery", path);
+    touched |= SpliceKitBRAWApplyClipSetting(attributes,
+                                             blackmagicRawClipProcessingAttributeGamutCompressionEnable,
+                                             gamutCompression, @"gamutCompression", path);
+    touched |= SpliceKitBRAWApplyClipSetting(attributes,
+                                             blackmagicRawClipProcessingAttributeColorScienceGen,
+                                             colorScienceGen, @"colorScienceGen", path);
+
     if (!touched) {
         attributes->Release();
         return nullptr;
     }
-
     return attributes;
 }
 
@@ -3548,11 +3745,12 @@ static IBlackmagicRawFrameProcessingAttributes *SpliceKitBRAWCreateFrameProcessi
         return nullptr;
     }
 
-    NSNumber *iso = SpliceKitBRAWRAWNumberForKey(settingsRef, @"iso");
-    NSNumber *kelvin = SpliceKitBRAWRAWNumberForKey(settingsRef, @"kelvin");
-    NSNumber *tint = SpliceKitBRAWRAWNumberForKey(settingsRef, @"tint");
-    NSNumber *exposure = SpliceKitBRAWRAWNumberForKey(settingsRef, @"exposure");
-    if (!iso && !kelvin && !tint && !exposure) {
+    NSNumber *iso        = SpliceKitBRAWRAWNumberForKey(settingsRef, @"iso");
+    NSNumber *kelvin     = SpliceKitBRAWRAWNumberForKey(settingsRef, @"kelvin");
+    NSNumber *tint       = SpliceKitBRAWRAWNumberForKey(settingsRef, @"tint");
+    NSNumber *exposure   = SpliceKitBRAWRAWNumberForKey(settingsRef, @"exposure");
+    NSNumber *analogGain = SpliceKitBRAWRAWNumberForKey(settingsRef, @"analogGain");
+    if (!iso && !kelvin && !tint && !exposure && !analogGain) {
         return nullptr;
     }
 
@@ -3564,29 +3762,23 @@ static IBlackmagicRawFrameProcessingAttributes *SpliceKitBRAWCreateFrameProcessi
     BOOL touched = NO;
     touched |= SpliceKitBRAWApplyFrameSetting(attributes,
                                               blackmagicRawFrameProcessingAttributeISO,
-                                              iso,
-                                              @"iso",
-                                              path);
+                                              iso, @"iso", path);
     touched |= SpliceKitBRAWApplyFrameSetting(attributes,
                                               blackmagicRawFrameProcessingAttributeWhiteBalanceKelvin,
-                                              kelvin,
-                                              @"kelvin",
-                                              path);
+                                              kelvin, @"kelvin", path);
     touched |= SpliceKitBRAWApplyFrameSetting(attributes,
                                               blackmagicRawFrameProcessingAttributeWhiteBalanceTint,
-                                              tint,
-                                              @"tint",
-                                              path);
+                                              tint, @"tint", path);
     touched |= SpliceKitBRAWApplyFrameSetting(attributes,
                                               blackmagicRawFrameProcessingAttributeExposure,
-                                              exposure,
-                                              @"exposure",
-                                              path);
+                                              exposure, @"exposure", path);
+    touched |= SpliceKitBRAWApplyFrameSetting(attributes,
+                                              blackmagicRawFrameProcessingAttributeAnalogGain,
+                                              analogGain, @"analogGain", path);
     if (!touched) {
         attributes->Release();
         return nullptr;
     }
-
     return attributes;
 }
 
@@ -3666,7 +3858,12 @@ public:
 
             if (result != S_OK) {
                 ctx->error = "ProcessComplete returned failure";
-            } else if (!resource || sz == 0 || sz > 512u * 1024u * 1024u || w == 0 || h == 0) {
+            } else if (!resource || sz == 0 || sz > 2u * 1024u * 1024u * 1024u || w == 0 || h == 0) {
+                // Upper bound raised from 512 MB to 2 GB: URSA Cine Immersive
+                // decodes to 17520x8040 BGRA8 = 563 MB per frame, which was
+                // triggering a spurious "invalid resource" rejection. 2 GB
+                // still catches a genuinely corrupt size report without
+                // false-positing on high-res immersive formats.
                 ctx->error = "ProcessComplete returned invalid resource";
             } else if (resourceType == blackmagicRawResourceTypeBufferCPU) {
                 const uint8_t *bytes = static_cast<const uint8_t *>(resource);
@@ -4097,6 +4294,28 @@ static BlackmagicRawResolutionScale SpliceKitBRAWScaleForHint(uint32_t scaleHint
     }
 }
 
+// Probe the SDK at the given scale by decoding frame 0 once. Used by the
+// shim path when a clip's native resolution exceeds Metal's 16384 texture
+// cap and we need to know what a smaller scale actually produces. The probe
+// bypasses the blit path (destPixelBuffer=nullptr) so it only pays for the
+// CPU-bytes copy, not a Metal blit.
+static BOOL SpliceKitBRAWProbeScaledDimsForPath(NSString *path,
+                                                BlackmagicRawResolutionScale scale,
+                                                uint32_t *outW, uint32_t *outH) {
+    std::string err;
+    SpliceKitBRAWHostClipEntry *entry = SpliceKitBRAWHostAcquireEntry(path, err);
+    if (!entry || !entry->clip) return NO;
+    SpliceKitBRAWHostDecodeContext ctx;
+    ctx.scale = scale;
+    ctx.format = blackmagicRawResourceFormatBGRAU8;
+    ctx.destPixelBuffer = nullptr;
+    if (!SpliceKitBRAWRunDecodeJob(entry, ctx, 0, -1)) return NO;
+    if (ctx.width == 0 || ctx.height == 0) return NO;
+    if (outW) *outW = ctx.width;
+    if (outH) *outH = ctx.height;
+    return YES;
+}
+
 static BOOL SpliceKitBRAWDecodeFrameBytesOnWorkQueue(
     NSString *path,
     uint32_t frameIndex,
@@ -4156,7 +4375,30 @@ static BOOL SpliceKitBRAWDecodeIntoPixelBufferOnWorkQueue(
     }
 
     SpliceKitBRAWHostDecodeContext ctx;
-    ctx.scale = SpliceKitBRAWScaleForHint(scaleHint);
+    BlackmagicRawResolutionScale mappedScale = blackmagicRawResolutionScaleFull;
+    uint32_t mappedW = 0, mappedH = 0;
+    if (SpliceKitBRAWLookupPathScale(path, &mappedScale, &mappedW, &mappedH) &&
+        mappedScale != blackmagicRawResolutionScaleFull) {
+        // Shim picked this scale because the clip's native res exceeds
+        // Metal's 16384 texture cap; honor it so source dims match the
+        // destPB dims FCP allocated from the shim's stsd.
+        ctx.scale = mappedScale;
+    } else {
+        ctx.scale = SpliceKitBRAWScaleForHint(scaleHint);
+        // Fallback for the map-empty case (shim was built in a prior launch,
+        // map hasn't been repopulated yet, but the shim on disk uses
+        // downscaled dims): if the clip's native res exceeds Metal's cap,
+        // pick a smaller scale preemptively. Costs one GetWidth/Height query.
+        if (entry && entry->clip) {
+            uint32_t clipW = 0, clipH = 0;
+            entry->clip->GetWidth(&clipW);
+            entry->clip->GetHeight(&clipH);
+            if (clipW > kSpliceKitBRAWMaxMetalTextureDim ||
+                clipH > kSpliceKitBRAWMaxMetalTextureDim) {
+                ctx.scale = blackmagicRawResolutionScaleHalf;
+            }
+        }
+    }
     // BGRAU8 matches kCVPixelFormatType_32BGRA on the destination so the blit
     // is a straight-line copy (no channel swap).
     ctx.format = blackmagicRawResourceFormatBGRAU8;
@@ -4261,16 +4503,19 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameIntoPixelBufferEye(
     // forces later frames to wait on earlier ones, so "elapsed" reflects
     // queue wait time, not decode time. 80 ms is the threshold where actual
     // viewer stutter becomes visible.
-    if (!result || elapsedMs > 80.0) {
-        if (eyeIndex >= 0) {
-            SpliceKitBRAWTrace([NSString stringWithFormat:
-                @"[host-decode] into-PB frame=%u eye=%d %.2fms result=%@",
-                frameIndex, eyeIndex, elapsedMs, result ? @"ok" : @"fail"]);
-        } else {
-            SpliceKitBRAWTrace([NSString stringWithFormat:
-                @"[host-decode] into-PB frame=%u %.2fms result=%@",
-                frameIndex, elapsedMs, result ? @"ok" : @"fail"]);
+    // Diagnostic: log EVERY decode along with the current ISO from the
+    // settings cache. This lets us correlate "user moved slider" → "decoder
+    // saw new ISO" → "frame emitted" in the log timeline. Toggle off later.
+    {
+        CFDictionaryRef settings = SpliceKitBRAW_CopyRAWSettingsForPath(pathRef);
+        NSNumber *iso = nil;
+        if (settings && CFGetTypeID(settings) == CFDictionaryGetTypeID()) {
+            iso = ((__bridge NSDictionary *)settings)[@"iso"];
         }
+        SpliceKitBRAWTrace([NSString stringWithFormat:
+            @"[perf] decode frame=%u eye=%d %.1fms iso=%@ result=%@",
+            frameIndex, eyeIndex, elapsedMs, iso ?: @"-", result ? @"ok" : @"fail"]);
+        if (settings) CFRelease(settings);
     }
     *outWidth = w;
     *outHeight = h;

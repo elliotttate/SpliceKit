@@ -369,6 +369,7 @@ CUSTOM_TOOL_TITLES = {
     "select_clip_in_lane": "Select Clip In Lane",
     "capture_viewer": "Capture Viewer",
     "capture_timeline": "Capture Timeline",
+    "capture_inspector": "Capture Inspector",
     "export_xml": "Export FCPXML",
     "export_otio": "Export OpenTimelineIO",
     "import_otio": "Import OpenTimelineIO",
@@ -3846,6 +3847,47 @@ def capture_timeline(path: str = "/tmp/splicekit_timeline.png") -> str:
 
     if r.get("status") == "ok":
         return (f"Timeline captured: {r.get('path')}\n"
+                f"Size: {r.get('width')}x{r.get('height')} ({r.get('bytes', 0)} bytes)")
+    return _fmt(r)
+
+
+# ============================================================
+# Capture Inspector Screenshot
+# ============================================================
+
+@mcp.tool(annotations=_tool_annotations("capture_inspector"))
+def capture_inspector(path: str = "/tmp/splicekit_inspector.png", class_name: str = "") -> str:
+    """Capture the FCP Inspector pane as a PNG screenshot.
+
+    Crops the Inspector area from the FCP window. Searches the view hierarchy
+    for one of FCP's known inspector root view classes (FFInspectorRootStackView,
+    FFInspectorRootOutlineView, FFInspectorOutlineView, etc.) and captures the
+    largest matching view.
+
+    Use after applying or modifying an effect on the selected clip to visually
+    verify what parameters appear, their values, and custom UI views (e.g.
+    FxPlug 4 custom parameter views).
+
+    Args:
+        path: Output file path for the PNG image.
+              Default: /tmp/splicekit_inspector.png
+        class_name: Optional override — search for a specific NSView subclass
+              instead of the default candidate list.
+
+    Returns the file path, image dimensions, file size, and the matched class.
+    The saved PNG can be read by Claude to visually verify Inspector contents.
+    """
+    kwargs = {"path": path}
+    if class_name:
+        kwargs["class_name"] = class_name
+    r = bridge.call("inspector.capture", **kwargs)
+    if _err(r):
+        return f"Error: {r.get('error', r)}"
+
+    if r.get("status") == "ok":
+        matched = r.get("matchedClass", "(full window fallback)")
+        return (f"Inspector captured: {r.get('path')}\n"
+                f"Matched class: {matched}\n"
                 f"Size: {r.get('width')}x{r.get('height')} ({r.get('bytes', 0)} bytes)")
     return _fmt(r)
 
