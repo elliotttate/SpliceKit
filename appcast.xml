@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.1.151</title>
+      <sparkle:version>3.1.151</sparkle:version>
+      <sparkle:shortVersionString>3.1.151</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Fri, 17 Apr 2026 02:25:34 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.1.151</h2>
+        <p>Fix missing BRAW support on fresh installs. The patcher was shipping only the SpliceKit framework dylib — the VideoToolbox decoder and MediaToolbox format-reader bundles that actually register .braw with Final Cut Pro were never getting installed. Drag-and-drop and Import Media now work out of the box on every machine.</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.151/SpliceKit-v3.1.151.dmg"
+        sparkle:edSignature="eQ00IPGg9L/+aB9Xpuu24cTS0hGuFoUD5C+WIF+zimT5cgngIfqseWh40GYSZLdNO+ojlRJKWEoBC7oq/Yo/DQ=="
+        length="19291117"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.1.150</title>
       <sparkle:version>3.1.150</sparkle:version>
       <sparkle:shortVersionString>3.1.150</sparkle:shortVersionString>
