@@ -75,6 +75,17 @@ Working assumption: the remaining registration proof point must be checked from 
   - `GetISOList` must be queried and the incoming slider value snapped to the nearest supported ISO before `SetFrameAttribute(ISO, ...)`
 - Tone-curve controls required range clamping:
   - `contrast` and `shadows` were being rejected until the value was clamped against `GetClipAttributeRange(...)`
+- Tone-curve controls also required a full custom-gamma bundle, not just the four user-facing clip attributes:
+  - the SDK accepts `toneCurveContrast`, `toneCurveSaturation`, `toneCurveHighlights`, and `toneCurveShadows`, but leaving gamma on the camera/default curve still produced no visible output change
+  - the working path is:
+    - query `IBlackmagicRawToneCurve` from the live codec object
+    - use the current camera type + current gamma + color-science gen to fetch the baseline tone-curve tuple
+    - switch clip gamma to `Blackmagic Design Custom`
+    - seed `midpoint`, `blackLevel`, `whiteLevel`, and `videoBlackLevel` from the queried defaults
+    - then apply the user’s `saturation`, `contrast`, `highlights`, and `shadows` overrides on top
+  - after that change, `capture_viewer` diffs from live FCP confirmed that:
+    - `saturation` and `contrast` now visibly affect the image
+    - `highlights` and `shadows` now visibly affect the image
 
 ### Diagnostics caveats
 

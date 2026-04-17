@@ -241,7 +241,8 @@ static BOOL SpliceKitBRAWIsClipPath(NSString *path) {
     return [[path.pathExtension lowercaseString] isEqualToString:@"braw"];
 }
 
-static void SpliceKitBRAWHostInvalidateEntryAsync(NSString *path);
+static int kSpliceKitBRAWWorkQueueSpecificKey = 0;
+static void SpliceKitBRAWHostInvalidateEntry(NSString *path);
 
 static NSLock *SpliceKitBRAWRAWSettingsLock(void) {
     static NSLock *lock;
@@ -281,7 +282,7 @@ SPLICEKIT_BRAW_EXTERN_C void SpliceKitBRAW_SetRAWSettingsForPath(CFStringRef pat
     SpliceKitBRAWTrace([NSString stringWithFormat:@"[raw-settings-cache] %@ %@",
                         sanitized.count > 0 ? @"store" : @"clear",
                         path]);
-    SpliceKitBRAWHostInvalidateEntryAsync(path);
+    SpliceKitBRAWHostInvalidateEntry(path);
 }
 
 SPLICEKIT_BRAW_EXTERN_C CFDictionaryRef SpliceKitBRAW_CopyRAWSettingsForPath(CFStringRef pathRef) {
@@ -3103,6 +3104,48 @@ static NSString *SpliceKitBRAWCopyClipStringAttribute(IBlackmagicRawClipProcessi
     return result;
 }
 
+static BOOL SpliceKitBRAWCopyClipUInt16Attribute(IBlackmagicRawClipProcessingAttributes *attributes,
+                                                 BlackmagicRawClipProcessingAttribute attribute,
+                                                 uint16_t *outValue)
+{
+    if (!attributes || !outValue) return NO;
+
+    Variant value = {};
+    if (VariantInit(&value) != S_OK) return NO;
+
+    BOOL success = NO;
+    if (attributes->GetClipAttribute(attribute, &value) == S_OK) {
+        switch (value.vt) {
+            case blackmagicRawVariantTypeU8:
+            case blackmagicRawVariantTypeU16:
+                *outValue = value.uiVal;
+                success = YES;
+                break;
+            case blackmagicRawVariantTypeU32:
+                *outValue = (uint16_t)MIN(value.uintVal, (uint32_t)UINT16_MAX);
+                success = YES;
+                break;
+            default:
+                break;
+        }
+    }
+
+    VariantClear(&value);
+    return success;
+}
+
+struct SpliceKitBRAWToneCurveDefaults {
+    BOOL valid { NO };
+    float contrast { 1.0f };
+    float saturation { 1.0f };
+    float midpoint { 0.0f };
+    float highlights { 0.0f };
+    float shadows { 0.0f };
+    float blackLevel { 0.0f };
+    float whiteLevel { 1.0f };
+    uint16_t videoBlackLevel { 0 };
+};
+
 static BOOL SpliceKitBRAWSetClipStringAttribute(IBlackmagicRawClipProcessingAttributes *attributes,
                                                 BlackmagicRawClipProcessingAttribute attribute,
                                                 NSString *stringValue,
@@ -3134,13 +3177,154 @@ static BOOL SpliceKitBRAWSetClipStringAttribute(IBlackmagicRawClipProcessingAttr
     return NO;
 }
 
+static BOOL SpliceKitBRAWSetClipUInt16Attribute(IBlackmagicRawClipProcessingAttributes *attributes,
+                                                BlackmagicRawClipProcessingAttribute attribute,
+                                                uint16_t rawValue,
+                                                NSString *key,
+                                                NSString *path)
+{
+    if (!attributes) return NO;
+
+    Variant value = {};
+    Variant minimum = {};
+    Variant maximum = {};
+    if (VariantInit(&value) != S_OK || VariantInit(&minimum) != S_OK || VariantInit(&maximum) != S_OK) {
+        VariantClear(&value);
+        VariantClear(&minimum);
+        VariantClear(&maximum);
+        return NO;
+    }
+
+    bool readOnly = false;
+    BOOL applied = NO;
+    HRESULT getHR = attributes->GetClipAttribute(attribute, &value);
+    HRESULT setHR = E_FAIL;
+    HRESULT rangeHR = attributes->GetClipAttributeRange(attribute, &minimum, &maximum, &readOnly);
+    if (getHR == S_OK && !readOnly) {
+        switch (value.vt) {
+            case blackmagicRawVariantTypeU8:
+            case blackmagicRawVariantTypeU16:
+                value.uiVal = rawValue;
+                break;
+            case blackmagicRawVariantTypeU32:
+                value.uintVal = rawValue;
+                break;
+            default:
+                goto cleanup;
+        }
+        if (rangeHR == S_OK) {
+            SpliceKitBRAWClampVariantToRange(&value, &minimum, &maximum);
+        }
+        setHR = attributes->SetClipAttribute(attribute, &value);
+        applied = (setHR == S_OK);
+    }
+
+cleanup:
+    VariantClear(&value);
+    VariantClear(&minimum);
+    VariantClear(&maximum);
+
+    if (applied) {
+        SpliceKitBRAWTrace([NSString stringWithFormat:@"[raw-settings-apply] clip %@ %@=%u",
+                            path ?: @"<unknown>",
+                            key ?: @"<unknown>",
+                            (unsigned int)rawValue]);
+    } else {
+        SpliceKitBRAWTrace([NSString stringWithFormat:@"[raw-settings-apply] clip-failed %@ %@=%u getHR=%@ rangeHR=%@ readOnly=%d setHR=%@",
+                            path ?: @"<unknown>",
+                            key ?: @"<unknown>",
+                            (unsigned int)rawValue,
+                            SpliceKitBRAWHRESULTString(getHR),
+                            SpliceKitBRAWHRESULTString(rangeHR),
+                            readOnly ? 1 : 0,
+                            SpliceKitBRAWHRESULTString(setHR)]);
+    }
+    return applied;
+}
+
 static BOOL SpliceKitBRAWToneCurveValueNeedsOverride(NSNumber *number, double neutralValue)
 {
     if (!number) return NO;
     return fabs(number.doubleValue - neutralValue) > 0.001;
 }
 
-static void SpliceKitBRAWEnsureToneCurveModeIfNeeded(IBlackmagicRawClipProcessingAttributes *attributes,
+static SpliceKitBRAWToneCurveDefaults SpliceKitBRAWQueryToneCurveDefaults(IBlackmagicRaw *codec,
+                                                                          IBlackmagicRawClip *clip,
+                                                                          IBlackmagicRawClipProcessingAttributes *attributes,
+                                                                          NSString *baseGamma,
+                                                                          NSString *path)
+{
+    SpliceKitBRAWToneCurveDefaults defaults;
+    if (!codec || !clip || !attributes || baseGamma.length == 0) {
+        return defaults;
+    }
+
+    IBlackmagicRawToneCurve *toneCurve = nullptr;
+    HRESULT interfaceHR = codec->QueryInterface(IID_IBlackmagicRawToneCurve, (LPVOID *)&toneCurve);
+    if (interfaceHR != S_OK || !toneCurve) {
+        SpliceKitBRAWTrace([NSString stringWithFormat:@"[raw-settings-apply] clip %@ tonecurve-defaults toneCurveUnavailable hr=%@",
+                            path ?: @"<unknown>",
+                            SpliceKitBRAWHRESULTString(interfaceHR)]);
+        return defaults;
+    }
+
+    uint16_t colorScienceGen = 0;
+    SpliceKitBRAWCopyClipUInt16Attribute(attributes,
+                                         blackmagicRawClipProcessingAttributeColorScienceGen,
+                                         &colorScienceGen);
+
+    CFStringRef cameraTypeRef = nullptr;
+    NSString *cameraType = nil;
+    if (clip->GetCameraType(&cameraTypeRef) == S_OK && cameraTypeRef) {
+        cameraType = [(__bridge NSString *)cameraTypeRef copy];
+        CFRelease(cameraTypeRef);
+    }
+
+    HRESULT toneHR = toneCurve->GetToneCurve((__bridge CFStringRef)(cameraType ?: @""),
+                                             (__bridge CFStringRef)baseGamma,
+                                             colorScienceGen,
+                                             &defaults.contrast,
+                                             &defaults.saturation,
+                                             &defaults.midpoint,
+                                             &defaults.highlights,
+                                             &defaults.shadows,
+                                             &defaults.blackLevel,
+                                             &defaults.whiteLevel,
+                                             &defaults.videoBlackLevel);
+    toneCurve->Release();
+
+    if (toneHR == S_OK) {
+        defaults.valid = YES;
+        SpliceKitBRAWTrace([NSString stringWithFormat:
+                            @"[raw-settings-apply] clip %@ tonecurve-defaults camera=%@ gamma=%@ gen=%u contrast=%g saturation=%g midpoint=%g highlights=%g shadows=%g black=%g white=%g videoBlack=%u",
+                            path ?: @"<unknown>",
+                            cameraType ?: @"<nil>",
+                            baseGamma,
+                            (unsigned int)colorScienceGen,
+                            defaults.contrast,
+                            defaults.saturation,
+                            defaults.midpoint,
+                            defaults.highlights,
+                            defaults.shadows,
+                            defaults.blackLevel,
+                            defaults.whiteLevel,
+                            (unsigned int)defaults.videoBlackLevel]);
+    } else {
+        SpliceKitBRAWTrace([NSString stringWithFormat:
+                            @"[raw-settings-apply] clip %@ tonecurve-defaults failed camera=%@ gamma=%@ gen=%u hr=%@",
+                            path ?: @"<unknown>",
+                            cameraType ?: @"<nil>",
+                            baseGamma,
+                            (unsigned int)colorScienceGen,
+                            SpliceKitBRAWHRESULTString(toneHR)]);
+    }
+
+    return defaults;
+}
+
+static void SpliceKitBRAWEnsureToneCurveModeIfNeeded(IBlackmagicRaw *codec,
+                                                     IBlackmagicRawClip *clip,
+                                                     IBlackmagicRawClipProcessingAttributes *attributes,
                                                      NSNumber *saturation,
                                                      NSNumber *contrast,
                                                      NSNumber *highlights,
@@ -3170,14 +3354,8 @@ static void SpliceKitBRAWEnsureToneCurveModeIfNeeded(IBlackmagicRawClipProcessin
     ]];
     BOOL gammaSupported = gamma.length > 0 && [supportedGammaNames containsObject:gamma];
     BOOL gamutSupported = [gamut isEqualToString:@"Blackmagic Design"];
+    NSString *baseGamma = gammaSupported ? gamma : @"Blackmagic Design Film";
 
-    if (!gammaSupported) {
-        SpliceKitBRAWSetClipStringAttribute(attributes,
-                                            blackmagicRawClipProcessingAttributeGamma,
-                                            @"Blackmagic Design Custom",
-                                            @"gamma",
-                                            path);
-    }
     if (!gamutSupported) {
         SpliceKitBRAWSetClipStringAttribute(attributes,
                                             blackmagicRawClipProcessingAttributeGamut,
@@ -3185,9 +3363,64 @@ static void SpliceKitBRAWEnsureToneCurveModeIfNeeded(IBlackmagicRawClipProcessin
                                             @"gamut",
                                             path);
     }
+
+    SpliceKitBRAWToneCurveDefaults defaults =
+        SpliceKitBRAWQueryToneCurveDefaults(codec, clip, attributes, baseGamma, path);
+
+    if (![gamma isEqualToString:@"Blackmagic Design Custom"]) {
+        SpliceKitBRAWSetClipStringAttribute(attributes,
+                                            blackmagicRawClipProcessingAttributeGamma,
+                                            @"Blackmagic Design Custom",
+                                            @"gamma",
+                                            path);
+    }
+
+    if (defaults.valid) {
+        SpliceKitBRAWApplyClipSetting(attributes,
+                                      blackmagicRawClipProcessingAttributeToneCurveContrast,
+                                      @(defaults.contrast),
+                                      @"toneCurveDefaultContrast",
+                                      path);
+        SpliceKitBRAWApplyClipSetting(attributes,
+                                      blackmagicRawClipProcessingAttributeToneCurveSaturation,
+                                      @(defaults.saturation),
+                                      @"toneCurveDefaultSaturation",
+                                      path);
+        SpliceKitBRAWApplyClipSetting(attributes,
+                                      blackmagicRawClipProcessingAttributeToneCurveMidpoint,
+                                      @(defaults.midpoint),
+                                      @"toneCurveDefaultMidpoint",
+                                      path);
+        SpliceKitBRAWApplyClipSetting(attributes,
+                                      blackmagicRawClipProcessingAttributeToneCurveHighlights,
+                                      @(defaults.highlights),
+                                      @"toneCurveDefaultHighlights",
+                                      path);
+        SpliceKitBRAWApplyClipSetting(attributes,
+                                      blackmagicRawClipProcessingAttributeToneCurveShadows,
+                                      @(defaults.shadows),
+                                      @"toneCurveDefaultShadows",
+                                      path);
+        SpliceKitBRAWApplyClipSetting(attributes,
+                                      blackmagicRawClipProcessingAttributeToneCurveBlackLevel,
+                                      @(defaults.blackLevel),
+                                      @"toneCurveDefaultBlackLevel",
+                                      path);
+        SpliceKitBRAWApplyClipSetting(attributes,
+                                      blackmagicRawClipProcessingAttributeToneCurveWhiteLevel,
+                                      @(defaults.whiteLevel),
+                                      @"toneCurveDefaultWhiteLevel",
+                                      path);
+        SpliceKitBRAWSetClipUInt16Attribute(attributes,
+                                            blackmagicRawClipProcessingAttributeToneCurveVideoBlackLevel,
+                                            defaults.videoBlackLevel,
+                                            @"toneCurveDefaultVideoBlackLevel",
+                                            path);
+    }
 }
 
-static IBlackmagicRawClipProcessingAttributes *SpliceKitBRAWCreateClipProcessingOverride(IBlackmagicRawClip *clip,
+static IBlackmagicRawClipProcessingAttributes *SpliceKitBRAWCreateClipProcessingOverride(IBlackmagicRaw *codec,
+                                                                                          IBlackmagicRawClip *clip,
                                                                                           CFDictionaryRef settingsRef,
                                                                                           NSString *path)
 {
@@ -3208,7 +3441,9 @@ static IBlackmagicRawClipProcessingAttributes *SpliceKitBRAWCreateClipProcessing
         return nullptr;
     }
 
-    SpliceKitBRAWEnsureToneCurveModeIfNeeded(attributes,
+    SpliceKitBRAWEnsureToneCurveModeIfNeeded(codec,
+                                             clip,
+                                             attributes,
                                              saturation,
                                              contrast,
                                              highlights,
@@ -3750,20 +3985,36 @@ static dispatch_queue_t SpliceKitBRAWWorkQueue(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         queue = dispatch_queue_create("com.splicekit.braw.work", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_set_specific(queue,
+                                    &kSpliceKitBRAWWorkQueueSpecificKey,
+                                    &kSpliceKitBRAWWorkQueueSpecificKey,
+                                    NULL);
     });
     return queue;
 }
 
-static void SpliceKitBRAWHostInvalidateEntryAsync(NSString *path) {
+static void SpliceKitBRAWHostInvalidateEntryNow(NSString *path) {
     if (path.length == 0) return;
+    [SpliceKitBRAWHostClipLock() lock];
+    BOOL hasEntry = (SpliceKitBRAWHostClipMap()[path] != nil);
+    [SpliceKitBRAWHostClipLock() unlock];
+    if (!hasEntry) return;
+    SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] invalidating clip %@", path]);
+    SpliceKitBRAWHostReleaseEntry(path);
+}
+
+static void SpliceKitBRAWHostInvalidateEntry(NSString *path) {
+    if (path.length == 0) return;
+
+    dispatch_queue_t queue = SpliceKitBRAWWorkQueue();
     NSString *pathCopy = [path copy];
-    dispatch_async(SpliceKitBRAWWorkQueue(), ^{
-        [SpliceKitBRAWHostClipLock() lock];
-        BOOL hasEntry = (SpliceKitBRAWHostClipMap()[pathCopy] != nil);
-        [SpliceKitBRAWHostClipLock() unlock];
-        if (!hasEntry) return;
-        SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] invalidating clip %@", pathCopy]);
-        SpliceKitBRAWHostReleaseEntry(pathCopy);
+    if (dispatch_get_specific(&kSpliceKitBRAWWorkQueueSpecificKey)) {
+        SpliceKitBRAWHostInvalidateEntryNow(pathCopy);
+        return;
+    }
+
+    dispatch_sync(queue, ^{
+        SpliceKitBRAWHostInvalidateEntryNow(pathCopy);
     });
 }
 
@@ -3771,7 +4022,10 @@ static bool SpliceKitBRAWRunDecodeJob(SpliceKitBRAWHostClipEntry *entry,
                                       SpliceKitBRAWHostDecodeContext &ctx,
                                       uint32_t frameIndex,
                                       int eyeIndex /* -1 = monoscopic */) {
-    ctx.clipProcessingAttributes = SpliceKitBRAWCreateClipProcessingOverride(entry->clip, ctx.rawSettings, entry->path);
+    ctx.clipProcessingAttributes = SpliceKitBRAWCreateClipProcessingOverride(entry->codec,
+                                                                             entry->clip,
+                                                                             ctx.rawSettings,
+                                                                             entry->path);
     auto releaseClipProcessingOverride = [&ctx]() {
         if (ctx.clipProcessingAttributes) {
             ctx.clipProcessingAttributes->Release();

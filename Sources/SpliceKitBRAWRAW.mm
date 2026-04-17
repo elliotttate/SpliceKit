@@ -49,6 +49,7 @@ void SpliceKit_registerPluginMethod(NSString *method,
                                     SpliceKitMethodHandler handler,
                                     NSDictionary *metadata);
 void SpliceKitBRAW_SetRAWSettingsForPath(CFStringRef pathRef, CFDictionaryRef settingsRef);
+id SpliceKit_getActiveTimelineModule(void);
 }
 
 static NSString *const kSpliceKitBRAWRAWEnabledDefault = @"SpliceKitEnableBRAWRAWControls";
@@ -499,6 +500,9 @@ static IMP sSpliceKitBRAWRAWOriginalClipControllerAddTiles = NULL;
 // processor registered, VTRAWProcessingSessionCreate fails and the controller
 static IMP sSpliceKitBRAWRAWOriginalControllerInit = NULL;
 static IMP sSpliceKitBRAWRAWOriginalSetProcessingParam = NULL;
+static void SpliceKitBRAWRAWPostAssetChangeNotification(id asset, NSInteger changeType);
+static void SpliceKitBRAWRAWInvalidateAssetSourceRange(id asset);
+static void SpliceKitBRAWRAWForceActiveSequenceContextRefresh(void);
 
 static BOOL SpliceKitBRAWRAWSetProcessingParamOverride(id self, SEL _cmd, id value, id key) {
     if (sSpliceKitBRAWRAWOriginalSetProcessingParam) {
@@ -530,9 +534,20 @@ static BOOL SpliceKitBRAWRAWSetProcessingParamOverride(id self, SEL _cmd, id val
                 threadDictionary[kSpliceKitBRAWRAWSessionWritebackGuardKey] = @YES;
                 @try {
                     ((void (*)(id, SEL, id))objc_msgSend)(asset, @selector(setRawProcessorSettings:), mergedSettings);
-                    if ([asset respondsToSelector:@selector(invalidate)]) {
-                        ((void (*)(id, SEL))objc_msgSend)(asset, @selector(invalidate));
+                    // Match the private generic VT RAW flow as closely as
+                    // possible: set rawProcessorSettings, then invalidate the
+                    // asset's RAW provider state so the viewer/browser pulls a
+                    // fresh frame immediately.
+                    if ([asset respondsToSelector:@selector(invalidateRAWSettings)]) {
+                        ((void (*)(id, SEL))objc_msgSend)(asset, @selector(invalidateRAWSettings));
+                    } else {
+                        SpliceKitBRAWRAWPostAssetChangeNotification(asset, 2);
+                        SpliceKitBRAWRAWInvalidateAssetSourceRange(asset);
+                        if ([asset respondsToSelector:@selector(invalidate)]) {
+                            ((void (*)(id, SEL))objc_msgSend)(asset, @selector(invalidate));
+                        }
                     }
+                    SpliceKitBRAWRAWForceActiveSequenceContextRefresh();
                 } @catch (__unused NSException *e) {
                 } @finally {
                     [threadDictionary removeObjectForKey:kSpliceKitBRAWRAWSessionWritebackGuardKey];
@@ -556,6 +571,56 @@ static CFStringRef SpliceKitBRAWRAWVTKey(const char *symbolName) {
 static NSString *SpliceKitBRAWRAWVTKeyStr(const char *symbolName) {
     CFStringRef cf = SpliceKitBRAWRAWVTKey(symbolName);
     return cf ? (__bridge NSString *)cf : nil;
+}
+
+static NSString *SpliceKitBRAWRAWGlobalString(const char *symbolName) {
+    CFStringRef cf = SpliceKitBRAWRAWVTKey(symbolName);
+    return cf ? (__bridge NSString *)cf : nil;
+}
+
+static void SpliceKitBRAWRAWPostAssetChangeNotification(id asset, NSInteger changeType) {
+    if (!asset) return;
+
+    Class notificationCenterClass = objc_getClass("FFNotificationCenter");
+    if (!notificationCenterClass) return;
+
+    NSString *name = SpliceKitBRAWRAWGlobalString("FFAssetChangeNotification");
+    NSString *typeKey = SpliceKitBRAWRAWGlobalString("FFAssetChangeNotificationTypeKey");
+    if (name.length == 0 || typeKey.length == 0) return;
+
+    SEL postSel = @selector(postNotificationName:object:userInfo:);
+    if (![notificationCenterClass respondsToSelector:postSel]) return;
+
+    NSDictionary *userInfo = @{ typeKey: @(changeType) };
+    ((void (*)(id, SEL, id, id, id))objc_msgSend)(notificationCenterClass,
+                                                   postSel,
+                                                   name,
+                                                   asset,
+                                                   userInfo);
+}
+
+static void SpliceKitBRAWRAWInvalidateAssetSourceRange(id asset) {
+    SEL invalidateSel = NSSelectorFromString(@"invalidateSourceRange:");
+    if (!asset || ![asset respondsToSelector:invalidateSel]) return;
+
+    CMTimeRange fullRange = CMTimeRangeMake(kCMTimeZero, kCMTimePositiveInfinity);
+    ((void (*)(id, SEL, CMTimeRange))objc_msgSend)(asset, invalidateSel, fullRange);
+}
+
+static id SpliceKitBRAWRAWCurrentSequence(void) {
+    id timelineModule = SpliceKit_getActiveTimelineModule();
+    if (!timelineModule) return nil;
+
+    SEL sequenceSel = NSSelectorFromString(@"sequence");
+    if (![timelineModule respondsToSelector:sequenceSel]) return nil;
+    return ((id (*)(id, SEL))objc_msgSend)(timelineModule, sequenceSel);
+}
+
+static void SpliceKitBRAWRAWForceActiveSequenceContextRefresh(void) {
+    id sequence = SpliceKitBRAWRAWCurrentSequence();
+    SEL forceSel = NSSelectorFromString(@"forcePlayerContextChangeForSequence");
+    if (!sequence || ![sequence respondsToSelector:forceSel]) return;
+    ((void (*)(id, SEL))objc_msgSend)(sequence, forceSel);
 }
 
 static id SpliceKitBRAWRAWControllerInitOverride(id self, SEL _cmd, id source, id settings, id asset) {
