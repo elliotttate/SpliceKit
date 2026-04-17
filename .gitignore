@@ -54,3 +54,7 @@ ida_export/
 
 # Local scratch/test binaries and artifacts
 out/
+
+# Local dev artifacts (not part of any release)
+.playwright-mcp/
+edit-helper.yml
