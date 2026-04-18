@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.2.04</title>
+      <sparkle:version>3.2.04</sparkle:version>
+      <sparkle:shortVersionString>3.2.04</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sat, 18 Apr 2026 03:52:34 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.2.04</h2>
+        <p>**LiveCam** — native webcam booth that records direct to your Library or active timeline without leaving Final Cut Pro. Live preview with looks, color/exposure/contrast/saturation/temperature/sharpness/glow adjustments, audio meter, mirror, date/time stamp overlay, and Library / Timeline placement (Append, At Playhead, or Connected Above). **Subject-lift green screen** uses Visions VNGenerateForegroundInstanceMaskRequest (macOS 14+) for a tight, edge-aware matte that works on people *and* objects, with a custom Metal pipeline that runs joint-bilateral edge refinement, signed choke, temporal smoothing, spill suppression, and light wrap every frame; falls back to person segmentation on macOS 12-13. **Transparent recording** — pick "Transparent" as the green-screen color and LiveCam writes ProRes 4444 with a real alpha plane via CIRenderDestination + kVTCompressionPropertyKey_AlphaChannelMode, so the clip drops onto your timeline ready to composite without an external keyer. Open via the LiveCam toolbar button, the Enhancements menu, the Command Palette, or liveCam.show / open_livecam. **URL import** now auto-discovers yt-dlp and ffmpeg from your login shell PATH and symlinks them into the SpliceKit tools dir at install time, so Homebrew installs work without `make url-import-tools`. Also fixes scroll dead space in the Captions panel.</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.04/SpliceKit-v3.2.04.dmg"
+        sparkle:edSignature="cP/+Nldm4Otu/5w1CRjVJxZRlC4LUYgE5o3RL6QtxPxD8XnHAu2kOjcWlYN6RMwCK+1va2g2qQ0HMozWAIKeDw=="
+        length="20851967"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.2.03</title>
       <sparkle:version>3.2.03</sparkle:version>
       <sparkle:shortVersionString>3.2.03</sparkle:shortVersionString>
