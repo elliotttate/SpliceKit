@@ -32,6 +32,15 @@
 
 NSNotificationName const SpliceKitCaptionDidGenerateNotification = @"SpliceKitCaptionDidGenerate";
 
+// Flipped document view so NSScrollView shows content top-down. Without this, an
+// unflipped doc view's origin is at the bottom-left and the scroll view can show
+// dead space above anchored-to-top content.
+@interface SpliceKitCaptionPanelDocView : NSView
+@end
+@implementation SpliceKitCaptionPanelDocView
+- (BOOL)isFlipped { return YES; }
+@end
+
 // Forward declare properties for panel UI
 @interface SpliceKitCaptionPanel ()
 @property (nonatomic, strong) NSTextField *statusLabel;
@@ -737,9 +746,11 @@ static void SpliceKit_installDragSpy(void) {
     scrollView.hasHorizontalScroller = NO;
     scrollView.borderType = NSNoBorder;
     scrollView.drawsBackground = NO;
+    scrollView.automaticallyAdjustsContentInsets = NO;
+    scrollView.contentInsets = NSEdgeInsetsZero;
     [content addSubview:scrollView];
 
-    NSView *docView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 460, 900)];
+    NSView *docView = [[SpliceKitCaptionPanelDocView alloc] initWithFrame:NSMakeRect(0, 0, 460, 0)];
     docView.translatesAutoresizingMaskIntoConstraints = NO;
     scrollView.documentView = docView;
 
@@ -1102,10 +1113,25 @@ static void SpliceKit_installDragSpy(void) {
         [self.exportSRTButton.trailingAnchor constraintEqualToAnchor:self.exportTXTButton.leadingAnchor constant:-4],
     ]];
 
-    // Bottom constraint for scrollable doc view
-    [self.transcribeButton.bottomAnchor constraintLessThanOrEqualToAnchor:docView.bottomAnchor constant:-pad].active = YES;
+    // Bottom constraint for scrollable doc view — Equal (not LessThanOrEqual) so docView's
+    // height collapses to fit content. Without this, docView keeps its initial 900pt frame
+    // and the scroll view ends up with dead space above the Style row.
+    [self.transcribeButton.bottomAnchor constraintEqualToAnchor:docView.bottomAnchor constant:-pad].active = YES;
 
     [self syncUIFromStyle];
+
+    // Size the panel to the natural content height. Without this the initial
+    // 680pt frame leaves ~120pt of dead space below the action buttons, and
+    // nothing caps how much larger the user can grow it.
+    [content layoutSubtreeIfNeeded];
+    CGFloat docHeight = docView.fittingSize.height;
+    if (docHeight > 0) {
+        CGFloat totalContentHeight = docHeight + 28.0; // status bar is 28pt
+        NSSize minSize = NSMakeSize(400, totalContentHeight);
+        self.panel.contentMinSize = minSize;
+        self.panel.contentMaxSize = NSMakeSize(CGFLOAT_MAX, totalContentHeight);
+        [self.panel setContentSize:NSMakeSize(self.panel.contentView.frame.size.width, totalContentHeight)];
+    }
 }
 
 #pragma mark - UI Helpers
