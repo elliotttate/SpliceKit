@@ -1,13 +1,11 @@
 # SpliceKit
 
-### Final Cut Pro, Unlocked.
-
 [![Release](https://img.shields.io/github/v/release/elliotttate/SpliceKit)](https://github.com/elliotttate/SpliceKit/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-FCP%20Cafe-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/HD3FPc4Azu)
 [![Docs](https://img.shields.io/badge/docs-splicekit.fcp.cafe-0A84FF)](https://splicekit.fcp.cafe)
 
-**SpliceKit turns Final Cut Pro into a programmable, pluggable video editor — with a Command Palette, an MCP server, and an open plugin framework.**
+**Final Cut Pro, unlocked. A Command Palette, MCP server, and an open plugin framework to do almost anything.**
 
 | 🎹 Command Palette | 🤖 MCP Server | 🧩 Plugin Framework |
 |---|---|---|
