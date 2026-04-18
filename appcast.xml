@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.2.05</title>
+      <sparkle:version>3.2.05</sparkle:version>
+      <sparkle:shortVersionString>3.2.05</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sat, 18 Apr 2026 21:38:01 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.2.05</h2>
+        <p>**MKV / WebM imports** — drop .mkv or .webm files onto Final Cut and SpliceKit generates a shadow MP4 remux on the fly so FCP sees a native container while the original file stays untouched on disk. **Highest Quality toggle for URL imports** — new checkbox in the Import URL dialog fetches the highest available resolution from YouTube / Vimeo (1080p, 1440p, or 4K via VP9 / AV1) instead of YouTube's 720p progressive-mp4 cap; leave it off for the fast path. **URL import reliability** — fixes an FCPXML parse failure when downloaded filenames contain ampersands or other XML-reserved characters (e.g. 'PS5 & PS5 Pro'), replaces the misleading twin-percent progress HUD with a single smooth readout, and vertically aligns the spinner with its label. **Share Logs** — one-click upload of the latest Final Cut Pro crash log plus SpliceKit logs to filebin.net, added to the Patcher status panel. **LiveCam** mask kernel dispatch and shader-coordinate fix resolves subject-lift / green-screen edge artifacts on some machines. **BRAW** settings inspector locks to dark appearance to match FCP's other inspectors. Also points the bundled .mcp.json at the mcp-setup venv interpreter so Claude Desktop MCP works without hand-editing Python paths.</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.05/SpliceKit-v3.2.05.dmg"
+        sparkle:edSignature="rJuaiWpceKpR9f+VhyP5EYIdOSdwtr/QGXd8hbpGlz1fnai+7uwAs7HAl+gg92n3ce/HTdiZ+JSpdSMJt+XZAQ=="
+        length="21033065"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.2.04</title>
       <sparkle:version>3.2.04</sparkle:version>
       <sparkle:shortVersionString>3.2.04</sparkle:shortVersionString>
