@@ -894,10 +894,12 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
 
                 double percent = SpliceKitURLImportPercentFromLine(line);
                 if (percent >= 0.0) {
-                    double mapped = 0.08 + MIN(MAX(percent, 0.0), 100.0) / 100.0 * 0.64;
-                    if (progress && (mapped - lastMappedProgress >= 0.01 || mapped >= 0.72)) {
+                    double clamped = MIN(MAX(percent, 0.0), 100.0);
+                    double mapped = 0.08 + clamped / 100.0 * 0.64;
+                    if (progress && (mapped - lastMappedProgress >= 0.002 || mapped >= 0.72)) {
                         lastMappedProgress = mapped;
-                        progress([NSString stringWithFormat:@"Downloading %@ media...", provider ?: @"provider"],
+                        progress([NSString stringWithFormat:@"Downloading %@ media… %.1f%%",
+                                  provider ?: @"provider", clamped],
                                  mapped);
                     }
                     continue;
@@ -1485,7 +1487,8 @@ static void SpliceKitURLImportResolveProviderURL(NSString *provider,
     NSString *assetID = [NSString stringWithFormat:@"asset_%@", [uid substringToIndex:8]];
     NSString *clipName = SpliceKitURLImportEscapeXML(job.clipName ?: @"Imported Clip");
     NSString *escapedEvent = SpliceKitURLImportEscapeXML(eventName ?: @"URL Imports");
-    NSString *mediaURL = [[[NSURL fileURLWithPath:(job.normalizedPath ?: job.downloadPath)] absoluteURL] absoluteString];
+    NSString *mediaURL = SpliceKitURLImportEscapeXML(
+        [[[NSURL fileURLWithPath:(job.normalizedPath ?: job.downloadPath)] absoluteURL] absoluteString]);
     NSString *duration = mediaInfo[@"duration"] ?: @"2400/2400s";
     NSString *frameDuration = mediaInfo[@"frameDuration"] ?: @"100/2400s";
     int width = [mediaInfo[@"width"] intValue] ?: 1920;
