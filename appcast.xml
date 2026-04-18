@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.2.03</title>
+      <sparkle:version>3.2.03</sparkle:version>
+      <sparkle:shortVersionString>3.2.03</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sat, 18 Apr 2026 01:43:01 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.2.03</h2>
+        <p>**URL import workflow** — pull remote media straight into your library or timeline. Supports direct .mp4/.mov/.m4v/.webm links plus YouTube VOD URLs. Access via the Command Palette ("Import URL to Library" / "Import URL to Timeline"), Lua, or MCP (`import_url`, `import_url_status`, `cancel_import_url`). Three placement modes: import-only, insert at playhead, append to end. Async downloads with live progress, cancellation, and a clear guard against live streams. Requires `yt-dlp` and `ffmpeg` on PATH — run `brew install yt-dlp ffmpeg` and `make url-import-tools` to wire them in. Thanks to @JT-Apps (#40).</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.03/SpliceKit-v3.2.03.dmg"
+        sparkle:edSignature="2p0clSyhucodPYBi21/6y4uH5+bDpVeBtEQygGasa7Yd0aG2PK9y2BoMepCuzCadq8rHasTY8k+xF8We9h/aAQ=="
+        length="20488382"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.2.02</title>
       <sparkle:version>3.2.02</sparkle:version>
       <sparkle:shortVersionString>3.2.02</sparkle:shortVersionString>
