@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.2.07</title>
+      <sparkle:version>3.2.07</sparkle:version>
+      <sparkle:shortVersionString>3.2.07</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sun, 19 Apr 2026 05:03:06 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.2.07</h2>
+        <p>HEVC MP4s tagged hev1 (Dolby Vision iTunes rips, DV.HDR10+ WEB-DLs, and other tool-transcoded HEVC material) now import into Final Cut. Previously those files showed up as unimportable because AVFoundation / QuickTime / Final Cut only decode HEVC muxed with the hvc1 sample-entry tag. SpliceKit now detects hev1 at import time and retags the file using an APFS clonefile() COW snapshot plus a 2-byte edit to the moov box — no stream-copy remux required, no extra disk space consumed, a few seconds even on 19 GB rips. The original file on disk is untouched; only the clone is modified.</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.07/SpliceKit-v3.2.07.dmg"
+        sparkle:edSignature="Qsl3Afti9dRT9849gyBaPeLuMGiDMqYRJyii3p4pZhjOTfg8OprAK8kn4p9nT8G4pQacP31aiwdV0de3IiGZDA=="
+        length="21045532"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.2.06</title>
       <sparkle:version>3.2.06</sparkle:version>
       <sparkle:shortVersionString>3.2.06</sparkle:shortVersionString>
