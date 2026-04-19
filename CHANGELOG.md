@@ -6,6 +6,42 @@ notarization ticket, and Sparkle signature live on the
 Sparkle users are notified automatically; manual download is available from the
 same page or via `appcast.xml`.
 
+## [3.2.06] — 2026-04-19
+
+### Fixed
+- **MKV shadow-remux now handles h264, hevc, av1, prores** (and mpeg4 /
+  mpeg2video) — the previous pass only covered VP9/VP8, so typical WEB-DL
+  releases (h264 + E-AC3 + subrip) failed to import. Audio is handled
+  independently: aac/mp3/ac3/eac3/alac/pcm stream-copy, everything else
+  transcodes to AAC 192k stereo so the shadow MP4 is guaranteed playable.
+- **HEVC Main-10 10-bit MKVs are now decoded in FCP.** Apple's
+  AVFoundation/FCP only accepts HEVC with the `hvc1` sample-entry tag;
+  ffmpeg defaults to `hev1` from Matroska input, which plays in VLC but
+  refuses to open in Final Cut. We force `-tag:v hvc1` on HEVC sources.
+- **Subtitle / attachment streams no longer break the remux.** Explicit
+  `-map 0:v:0 -map 0:a:0?` replaces `-map 0`, so subrip subtitles (two per
+  episode on most WEB releases) and font attachments are dropped instead
+  of failing the MP4 mux.
+- **B-frame display order survives the CFR timestamp rewrite.** New
+  `setts` expression rewrites DTS to a clean `N·frameTicks` grid while
+  preserving each packet's source PTS–DTS offset (snapped to whole
+  frame-durations). VP9/VP8 behaviour is unchanged (offset term collapses
+  to 0); h264/hevc/av1 now keep their B-frame reordering instead of all
+  frames collapsing to `pts==dts`.
+- **Media Import "Processing files for import…" no longer stalls.** The
+  hook short-circuits for any non-`.mkv`/`.webm`/`.mka`/`.mk3d`
+  extension (previously it ran ffprobe on every file in the tree — a
+  `~/Movies/` with Motion Templates and JDownloader sub-folders meant
+  thousands of pointless probes) and uses a deterministic
+  `basename.<hash>.mp4` shadow path so re-entering the hook for the same
+  source (3–5× per Media Import row) hits the existing shadow instead of
+  respawning ffmpeg.
+
+### Changed
+- **Menu renamed from "Enhancements" to "Splices"** in Final Cut's menu
+  bar. The Debug menu-bar dropdown is no longer installed — the Debug
+  prefs pane still rebuilds, just doesn't clutter the menu bar.
+
 ## [3.2.05] — 2026-04-18
 
 ### Added
