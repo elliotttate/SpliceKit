@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		22C571CA2F95CEDE0069DAD2 /* SpliceKit.icon in Resources */ = {isa = PBXBuildFile; fileRef = 22C571C92F95CEDE0069DAD2 /* SpliceKit.icon */; };
 		22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 22D74E1E2F81FBD900A9252B /* Credits.rtf */; };
 		BB0000000000000000000001 /* SpliceKitApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* SpliceKitApp.swift */; };
 		BB0000000000000000000002 /* PatcherModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000002 /* PatcherModel.swift */; };
@@ -38,6 +39,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		22C571C92F95CEDE0069DAD2 /* SpliceKit.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = SpliceKit.icon; sourceTree = "<group>"; };
 		22D74E1E2F81FBD900A9252B /* Credits.rtf */ = {isa = PBXFileReference; lastKnownFileType = text.rtf; path = Credits.rtf; sourceTree = "<group>"; };
 		22D74E232F8235FE00A9252B /* Configuration.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration.xcconfig; sourceTree = "<group>"; };
 		AA0000000000000000000001 /* SpliceKitApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpliceKitApp.swift; sourceTree = "<group>"; };
@@ -72,6 +74,7 @@
 		22D74E212F81FDBB00A9252B /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				22C571C92F95CEDE0069DAD2 /* SpliceKit.icon */,
 				22D74E1E2F81FBD900A9252B /* Credits.rtf */,
 				AA0000000000000000000008 /* Assets.xcassets */,
 				AA0000000000000000000009 /* Info.plist */,
@@ -205,6 +208,7 @@
 			files = (
 				BB0000000000000000000008 /* Assets.xcassets in Resources */,
 				22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */,
+				22C571CA2F95CEDE0069DAD2 /* SpliceKit.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -376,12 +380,12 @@
 		220000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = SpliceKit;
 				CODE_SIGN_ENTITLEMENTS = "";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = "$(SPLICEKIT_VERSION)";
+				CURRENT_PROJECT_VERSION = 4.0.0;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "$(HARDCODED_DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -396,7 +400,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = "$(SPLICEKIT_VERSION)";
+				MARKETING_VERSION = 4.0.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -411,12 +415,12 @@
 		220000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = SpliceKit;
 				CODE_SIGN_ENTITLEMENTS = "";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = "$(SPLICEKIT_VERSION)";
+				CURRENT_PROJECT_VERSION = 4.0.0;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "$(HARDCODED_DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -431,7 +435,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = "$(SPLICEKIT_VERSION)";
+				MARKETING_VERSION = 4.0.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
