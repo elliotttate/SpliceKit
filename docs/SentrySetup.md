@@ -7,36 +7,31 @@ This repo now has Sentry reporting in two places:
 
 The runtime integration is the important one for crash coverage. Once SpliceKit loads into Final Cut Pro and initializes Sentry, crashes from that host process should be reported to the runtime project, even when the root cause is not obviously inside SpliceKit. Use the runtime tags to separate "SpliceKit probably caused this" from "FCP happened to crash while SpliceKit was loaded."
 
-## What You Need
+## Hardcoded DSN
 
-1. Create a Sentry org if you do not already have one.
-2. Create two Sentry projects:
-   - `splicekit-fcp-runtime`
-   - `splicekit-patcher`
-3. Copy each project's public DSN.
-4. Install `sentry-cli` on the machine or CI runner that executes `release.sh`.
-5. Create a Sentry auth token with permission to upload debug symbols.
+Both the patcher app and the injected runtime now use a single hardcoded DSN:
+
+```text
+https://56fa8ecde3c66d354606805ac2064c54@o4511243520966656.ingest.us.sentry.io/4511243525423104
+```
+
+There is no build-time or runtime DSN override path anymore. If you ever want to point SpliceKit at a different Sentry project, change the constant in:
+
+- `patcher/SpliceKit/Models/PatcherSentry.swift`
+- `Sources/SpliceKitSentry.m`
 
 ## Build-Time Environment Variables
 
-These values are consumed by `Scripts/generate_sentry_config.sh`, which writes `SpliceKitSentryConfig.plist` into the patcher bundle and can also generate a standalone runtime config plist for manual deployments.
+`Scripts/generate_sentry_config.sh` still writes `SpliceKitSentryConfig.plist`, but that plist now only carries non-DSN metadata.
 
-- `SPLICEKIT_SENTRY_PATCHER_DSN`
-  The DSN for the `splicekit-patcher` project.
-- `SPLICEKIT_SENTRY_RUNTIME_DSN`
-  The DSN for the `splicekit-fcp-runtime` project.
 - `SPLICEKIT_SENTRY_ENVIRONMENT`
-  Usually `development`, `staging`, or `production`. Defaults to `production`.
+  Optional. Usually `development`, `staging`, or `production`. Defaults to `production`.
 
 Example:
 
 ```bash
-export SPLICEKIT_SENTRY_PATCHER_DSN='https://<patcher-key>@o<org>.ingest.sentry.io/<project-id>'
-export SPLICEKIT_SENTRY_RUNTIME_DSN='https://<runtime-key>@o<org>.ingest.sentry.io/<project-id>'
 export SPLICEKIT_SENTRY_ENVIRONMENT='development'
 ```
-
-If a DSN is omitted, that side of the integration is disabled.
 
 ## Release-Time Environment Variables
 
@@ -66,11 +61,9 @@ export SENTRY_RUNTIME_PROJECT='splicekit-fcp-runtime'
 bash Scripts/ensure_sentry_framework.sh
 ```
 
-2. Export the DSNs and environment:
+2. Export the environment if you want something other than `production`:
 
 ```bash
-export SPLICEKIT_SENTRY_PATCHER_DSN='...'
-export SPLICEKIT_SENTRY_RUNTIME_DSN='...'
 export SPLICEKIT_SENTRY_ENVIRONMENT='development'
 ```
 
@@ -98,7 +91,7 @@ During patch/update, the patcher copies `SpliceKitSentryConfig.plist` into:
 Final Cut Pro.app/Contents/Frameworks/SpliceKit.framework/Versions/A/Resources/SpliceKitSentryConfig.plist
 ```
 
-That makes the runtime DSN available inside the injected dylib.
+That makes the runtime environment and release metadata available inside the injected dylib.
 
 ## Manual Runtime Config For `make deploy`
 
@@ -163,8 +156,6 @@ The release script now uploads both debug symbol sets:
 Run a release like this:
 
 ```bash
-export SPLICEKIT_SENTRY_PATCHER_DSN='...'
-export SPLICEKIT_SENTRY_RUNTIME_DSN='...'
 export SPLICEKIT_SENTRY_ENVIRONMENT='production'
 export SENTRY_AUTH_TOKEN='...'
 export SENTRY_ORG='your-org'
@@ -178,14 +169,14 @@ If `SENTRY_AUTH_TOKEN` or `SENTRY_ORG` is missing, the release still builds, but
 
 ### Verify the patcher side
 
-1. Build the patcher with `SPLICEKIT_SENTRY_PATCHER_DSN` set.
+1. Build the patcher.
 2. Launch the patcher outside the debugger.
 3. Trigger a known patcher error path or add a temporary `PatcherSentry.captureMessage(...)`.
 4. Confirm the event lands in `splicekit-patcher`.
 
 ### Verify the runtime side
 
-1. Build with `SPLICEKIT_SENTRY_RUNTIME_DSN` set.
+1. Build normally.
 2. Patch Final Cut Pro with the new app, or run `make deploy` after generating the standalone plist.
 3. Launch Final Cut Pro without the debugger attached.
 4. Trigger a known runtime error path or temporary `SpliceKit_sentryCaptureMessage(...)`.

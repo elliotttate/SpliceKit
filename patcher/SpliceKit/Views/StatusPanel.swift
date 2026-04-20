@@ -112,6 +112,7 @@ struct StatusPanel: View {
                     } label: {
                         Label("Launch FCP", systemImage: "play.fill")
                     }
+                    .disabled(!model.canLaunchFCP)
 
                     Button {
                         model.updateSpliceKit()
@@ -126,6 +127,7 @@ struct StatusPanel: View {
                     } label: {
                         Label("Launch FCP", systemImage: "play.fill")
                     }
+                    .disabled(!model.canLaunchFCP)
 
                     Button {
                         model.rebuildModdedApp()
@@ -140,6 +142,7 @@ struct StatusPanel: View {
                     } label: {
                         Label("Launch FCP", systemImage: "play.fill")
                     }
+                    .disabled(!model.canLaunchFCP)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                 }

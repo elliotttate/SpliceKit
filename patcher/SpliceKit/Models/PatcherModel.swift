@@ -89,6 +89,8 @@ class PatcherModel: ObservableObject {
     @Published var currentPanel: WizardPanel = .welcome
     @Published var isSharingCrashLog = false
     @Published var crashShareMessage: String?
+    @Published private(set) var isLaunchInProgress = false
+    @Published private(set) var isModdedFCPRunning = false
 
     private var launchedFCPProcess: Process?
     private var launchMonitorTask: Task<Void, Never>?
@@ -123,6 +125,14 @@ class PatcherModel: ObservableObject {
 
     /// True when sourceApp points to an existing FCP bundle (standard path or user-browsed).
     var fcpFound: Bool { FileManager.default.fileExists(atPath: sourceApp + "/Contents/Info.plist") }
+
+    var canLaunchFCP: Bool {
+        guard status != .updateAvailable else { return false }
+        guard !isPatching else { return false }
+        guard !isLaunchInProgress else { return false }
+        guard !isModdedFCPRunning else { return false }
+        return true
+    }
 
     func switchEdition(to path: String) {
         sourceApp = path
@@ -212,6 +222,37 @@ class PatcherModel: ObservableObject {
         }
     }
 
+    private func normalizedAppPath(_ path: String) -> String {
+        URL(fileURLWithPath: path)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+    }
+
+    private func syncModdedFCPRunningState() {
+        let trackedAppPath = normalizedAppPath(moddedApp)
+        let isRunning = NSWorkspace.shared.runningApplications.contains { app in
+            if let bundleURL = app.bundleURL {
+                return normalizedAppPath(bundleURL.path) == trackedAppPath
+            }
+            if let launchedFCPProcess {
+                return app.processIdentifier == launchedFCPProcess.processIdentifier
+            }
+            return false
+        }
+
+        if isModdedFCPRunning != isRunning {
+            isModdedFCPRunning = isRunning
+        }
+
+        if isRunning {
+            isLaunchInProgress = false
+        } else if launchedFCPProcess?.isRunning != true {
+            isLaunchInProgress = false
+            launchedFCPProcess = nil
+        }
+    }
+
     private func deployTools(to toolsDir: String,
                              silenceBin: String,
                              parakeetBin: String) async {
@@ -235,6 +276,8 @@ class PatcherModel: ObservableObject {
 
     /// Evaluate install state: is SpliceKit injected? Is it the current build? Is FCP up to date?
     func checkStatus() {
+        defer { syncModdedFCPRunningState() }
+
         let binary = moddedApp + "/Contents/MacOS/Final Cut Pro"
         let installedFramework = moddedApp + "/Contents/Frameworks/SpliceKit.framework"
 
@@ -297,6 +340,7 @@ class PatcherModel: ObservableObject {
         if connected != bridgeConnected {
             bridgeConnected = connected
         }
+        syncModdedFCPRunningState()
     }
 
     /// Bundle the newest Final Cut Pro crash report together with SpliceKit's
@@ -462,6 +506,8 @@ class PatcherModel: ObservableObject {
     }
 
     func launch() {
+        guard canLaunchFCP else { return }
+
         let binary = moddedApp + "/Contents/MacOS/Final Cut Pro"
         let launchTime = Date()
         let spliceKitLogURL = runtimeLogURL(named: "splicekit.log")
@@ -469,6 +515,8 @@ class PatcherModel: ObservableObject {
         let cloudContentSnapshot = configureCloudContentDefaults(for: moddedApp)
 
         launchMonitorTask?.cancel()
+        launchMonitorTask = nil
+        isLaunchInProgress = true
         appendLog("Launching modded FCP...")
         appendLog("Launch binary: \(binary)")
         appendLog("CloudContent defaults: \(cloudContentSnapshot)")
@@ -492,9 +540,14 @@ class PatcherModel: ObservableObject {
         do {
             try process.run()
             launchedFCPProcess = process
+            isModdedFCPRunning = false
+            isLaunchInProgress = true
+            syncModdedFCPRunningState()
             appendLog("Spawned Final Cut Pro pid \(process.processIdentifier)")
         } catch {
             launchedFCPProcess = nil
+            isLaunchInProgress = false
+            syncModdedFCPRunningState()
             appendLog("Failed to launch Final Cut Pro: \(error.localizedDescription)")
             PatcherSentry.capture(error: error,
                                   context: "patcher.launch",
@@ -538,6 +591,11 @@ class PatcherModel: ObservableObject {
             appendLog("Removed \(destDir)")
             status = .notInstalled
             bridgeConnected = false
+            isLaunchInProgress = false
+            isModdedFCPRunning = false
+            launchedFCPProcess = nil
+            launchMonitorTask?.cancel()
+            launchMonitorTask = nil
             currentPanel = .welcome
         } catch {
             appendLog("Error: \(error.localizedDescription)")
@@ -585,6 +643,11 @@ class PatcherModel: ObservableObject {
         shell("pkill -f 'Applications/SpliceKit' 2>/dev/null; sleep 1")
         try? FileManager.default.removeItem(atPath: moddedApp)
         bridgeConnected = false
+        isLaunchInProgress = false
+        isModdedFCPRunning = false
+        launchedFCPProcess = nil
+        launchMonitorTask?.cancel()
+        launchMonitorTask = nil
         patch()
     }
 
@@ -1295,6 +1358,7 @@ class PatcherModel: ObservableObject {
             launchMonitorTask?.cancel()
             launchMonitorTask = nil
         }
+        syncModdedFCPRunningState()
     }
 
     private nonisolated func currentSpliceKitVersion() -> String {

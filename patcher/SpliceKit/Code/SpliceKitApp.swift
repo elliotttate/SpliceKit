@@ -1,5 +1,6 @@
 import SwiftUI
 import Sparkle
+import AppKit
 
 // MARK: - Sparkle Auto-Update
 
@@ -28,6 +29,8 @@ struct CheckForUpdatesView: View {
 
 @main
 struct SpliceKitApp: App {
+    private static let helpURL = URL(string: "https://splicekit.fcp.cafe/installation/")!
+    private static let sentryCrashTestMessage = "Sentry test crash triggered from patcher menu bar"
     private let updaterController: SPUStandardUpdaterController
     @StateObject private var checkForUpdatesVM: CheckForUpdatesViewModel
     @StateObject private var model = PatcherModel()
@@ -45,6 +48,15 @@ struct SpliceKitApp: App {
         )
     }
 
+    private static func triggerSentryCrashTest() {
+        PatcherSentry.addBreadcrumb(
+            "Manual crash test triggered from menu bar",
+            category: "patcher.debug",
+            level: .error
+        )
+        fatalError(sentryCrashTestMessage)
+    }
+
     var body: some Scene {
         WindowGroup {
             WizardView(model: model)
@@ -57,6 +69,18 @@ struct SpliceKitApp: App {
                     viewModel: checkForUpdatesVM,
                     updater: updaterController.updater
                 )
+            }
+
+            CommandGroup(replacing: .help) {
+                Button("SpliceKit Help") {
+                    NSWorkspace.shared.open(Self.helpURL)
+                }
+            }
+
+            CommandMenu("Debug") {
+                Button("Crash Patcher for Sentry Test") {
+                    Self.triggerSentryCrashTest()
+                }
             }
         }
 
