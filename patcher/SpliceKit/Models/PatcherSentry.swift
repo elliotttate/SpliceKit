@@ -2,6 +2,7 @@ import Foundation
 import Sentry
 
 enum PatcherSentry {
+    private static let dsn = "https://56fa8ecde3c66d354606805ac2064c54@o4511243520966656.ingest.us.sentry.io/4511243525423104"
     nonisolated(unsafe) private static var started = false
     nonisolated(unsafe) private static var enabled = false
     nonisolated(unsafe) private static var previousRunSummary: [String: Any]?
@@ -74,23 +75,20 @@ enum PatcherSentry {
         guard !started else { return }
         started = true
 
-        guard let config = config(),
-              let dsn = config["PatcherDSN"] as? String,
-              !dsn.isEmpty else {
-            return
-        }
+        let config = config() ?? [:]
 
         let environment = (config["Environment"] as? String) ?? "production"
         let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
         let releaseName = (config["ReleaseName"] as? String) ?? "splicekit@\(version)"
 
         SentrySDK.start { options in
-            options.dsn = dsn
+            options.dsn = Self.dsn
+            options.debug = true
             options.environment = environment
             options.releaseName = releaseName
             options.dist = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String)
                 ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
-            options.sendDefaultPii = false
+            options.sendDefaultPii = true
             options.enableAutoSessionTracking = false
             options.enableNetworkBreadcrumbs = false
             options.enableNetworkTracking = false
