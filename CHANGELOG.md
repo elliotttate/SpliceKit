@@ -6,6 +6,81 @@ notarization ticket, and Sparkle signature live on the
 Sparkle users are notified automatically; manual download is available from the
 same page or via `appcast.xml`.
 
+## [3.2.09] — 2026-04-20
+
+### Added
+- **Smooth Scroll** — a new master toggle in the Splices menu (on by
+  default) that replaces Final Cut's 24/30 Hz playback-centering step
+  scroll with a proper 120 Hz display-link-driven path. The clip view
+  follows the playhead continuously instead of hopping sideways once per
+  source frame; on a ProMotion display the timeline content now actually
+  slides smoothly under a stationary playhead line during centered
+  playback. Toggle from *Splices → Smooth Scroll*, or via the
+  `timelinePerformanceMode` bridge option. Three sub-features are
+  individually exposed as bridge options for A/B:
+  - `timelinePlayheadOverlay` — draws a cosmetic playhead line at the
+    display refresh rate by extrapolating
+    `-[TLKTimelineView _setPlayheadTime_NoKVO:animate:]` samples forward
+    via `-[TLKTimelineView locationRangeForTime:]`, and pauses
+    `TLKScrollingTimeline` during playback so Apple's step-scroll doesn't
+    fight our smooth path. Clip view bounds are updated directly via
+    `setBoundsOrigin:` + `reflectScrolledClipView:` on every tick, with a
+    safety gate that falls back to overlay-only if the clip-view or
+    time-to-x mapping can't be resolved. Apple's real playhead layer is
+    hidden during playback so only one line is visible.
+  - `timelineInteractionSuspend` — observes
+    `TLKEventHandlerDid{Start,Stop}TrackingNotification` (marquee-zoom,
+    scroll-bar drag, range drag) and swizzles
+    `-[TLKTimelineHandler magnifyWithEvent:]` to cover pinch (which runs
+    its own inline event loop and never posts tracking notifications).
+    While an interaction is active, `setDisableFilmstripLayerUpdates:YES`
+    + `setSuspendLayerUpdatesForAnchoredClips:YES` +
+    `setMinThumbnailCount:0` are applied so the per-cell
+    `FFFilmstripCell` rebuild (which otherwise fails
+    `isEquivalentToFilmstripCell:` on every zoom step because
+    `timeRange`, `frame.size`, and `audioHeight` all change) goes away;
+    one coalesced `_reloadVisibleLayers` runs on tracking end. Prior
+    state is saved per-view via an ObjC-boxed associated object (ARC
+    frees it when the view deallocs).
+  - `tlkOptimizedReload` — swizzles
+    `+[TLKUserDefaults optimizedReload]` so the hidden
+    `TLKOptimizedReload` flag actually takes effect. Apple's
+    `_loadUserDefaults` in current FCP reads `TLKItemLayerContentsOperations`
+    and `TLKEnableUpdateFilmstripsForItemComponentFragments` from plist
+    but never wires the `optimizedReload` bit to any NSUserDefaults key;
+    we override the getter so the optimized ripple-adjustment skip in
+    `-[TLKLayoutManager _performHorizontalLayoutForItemsAdded:...]` is
+    reachable.
+
+### Fixed
+- **MCP bridge no longer gets poisoned by event frames.** The server's
+  default for event delivery flipped to opt-in — clients must call
+  `events.subscribe` to receive `method:"event"` frames. Previously a
+  single-socket JSON-RPC client (like the MCP bridge) could have the
+  next tool call consume an unsolicited event as its response and
+  permanently desync the socket. The Python bridge client also now
+  skips any frame that lacks a matching `id` or that carries a `method`
+  field, so stray notifications can't be consumed as responses.
+- **Async `command.completed` reports `status:"error"` for normal RPC
+  failures**, not only for ObjC exceptions. Clients no longer have to
+  peek inside the nested `result` payload to tell whether the command
+  succeeded.
+- **Per-client socket writes are now atomic AND ordered.** Every
+  connected fd has a dedicated serial `dispatch_queue_t`; both RPC
+  replies and event broadcasts route through it so bytes can't
+  interleave mid-line and events B/C can't overtake event A on the same
+  socket. Replaces the earlier mix of `fwrite`/`fflush` on the RPC path
+  with raw `write()` on the async path.
+- **Timeline overview bar now tears down its notification observers on
+  uninstall.** Block-based `addObserverForName:...usingBlock:` returns
+  opaque tokens that the previous `removeObserver:bar` call couldn't
+  reach; toggling the feature off then back on stacked duplicate
+  observers and left hidden rerenders scheduled. Tokens are now
+  captured in a single array and released explicitly.
+- **`TLKOptimizedReload` toggle no longer sticks permanently off** when
+  the first call happens to disable it (the previous `dispatch_once`
+  plus early-return ate the one-shot token).
+
 ## [3.2.07] — 2026-04-19
 
 ### Fixed
