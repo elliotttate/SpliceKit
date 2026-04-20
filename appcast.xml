@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.2.10</title>
+      <sparkle:version>3.2.10</sparkle:version>
+      <sparkle:shortVersionString>3.2.10</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 20 Apr 2026 22:36:10 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.2.10</h2>
+        <p>Smooth Scroll (Splices menu) now respects the Continuous Scrolling preference. The gate was reading a rate-derived property (keepsPlayheadCenteredDuringPlayback) that is only true during fast-forward/rewind, so normal-rate playback was silently skipping the 120Hz centered takeover and feeling jerky. Swapped to scrollDuringPlayback backed by FFScrollDuringPlaybackKey — Continuous Scrolling ON engages our smooth centered path, OFF leaves FCP native edge-tracking intact with a smooth 120Hz overlay line on top. Also fixes a first-install crash in the Overview bar where the renderer could hit a half-built collection synchronously; both entry points now defer via performSelector.</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.10/SpliceKit-v3.2.10.dmg"
+        sparkle:edSignature="94L1VrIp7ROIC2WP5N1BSzR4Uqnuqo4IsgG4TqUSyCN6+5uoyAKjZMJQB2QcuLUZf4QS01lb1S7Eh/oIcGhKCw=="
+        length="21129770"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.2.09</title>
       <sparkle:version>3.2.09</sparkle:version>
       <sparkle:shortVersionString>3.2.09</sparkle:shortVersionString>
