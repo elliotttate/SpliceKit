@@ -39,6 +39,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		2250E4252F95F8B000DA3ED6 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 		22C571C92F95CEDE0069DAD2 /* SpliceKit.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = SpliceKit.icon; sourceTree = "<group>"; };
 		22D74E1E2F81FBD900A9252B /* Credits.rtf */ = {isa = PBXFileReference; lastKnownFileType = text.rtf; path = Credits.rtf; sourceTree = "<group>"; };
 		22D74E232F8235FE00A9252B /* Configuration.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration.xcconfig; sourceTree = "<group>"; };
@@ -93,6 +94,7 @@
 		22D74E242F8235FE00A9252B /* Configuration */ = {
 			isa = PBXGroup;
 			children = (
+				2250E4252F95F8B000DA3ED6 /* Version.xcconfig */,
 				22D74E232F8235FE00A9252B /* Configuration.xcconfig */,
 			);
 			path = Configuration;
