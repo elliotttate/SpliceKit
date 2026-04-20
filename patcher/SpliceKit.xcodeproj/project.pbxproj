@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		2250E4282F95F99200DA3ED6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 2250E4272F95F99200DA3ED6 /* Sentry */; };
+		2250E42B2F95FA0000DA3ED6 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 2250E42D2F95FA0000DA3ED6 /* Sparkle */; };
 		22C571CA2F95CEDE0069DAD2 /* SpliceKit.icon in Resources */ = {isa = PBXBuildFile; fileRef = 22C571C92F95CEDE0069DAD2 /* SpliceKit.icon */; };
 		22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 22D74E1E2F81FBD900A9252B /* Credits.rtf */; };
 		BB0000000000000000000001 /* SpliceKitApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* SpliceKitApp.swift */; };
@@ -19,8 +20,6 @@
 		BB0000000000000000000007 /* LogPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000007 /* LogPanelView.swift */; };
 		BB0000000000000000000008 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000008 /* Assets.xcassets */; };
 		BB0000000000000000000009 /* ShellHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000C /* ShellHelpers.swift */; };
-		BB000000000000000000000A /* Sparkle.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000A /* Sparkle.framework */; };
-		BB000000000000000000000B /* Sparkle.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000A /* Sparkle.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		BB000000000000000000000C /* PatcherSentry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000D /* PatcherSentry.swift */; };
 /* End PBXBuildFile section */
 
@@ -31,7 +30,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				BB000000000000000000000B /* Sparkle.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -52,7 +50,6 @@
 		AA0000000000000000000007 /* LogPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogPanelView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA0000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		AA000000000000000000000A /* Sparkle.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Sparkle.framework; path = Frameworks/Sparkle.framework; sourceTree = "<group>"; };
 		AA000000000000000000000C /* ShellHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellHelpers.swift; sourceTree = "<group>"; };
 		AA000000000000000000000D /* PatcherSentry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatcherSentry.swift; sourceTree = "<group>"; };
 		FF0000000000000000000001 /* SpliceKit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpliceKit.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -63,7 +60,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BB000000000000000000000A /* Sparkle.framework in Frameworks */,
+				2250E42B2F95FA0000DA3ED6 /* Sparkle in Frameworks */,
 				2250E4282F95F99200DA3ED6 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -103,7 +100,6 @@
 			isa = PBXGroup;
 			children = (
 				CC0000000000000000000002 /* SpliceKit */,
-				AA000000000000000000000A /* Sparkle.framework */,
 				CC0000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -170,6 +166,7 @@
 			);
 			name = SpliceKit;
 			packageProductDependencies = (
+				2250E42D2F95FA0000DA3ED6 /* Sparkle */,
 				2250E4272F95F99200DA3ED6 /* Sentry */,
 			);
 			productName = SpliceKit;
@@ -196,6 +193,7 @@
 			);
 			mainGroup = CC0000000000000000000001;
 			packageReferences = (
+				2250E42C2F95FA0000DA3ED6 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				2250E4262F95F99200DA3ED6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			productRefGroup = CC0000000000000000000006 /* Products */;
@@ -395,10 +393,6 @@
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "$(HARDCODED_DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = YES;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Frameworks",
-				);
 				INFOPLIST_FILE = SpliceKit/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = SpliceKit;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
@@ -430,10 +424,6 @@
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "$(HARDCODED_DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = YES;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Frameworks",
-				);
 				INFOPLIST_FILE = SpliceKit/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = SpliceKit;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
@@ -487,6 +477,14 @@
 			traits = (
 			);
 		};
+		2250E42C2F95FA0000DA3ED6 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -494,6 +492,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 2250E4262F95F99200DA3ED6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
 			productName = Sentry;
+		};
+		2250E42D2F95FA0000DA3ED6 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2250E42C2F95FA0000DA3ED6 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
