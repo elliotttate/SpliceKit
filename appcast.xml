@@ -6,6 +6,22 @@
     <description>SpliceKit Patcher release updates</description>
     <language>en</language>
     <item>
+      <title>SpliceKit v3.2.09</title>
+      <sparkle:version>3.2.09</sparkle:version>
+      <sparkle:shortVersionString>3.2.09</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 20 Apr 2026 21:47:33 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 3.2.09</h2>
+        <p>Smooth Scroll (on by default in Splices menu). 120Hz centered-playback path replaces FCP native 24/30Hz step scroll: clip view now slides continuously under a stationary playhead line on ProMotion displays instead of hopping sideways once per source frame. Implemented via CADisplayLink-driven clipView.setBoundsOrigin + reflectScrolledClipView, with TLKScrollingTimeline paused for the duration of playback so Apple step-centering does not fight the smooth path. Filmstrip and anchored-clip layer updates are also suspended during active pinch/marquee/scrollbar drag via TLKEventHandlerDid{Start,Stop}TrackingNotification and a swizzle on TLKTimelineHandler.magnifyWithEvent - removes the cell-rebuild hitch you used to see when zooming. Apples hidden TLKOptimizedReload fast path is enabled via a getter swizzle. Fixes MCP bridge event-frame contamination (events are now opt-in; bridge client skips notifications), async command.completed now reports status:error for normal RPC failures, per-fd serial write queues keep RPC replies and events ordered without byte interleave, and the overview bar tears down its notification observers on uninstall. Toggle Smooth Scroll from Splices > Smooth Scroll or via the timelinePerformanceMode bridge option.</p>
+      ]]></description>
+      <enclosure
+        url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.09/SpliceKit-v3.2.09.dmg"
+        sparkle:edSignature="XmF5bwxrqp3ZEnGg1ijwUqufq2OCiRnL0WoThvFnsFmXn8B9C8WbtVnx7brPPf37lBUJ3nB16fDFFjX6D/AyBA=="
+        length="21129430"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>SpliceKit v3.2.08</title>
       <sparkle:version>3.2.08</sparkle:version>
       <sparkle:shortVersionString>3.2.08</sparkle:shortVersionString>
