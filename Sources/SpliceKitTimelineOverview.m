@@ -369,14 +369,6 @@ static BOOL OV_collectionIsRenderable(id collection) {
             self.cachedDuration = OV_sequenceDurationSeconds();
             self.cachedCollectionHash = (NSUInteger)collection;
             self.cachedAt = [NSDate date];
-
-            @try {
-                NSData *tiff = [img TIFFRepresentation];
-                NSBitmapImageRep *rep = [NSBitmapImageRep imageRepWithData:tiff];
-                NSData *pngData = [rep representationUsingType:NSBitmapImageFileTypePNG
-                                                    properties:@{}];
-                [pngData writeToFile:@"/tmp/splicekit_overview_debug.png" atomically:YES];
-            } @catch (NSException *dumpEx) {}
         }
     } @catch (NSException *e) {
         SpliceKit_log(@"[Overview] render exception: %@", e.reason ?: e.description);
@@ -997,21 +989,18 @@ void SpliceKit_installTimelineOverviewBar(void) {
         [[NSNotificationCenter defaultCenter] addObserverForName:NSViewFrameDidChangeNotification
             object:scrollView queue:nil usingBlock:^(NSNotification *n) {
             OV_repositionPanel();
-            [[SpliceKitTimelineOverviewView shared] invalidateImageCache];
-            [[SpliceKitTimelineOverviewView shared] rerenderIfNeeded];
+            OV_scheduleRerender();
         }];
         [[NSNotificationCenter defaultCenter] addObserverForName:NSViewFrameDidChangeNotification
             object:clipView queue:nil usingBlock:^(NSNotification *n) {
             OV_repositionPanel();
-            [[SpliceKitTimelineOverviewView shared] invalidateImageCache];
-            [[SpliceKitTimelineOverviewView shared] rerenderIfNeeded];
+            OV_scheduleRerender();
         }];
         if (widthRefObserve) {
             [[NSNotificationCenter defaultCenter] addObserverForName:NSViewFrameDidChangeNotification
                 object:widthRefObserve queue:nil usingBlock:^(NSNotification *n) {
                 OV_repositionPanel();
-                [[SpliceKitTimelineOverviewView shared] invalidateImageCache];
-                [[SpliceKitTimelineOverviewView shared] rerenderIfNeeded];
+                OV_scheduleRerender();
             }];
         }
 
@@ -1019,8 +1008,7 @@ void SpliceKit_installTimelineOverviewBar(void) {
         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidResizeNotification
             object:parent queue:nil usingBlock:^(NSNotification *n) {
             OV_repositionPanel();
-            [[SpliceKitTimelineOverviewView shared] invalidateImageCache];
-            [[SpliceKitTimelineOverviewView shared] rerenderIfNeeded];
+            OV_scheduleRerender();
         }];
         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidMoveNotification
             object:parent queue:nil usingBlock:^(NSNotification *n) {
