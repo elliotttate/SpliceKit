@@ -9091,6 +9091,7 @@ static NSDictionary *SpliceKit_handleOptionsGet(NSDictionary *params) {
         @"aiEngine": @([SpliceKitCommandPalette sharedPalette].aiEngine),
         @"gemmaModel": [SpliceKitCommandPalette sharedPalette].gemmaModel ?: @"unsloth/gemma-4-E4B-it-UD-MLX-4bit",
         @"sidebarCoalesceLiveScroll": @(SpliceKit_isSidebarCoalesceLiveScrollEnabled()),
+        @"timelineOverviewBar": @(SpliceKit_isTimelineOverviewBarEnabled()),
     };
 }
 
@@ -9175,6 +9176,12 @@ static NSDictionary *SpliceKit_handleOptionsSet(NSDictionary *params) {
         SpliceKit_setSidebarCoalesceLiveScrollEnabled([enabled boolValue]);
         return @{@"status": @"ok",
                  @"sidebarCoalesceLiveScroll": @(SpliceKit_isSidebarCoalesceLiveScrollEnabled())};
+    } else if ([option isEqualToString:@"timelineOverviewBar"]) {
+        NSNumber *enabled = params[@"enabled"];
+        if (!enabled) return @{@"error": @"'enabled' parameter required (true/false)"};
+        SpliceKit_setTimelineOverviewBarEnabled([enabled boolValue]);
+        return @{@"status": @"ok",
+                 @"timelineOverviewBar": @(SpliceKit_isTimelineOverviewBarEnabled())};
     }
 
     return @{@"error": [NSString stringWithFormat:@"Unknown option: %@", option]};

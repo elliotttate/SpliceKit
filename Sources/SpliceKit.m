@@ -557,6 +557,10 @@ static void SpliceKit_checkCompatibility(void) {
     }
 }
 
+- (void)toggleOverviewBar:(id)sender {
+    SpliceKit_setTimelineOverviewBarEnabled(!SpliceKit_isTimelineOverviewBarEnabled());
+}
+
 - (void)toggleMuteAudio:(id)sender {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         SpliceKit_handleTimelineAction(@{@"action": @"toggleMuteAudio"});
@@ -1990,6 +1994,8 @@ NSString *SpliceKit_otioToFCPXML(NSString *otioPath) {
     if (menuItem.action == @selector(toggleSections:)) {
         NSDictionary *state = SpliceKit_handleSectionsGet(@{});
         menuItem.state = [state[@"installed"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+    } else if (menuItem.action == @selector(toggleOverviewBar:)) {
+        menuItem.state = SpliceKit_isTimelineOverviewBarEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
     }
     return YES;
 }
@@ -2437,6 +2443,13 @@ static void SpliceKit_installMenu(void) {
     sectionsItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
     sectionsItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:sectionsItem];
+
+    NSMenuItem *overviewItem = [[NSMenuItem alloc]
+        initWithTitle:@"Overview"
+               action:@selector(toggleOverviewBar:)
+        keyEquivalent:@""];
+    overviewItem.target = [SpliceKitMenuController shared];
+    [bridgeMenu addItem:overviewItem];
 
     NSMenuItem *mixerItem = [[NSMenuItem alloc]
         initWithTitle:@"Audio Mixer"
@@ -3324,6 +3337,13 @@ static void SpliceKit_appDidLaunch(void) {
     SpliceKit_safeInstall("StructureBlockContextMenu", ^{
         SpliceKit_installStructureBlockContextMenu();
     });
+
+    // Inline miniature-timeline overview bar — install if user had it on
+    if (SpliceKit_isTimelineOverviewBarEnabled()) {
+        SpliceKit_safeInstall("TimelineOverviewBar", ^{
+            SpliceKit_installTimelineOverviewBar();
+        });
+    }
 
     // Start the control server on a background thread
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{

@@ -255,6 +255,15 @@ extern Class SpliceKit_PEDocument;
 // Get the active FFAnchoredTimelineModule. Returns nil if no project is open.
 id SpliceKit_getActiveTimelineModule(void);
 
+#pragma mark - Timeline Overview Bar
+
+// Inline miniature-timeline strip below the ruler — same renderer FCP uses for
+// the Touch Bar overview. Click or drag to jump the playhead.
+void SpliceKit_installTimelineOverviewBar(void);
+void SpliceKit_uninstallTimelineOverviewBar(void);
+BOOL SpliceKit_isTimelineOverviewBarEnabled(void);
+void SpliceKit_setTimelineOverviewBarEnabled(BOOL enabled);
+
 #pragma mark - Sections Bar
 
 // Custom NSView injected into FCP's timeline showing color-coded song structure.

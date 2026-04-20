@@ -4824,6 +4824,7 @@ def set_bridge_option(option: str, enabled: bool) -> str:
                 "viewerPinchZoom" - enable/disable trackpad pinch-to-zoom on the viewer
                 "videoOnlyKeepsAudioDisabled" - when Video-Only AV edit mode adds clips, keep audio+video but with audio disabled in inspector
                 "suppressAutoImport" - stop FCP from auto-opening the Import Media window when a card, camera, or iOS device mounts
+                "timelineOverviewBar" - show an inline miniature-timeline strip below the ruler that you can click/drag to jump
                 For "defaultSpatialConformType", use set_bridge_option_value() instead.
         enabled: True to enable, False to disable
     """

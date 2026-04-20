@@ -27,6 +27,7 @@ SpliceKitCommandPalette.m
 SpliceKitDebugUI.m
 SpliceKitStructureBlocks.m
 SpliceKitSectionsBar.m
+SpliceKitTimelineOverview.m
 SpliceKitLua.m
 SpliceKitLuaPanel.m
 SpliceKitPlugins.m
