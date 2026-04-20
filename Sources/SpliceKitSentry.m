@@ -13,6 +13,8 @@ static BOOL sRuntimeEnabled = NO;
 static NSString *sRuntimeLaunchPhase = @"constructor";
 static NSString *sRuntimeLastRPCMethod = nil;
 static NSDictionary *sRuntimeConfig = nil;
+static NSString * const kSpliceKitSentryDSN =
+    @"https://56fa8ecde3c66d354606805ac2064c54@o4511243520966656.ingest.us.sentry.io/4511243525423104";
 
 static NSString *SpliceKit_sentryScrubString(NSString *value) {
     if (![value isKindOfClass:[NSString class]]) {
@@ -89,9 +91,6 @@ static NSDictionary *SpliceKit_loadRuntimeConfig(void) {
             break;
         }
     }
-
-    NSString *runtimeDSN = NSProcessInfo.processInfo.environment[@"SPLICEKIT_SENTRY_RUNTIME_DSN"];
-    if (runtimeDSN.length > 0) config[@"RuntimeDSN"] = runtimeDSN;
 
     NSString *environment = NSProcessInfo.processInfo.environment[@"SPLICEKIT_SENTRY_ENVIRONMENT"];
     if (environment.length > 0) config[@"Environment"] = environment;
@@ -276,12 +275,6 @@ void SpliceKit_sentryStartRuntime(void) {
     sRuntimeStarted = YES;
 
     NSDictionary *config = SpliceKit_loadRuntimeConfig();
-    NSString *dsn = [config[@"RuntimeDSN"] isKindOfClass:[NSString class]] ? config[@"RuntimeDSN"] : nil;
-    if (dsn.length == 0) {
-        SpliceKit_log(@"Sentry runtime disabled (no RuntimeDSN configured)");
-        return;
-    }
-
     NSString *releaseName = config[@"ReleaseName"];
     NSString *environment = config[@"Environment"];
     NSString *cacheDirectoryPath = SpliceKit_runtimeCacheDirectory();
@@ -289,12 +282,13 @@ void SpliceKit_sentryStartRuntime(void) {
     __block NSDictionary *crashSummary = nil;
 
     [SentrySDK startWithConfigureOptions:^(SentryOptions *options) {
-        options.dsn = dsn;
+        options.dsn = kSpliceKitSentryDSN;
+        options.debug = YES;
         options.releaseName = releaseName;
         options.environment = environment;
         options.dist = [NSString stringWithUTF8String:SPLICEKIT_VERSION];
         options.cacheDirectoryPath = cacheDirectoryPath;
-        options.sendDefaultPii = NO;
+        options.sendDefaultPii = YES;
         options.sampleRate = @1.0;
         options.enableCrashHandler = YES;
         options.enableUncaughtNSExceptionReporting = YES;

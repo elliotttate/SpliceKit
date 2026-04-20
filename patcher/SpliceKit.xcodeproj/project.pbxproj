@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2250E4282F95F99200DA3ED6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 2250E4272F95F99200DA3ED6 /* Sentry */; };
 		22C571CA2F95CEDE0069DAD2 /* SpliceKit.icon in Resources */ = {isa = PBXBuildFile; fileRef = 22C571C92F95CEDE0069DAD2 /* SpliceKit.icon */; };
 		22D74E1F2F81FBD900A9252B /* Credits.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 22D74E1E2F81FBD900A9252B /* Credits.rtf */; };
 		BB0000000000000000000001 /* SpliceKitApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* SpliceKitApp.swift */; };
@@ -21,7 +22,6 @@
 		BB000000000000000000000A /* Sparkle.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000A /* Sparkle.framework */; };
 		BB000000000000000000000B /* Sparkle.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000A /* Sparkle.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		BB000000000000000000000C /* PatcherSentry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000D /* PatcherSentry.swift */; };
-		BB000000000000000000000D /* Sentry.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000000E /* Sentry.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -55,7 +55,6 @@
 		AA000000000000000000000A /* Sparkle.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Sparkle.framework; path = Frameworks/Sparkle.framework; sourceTree = "<group>"; };
 		AA000000000000000000000C /* ShellHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellHelpers.swift; sourceTree = "<group>"; };
 		AA000000000000000000000D /* PatcherSentry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatcherSentry.swift; sourceTree = "<group>"; };
-		AA000000000000000000000E /* Sentry.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Sentry.framework; path = Frameworks/Sentry.framework; sourceTree = "<group>"; };
 		FF0000000000000000000001 /* SpliceKit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpliceKit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -65,7 +64,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				BB000000000000000000000A /* Sparkle.framework in Frameworks */,
-				BB000000000000000000000D /* Sentry.framework in Frameworks */,
+				2250E4282F95F99200DA3ED6 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -105,7 +104,6 @@
 			children = (
 				CC0000000000000000000002 /* SpliceKit */,
 				AA000000000000000000000A /* Sparkle.framework */,
-				AA000000000000000000000E /* Sentry.framework */,
 				CC0000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -171,6 +169,9 @@
 			dependencies = (
 			);
 			name = SpliceKit;
+			packageProductDependencies = (
+				2250E4272F95F99200DA3ED6 /* Sentry */,
+			);
 			productName = SpliceKit;
 			productReference = FF0000000000000000000001 /* SpliceKit.app */;
 			productType = "com.apple.product-type.application";
@@ -194,6 +195,9 @@
 				Base,
 			);
 			mainGroup = CC0000000000000000000001;
+			packageReferences = (
+				2250E4262F95F99200DA3ED6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+			);
 			productRefGroup = CC0000000000000000000006 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -471,6 +475,27 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		2250E4262F95F99200DA3ED6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.10.0;
+			};
+			traits = (
+			);
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2250E4272F95F99200DA3ED6 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2250E4262F95F99200DA3ED6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 089C1665FE841187C02AAC07 /* Project object */;
 }
