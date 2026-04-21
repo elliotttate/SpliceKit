@@ -29,8 +29,21 @@ DMG_NAME="SpliceKit-v${VERSION}.dmg"
 DMG_PATH="patcher/${DMG_NAME}"
 SPARKLE_SIGN="/tmp/bin/sign_update"
 SENTRY_RELEASE_NAME="splicekit@${VERSION}"
-SENTRY_PATCHER_PROJECT="${SENTRY_PATCHER_PROJECT:-splicekit-patcher}"
-SENTRY_RUNTIME_PROJECT="${SENTRY_RUNTIME_PROJECT:-splicekit-fcp-runtime}"
+SENTRY_PATCHER_PROJECT="${SENTRY_PATCHER_PROJECT:-apple-macos}"
+SENTRY_RUNTIME_PROJECT="${SENTRY_RUNTIME_PROJECT:-apple-macos}"
+
+# Auto-resolve Sentry auth from the new `sentry` CLI's OAuth store so dSYM
+# upload works without manually hardcoding a token. The new CLI refreshes
+# its token via OAuth device flow; we just reuse whatever it has. Classic
+# sentry-cli (used for debug-files upload below) reads SENTRY_AUTH_TOKEN
+# from env.
+if [ -z "${SENTRY_AUTH_TOKEN:-}" ] && command -v sentry >/dev/null 2>&1; then
+    SENTRY_AUTH_TOKEN="$(sentry auth token 2>/dev/null || true)"
+    [ -n "${SENTRY_AUTH_TOKEN}" ] && export SENTRY_AUTH_TOKEN
+fi
+if [ -z "${SENTRY_ORG:-}" ]; then
+    export SENTRY_ORG=splicekit
+fi
 CURRENT_BRANCH="$(git branch --show-current)"
 PUSH_REMOTE="$(git config --get branch.${CURRENT_BRANCH}.remote || echo origin)"
 PUSH_BRANCH="$(git config --get branch.${CURRENT_BRANCH}.merge | sed 's#refs/heads/##')"
