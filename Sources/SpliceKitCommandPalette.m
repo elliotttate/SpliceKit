@@ -655,6 +655,10 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"Social Captions", @"openCaptions", @"captions", SpliceKitCommandCategoryTitles, @"Captions", @"Ctrl+Opt+C", @"Open social captions panel with auto-transcription", @[@"subtitle", @"tiktok", @"reels", @"highlight"]);
     add(@"Close Social Captions", @"closeCaptions", @"captions", SpliceKitCommandCategoryTitles, @"Captions", nil, @"Close the social captions panel", @[]);
 
+    // --- Uprezzer ---
+    add(@"Uprezzer", @"openUprezzer", @"uprezzer", SpliceKitCommandCategoryExport, @"Uprezzer", @"Ctrl+Opt+U", @"Open the local clip upscaling panel", @[@"upscale", @"resolution", @"enhance"]);
+    add(@"Close Uprezzer", @"closeUprezzer", @"uprezzer", SpliceKitCommandCategoryExport, @"Uprezzer", nil, @"Close the Uprezzer panel", @[@"hide upscaler"]);
+
     // --- Audio Mixer ---
     add(@"Audio Mixer", @"openMixer", @"mixer", SpliceKitCommandCategoryEditing, @"Audio", @"Ctrl+Opt+M", @"Open audio mixer with volume faders for clips at playhead", @[@"fader", @"volume", @"mix", @"levels"]);
     add(@"Close Audio Mixer", @"closeMixer", @"mixer", SpliceKitCommandCategoryEditing, @"Audio", nil, @"Close the audio mixer panel", @[]);
@@ -1517,6 +1521,18 @@ static NSString *FCPStripStopWords(NSString *query) {
             if ([action isEqualToString:@"openCaptions"]) {
                 ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
             } else if ([action isEqualToString:@"closeCaptions"]) {
+                ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
+            }
+        });
+        result = @{@"action": action, @"status": @"ok"};
+    } else if ([type isEqualToString:@"uprezzer"]) {
+        SpliceKit_executeOnMainThread(^{
+            Class panelClass = objc_getClass("SpliceKitUprezzerPanel");
+            if (!panelClass) return;
+            id panel = ((id (*)(id, SEL))objc_msgSend)((id)panelClass, @selector(sharedPanel));
+            if ([action isEqualToString:@"openUprezzer"]) {
+                ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
+            } else if ([action isEqualToString:@"closeUprezzer"]) {
                 ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
             }
         });
