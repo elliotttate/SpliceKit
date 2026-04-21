@@ -510,6 +510,18 @@ class PatcherModel: ObservableObject {
         guard canLaunchFCP else { return }
 
         let binary = moddedApp + "/Contents/MacOS/Final Cut Pro"
+
+        // Pre-flight existence check. canLaunchFCP only inspects patcher state
+        // (not patching, not launching, not running) — it does not verify the
+        // modded bundle is still on disk. If the user deleted it or the patch
+        // never completed, NSWorkspace.openApplication surfaces this as a raw
+        // NSCocoaErrorDomain Code 4 ("file doesn't exist") in Sentry with no
+        // actionable message. Catch it early with a clear log line instead.
+        guard FileManager.default.fileExists(atPath: binary) else {
+            appendLog("Cannot launch: modded Final Cut Pro is missing at \(moddedApp). Run the patch again from the Welcome panel.")
+            syncModdedFCPRunningState()
+            return
+        }
         let launchTime = Date()
         let spliceKitLogURL = runtimeLogURL(named: "splicekit.log")
         let spliceKitLogDateBeforeLaunch = fileModificationDate(at: spliceKitLogURL)
@@ -880,7 +892,14 @@ class PatcherModel: ObservableObject {
             }
             return parts.isEmpty ? "true" : parts.joined(separator: " && ")
         }
+        // Strip extended attributes immediately before signing. Steps between
+        // bundle copy and sign — insert_dylib rewriting the Mach-O, PlistBuddy
+        // edits to Info.plist, file copies from quarantined sources — can leave
+        // com.apple.FinderInfo or resource forks behind that trigger codesign's
+        // "resource fork, Finder information, or similar detritus not allowed"
+        // rejection.
         var signResult = shellResult("""
+            xattr -cr '\(moddedApp)' 2>/dev/null && \
             \(signBRAW(quotedIdentity)) && \
             codesign --force --options runtime --sign \(quotedIdentity) '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
             codesign --force --options runtime --sign \(quotedIdentity) --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
@@ -892,6 +911,7 @@ class PatcherModel: ObservableObject {
             }
             signIdentity = "-"
             signResult = shellResult("""
+                xattr -cr '\(moddedApp)' 2>/dev/null && \
                 \(signBRAW("-")) && \
                 codesign --force --options runtime --sign - '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
                 codesign --force --options runtime --sign - --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
@@ -1107,7 +1127,14 @@ class PatcherModel: ObservableObject {
             }
             return parts.isEmpty ? "true" : parts.joined(separator: " && ")
         }
+        // Strip extended attributes immediately before signing. Steps between
+        // bundle copy and sign — insert_dylib rewriting the Mach-O, PlistBuddy
+        // edits to Info.plist, file copies from quarantined sources — can leave
+        // com.apple.FinderInfo or resource forks behind that trigger codesign's
+        // "resource fork, Finder information, or similar detritus not allowed"
+        // rejection.
         var signResult = shellResult("""
+            xattr -cr '\(moddedApp)' 2>/dev/null && \
             \(signBRAW(quotedIdentity)) && \
             codesign --force --options runtime --sign \(quotedIdentity) '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
             codesign --force --options runtime --sign \(quotedIdentity) --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
@@ -1119,6 +1146,7 @@ class PatcherModel: ObservableObject {
             }
             signIdentity = "-"
             signResult = shellResult("""
+                xattr -cr '\(moddedApp)' 2>/dev/null && \
                 \(signBRAW("-")) && \
                 codesign --force --options runtime --sign - '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
                 codesign --force --options runtime --sign - --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
