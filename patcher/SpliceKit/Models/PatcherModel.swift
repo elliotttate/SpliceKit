@@ -92,7 +92,8 @@ class PatcherModel: ObservableObject {
     @Published private(set) var isLaunchInProgress = false
     @Published private(set) var isModdedFCPRunning = false
 
-    private var launchedFCPProcess: Process?
+    private var launchedFCPRunningApp: NSRunningApplication?
+    private var launchedFCPTerminationObserver: NSObjectProtocol?
     private var launchMonitorTask: Task<Void, Never>?
 
     static let standardApp = "/Applications/Final Cut Pro.app"
@@ -235,8 +236,8 @@ class PatcherModel: ObservableObject {
             if let bundleURL = app.bundleURL {
                 return normalizedAppPath(bundleURL.path) == trackedAppPath
             }
-            if let launchedFCPProcess {
-                return app.processIdentifier == launchedFCPProcess.processIdentifier
+            if let launchedFCPRunningApp {
+                return app.processIdentifier == launchedFCPRunningApp.processIdentifier
             }
             return false
         }
@@ -247,9 +248,9 @@ class PatcherModel: ObservableObject {
 
         if isRunning {
             isLaunchInProgress = false
-        } else if launchedFCPProcess?.isRunning != true {
+        } else if launchedFCPRunningApp?.isTerminated ?? true {
             isLaunchInProgress = false
-            launchedFCPProcess = nil
+            launchedFCPRunningApp = nil
         }
     }
 
@@ -526,33 +527,55 @@ class PatcherModel: ObservableObject {
             appendLog("Existing SpliceKit log mtime before launch: none")
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.terminationHandler = { [weak self] proc in
+        // Launch via LaunchServices (NSWorkspace) rather than Process()/posix_spawn.
+        //
+        // Why: macOS TCC tracks a "responsible process" for privacy decisions. When a
+        // process is spawned via fork+exec, the child inherits its parent's responsible
+        // identity. If we launched FCP with Process(), FCP's camera/mic requests would
+        // be attributed to the patcher app — and tccd would check the *patcher's*
+        // entitlements, not FCP's. That caused silent TCC denials in LiveCam
+        // ("Allow Camera…" button did nothing; tccd logged "requires entitlement
+        // com.apple.security.device.camera but it is missing for responsible=<patcher>").
+        //
+        // openApplication(at:) routes through launchd so FCP becomes its own top-level
+        // process with no parent responsibility attribution. FCP's own entitlements
+        // (added during re-signing) are then what TCC evaluates.
+        let appURL = URL(fileURLWithPath: moddedApp)
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        config.activates = true
+
+        isModdedFCPRunning = false
+        isLaunchInProgress = true
+
+        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { [weak self] runningApp, error in
             Task { @MainActor in
-                self?.handleLaunchTermination(
-                    process: proc,
+                guard let self else { return }
+                if let error = error {
+                    self.launchedFCPRunningApp = nil
+                    self.isLaunchInProgress = false
+                    self.syncModdedFCPRunningState()
+                    self.appendLog("Failed to launch Final Cut Pro: \(error.localizedDescription)")
+                    PatcherSentry.capture(error: error,
+                                          context: "patcher.launch",
+                                          extras: ["binary": binary])
+                    return
+                }
+                guard let runningApp else {
+                    self.isLaunchInProgress = false
+                    self.syncModdedFCPRunningState()
+                    self.appendLog("Final Cut Pro launched but no NSRunningApplication returned")
+                    return
+                }
+                self.launchedFCPRunningApp = runningApp
+                self.appendLog("Spawned Final Cut Pro pid \(runningApp.processIdentifier)")
+                self.observeLaunchedAppTermination(
+                    runningApp,
                     launchTime: launchTime,
                     spliceKitLogDateBeforeLaunch: spliceKitLogDateBeforeLaunch
                 )
+                self.syncModdedFCPRunningState()
             }
-        }
-        do {
-            try process.run()
-            launchedFCPProcess = process
-            isModdedFCPRunning = false
-            isLaunchInProgress = true
-            syncModdedFCPRunningState()
-            appendLog("Spawned Final Cut Pro pid \(process.processIdentifier)")
-        } catch {
-            launchedFCPProcess = nil
-            isLaunchInProgress = false
-            syncModdedFCPRunningState()
-            appendLog("Failed to launch Final Cut Pro: \(error.localizedDescription)")
-            PatcherSentry.capture(error: error,
-                                  context: "patcher.launch",
-                                  extras: ["binary": binary])
-            return
         }
 
         launchMonitorTask = Task { [weak self] in
@@ -576,7 +599,7 @@ class PatcherModel: ObservableObject {
                 ) {
                     self.appendLog(line)
                 }
-                if self.launchedFCPProcess?.isRunning == true {
+                if self.launchedFCPRunningApp?.isTerminated == false {
                     self.appendLog("Final Cut Pro is still running, but the SpliceKit bridge is not listening yet.")
                 }
             }
@@ -593,7 +616,11 @@ class PatcherModel: ObservableObject {
             bridgeConnected = false
             isLaunchInProgress = false
             isModdedFCPRunning = false
-            launchedFCPProcess = nil
+            launchedFCPRunningApp = nil
+            if let observer = launchedFCPTerminationObserver {
+                NSWorkspace.shared.notificationCenter.removeObserver(observer)
+                launchedFCPTerminationObserver = nil
+            }
             launchMonitorTask?.cancel()
             launchMonitorTask = nil
             currentPanel = .welcome
@@ -645,7 +672,11 @@ class PatcherModel: ObservableObject {
         bridgeConnected = false
         isLaunchInProgress = false
         isModdedFCPRunning = false
-        launchedFCPProcess = nil
+        launchedFCPRunningApp = nil
+        if let observer = launchedFCPTerminationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            launchedFCPTerminationObserver = nil
+        }
         launchMonitorTask?.cancel()
         launchMonitorTask = nil
         patch()
@@ -1320,26 +1351,46 @@ class PatcherModel: ObservableObject {
         return lines
     }
 
-    private func handleLaunchTermination(process: Process,
-                                         launchTime: Date,
-                                         spliceKitLogDateBeforeLaunch: Date?) {
-        let runtime = Date().timeIntervalSince(launchTime)
-        let reason: String
-        switch process.terminationReason {
-        case .exit:
-            reason = "exit"
-        case .uncaughtSignal:
-            reason = "signal"
-        @unknown default:
-            reason = "unknown"
+    /// Observe termination of an FCP instance launched via NSWorkspace.
+    ///
+    /// Unlike `Process()`, `NSWorkspace.openApplication` does not expose termination
+    /// reason or exit status — we can only tell that the app terminated. We log
+    /// runtime and re-run launchDiagnostics() so the splicekit.log tail and system
+    /// log slice (which *do* capture crash signals) are still surfaced on early exit.
+    private func observeLaunchedAppTermination(_ app: NSRunningApplication,
+                                                launchTime: Date,
+                                                spliceKitLogDateBeforeLaunch: Date?) {
+        if let previous = launchedFCPTerminationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(previous)
+            launchedFCPTerminationObserver = nil
         }
+        let targetPID = app.processIdentifier
+        let observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let terminated = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  terminated.processIdentifier == targetPID else { return }
+            Task { @MainActor in
+                self.handleRunningAppTermination(
+                    app: terminated,
+                    launchTime: launchTime,
+                    spliceKitLogDateBeforeLaunch: spliceKitLogDateBeforeLaunch
+                )
+            }
+        }
+        launchedFCPTerminationObserver = observer
+    }
 
-        appendLog(String(format: "Final Cut Pro process %d terminated after %.1fs (%@ %d)",
-                         process.processIdentifier,
-                         runtime,
-                         reason,
-                         process.terminationStatus))
-        if runtime < 90 || process.terminationStatus != 0 || process.terminationReason == .uncaughtSignal {
+    private func handleRunningAppTermination(app: NSRunningApplication,
+                                              launchTime: Date,
+                                              spliceKitLogDateBeforeLaunch: Date?) {
+        let runtime = Date().timeIntervalSince(launchTime)
+        appendLog(String(format: "Final Cut Pro process %d terminated after %.1fs",
+                         app.processIdentifier, runtime))
+        if runtime < 90 {
             for line in launchDiagnostics(
                 launchTime: launchTime,
                 spliceKitLogDateBeforeLaunch: spliceKitLogDateBeforeLaunch
@@ -1351,8 +1402,6 @@ class PatcherModel: ObservableObject {
                 level: .error,
                 context: "patcher.launch_termination",
                 extras: [
-                    "termination_reason": reason,
-                    "termination_status": process.terminationStatus,
                     "runtime_seconds": runtime,
                     "diagnostics": launchDiagnostics(
                         launchTime: launchTime,
@@ -1361,10 +1410,14 @@ class PatcherModel: ObservableObject {
                 ]
             )
         }
-        if launchedFCPProcess?.processIdentifier == process.processIdentifier {
-            launchedFCPProcess = nil
+        if launchedFCPRunningApp?.processIdentifier == app.processIdentifier {
+            launchedFCPRunningApp = nil
             launchMonitorTask?.cancel()
             launchMonitorTask = nil
+        }
+        if let observer = launchedFCPTerminationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            launchedFCPTerminationObserver = nil
         }
         syncModdedFCPRunningState()
     }
