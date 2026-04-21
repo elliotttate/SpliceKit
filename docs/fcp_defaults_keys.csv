@@ -1,0 +1,715 @@
+key,module,type,category,source,notes
+addedStyleBreak,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+adjustedPPF,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+allowGreaterThanHalf,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+AnalysisDirection,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+analyzeAndOptimizeCreateProxyMedia,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+analyzeAndOptimizeIsCopyingMedia,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+analyzeAndOptimizeSuppressHDRWithH264ProxyAlert,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+analyzeAtContainerRate,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+angle,Flexo,double,numeric_config,decompiled_source,Accessed via setDouble:forKey
+AppleLanguages,Flexo;LunaKit;TextFramework,array,data_storage,decompiled_source,Accessed via arrayForKey/objectForKey
+audioWaveFormProportion,Flexo,double,numeric_config,decompiled_source,Accessed via setDouble:forKey
+AutoSampler,Final Cut Pro,bool,perf_monitor,decompiled_source,Accessed via boolForKey; Auto-sample CPU profile on spindump
+AutoSamplerDontBeep,Final Cut Pro,bool,perf_monitor,decompiled_source,Accessed via boolForKey; Suppress beep on AutoSampler trigger
+AutoSamplerInterval,Final Cut Pro,float,numeric_config,decompiled_source,Accessed via floatForKey; AutoSampler sampling interval
+AutoSamplerSampleInterval,Final Cut Pro,int,numeric_config,decompiled_source,Accessed via integerForKey; AutoSampler sample-interval override
+AutoSamplerSampleLength,Final Cut Pro,int,numeric_config,decompiled_source,Accessed via integerForKey; AutoSampler sample duration
+cameraNames,Flexo,dict,data_storage,decompiled_source,Accessed via dictionaryForKey
+capitalize,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+ColorGranularityGainValue,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+ColorSpaceOverrideForVOUT,Flexo,array,data_storage,decompiled_source,Accessed via arrayForKey
+constantOffset,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+CropFillMultiplier,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey
+DebugKeyItemAudioWaveformsDisabled,Flexo;TimelineKit,bool,debug_visual,binary_extract,Rendering debug toggle
+DebugKeyItemBackgroundDisabled,Flexo;TimelineKit,bool,debug_visual,binary_extract,Rendering debug toggle
+DebugKeyItemVideoFilmstripsDisabled,Flexo;TimelineKit,bool,debug_visual,binary_extract,Rendering debug toggle
+debugTimelineIndex_displayPlayheadOnItem,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+DisableH264InterlacedEncoder,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+DisableHWEncoder,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+diskBWEstimated,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+DoNotShow3DTextVRAMWarning,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+duration,Flexo;Ozone,float,numeric_config,decompiled_source,Accessed via objectForKey/setFloat:forKey/setObject:forKey
+eatsNextClip,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+eatsPreviousClip,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+EffectsIsolationMaskDefaultType,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+enableAVSBDLFilmstripsForHDR,Final Cut Pro,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+enableHDRSkimmingLens,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+EnableHgc2Shaders,Ozone,bool,behavior_toggle,decompiled_source,Accessed via boolForKey; Enable HGC2 shaders (Ozone)
+EnableLegacyWideGamutLibrarySetting,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+EnableLibraryUpdateHistoryValidation,CFPreferences,bool,debug_logging,curated_cfprefs,Library update history validation
+EnableScheduledReadAudioLogging,CFPreferences,bool,debug_logging,curated_cfprefs,Audio scheduled read logging
+enableTheaterShareDestination,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+epoch,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+extendPrevious,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+extendTitleBefore,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+extraAfterDuration,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey; Duration value
+extraBeforeDuration,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey; Duration value
+faceObservationOscDrawsAsSuperEllipse,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+faceObservationOscDrawsLandmarks,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+faceObservationOscSuperEllipseCurvature,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey/setDouble:forKey
+faceObservationOscUsesLandmarks,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+FadeInGhostWaveform,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFActionFilmstripViewKey,Flexo,unknown,data_storage,binary_extract,
+FFAlertUserDefaultsDictionnary,Flexo,dict,data_storage,decompiled_source,Accessed via dictionaryForKey
+FFAllowNetworkLocations,Flexo,bool,path_url,decompiled_source,Accessed via boolForKey; URL/path/location
+FFAnalyzeAndFixMLVisualSearchKey,Flexo,bool,behavior_toggle,binary_extract,Analyze-and-fix ML visual search
+FFAnchoredSequenceSettingsModuleWantsNewProject,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFAnimationPath,Flexo,string,path_url,binary_extract,URL/path/location
+FFAssetPreloadTaskNameDefault,Flexo,unknown,data_storage,binary_extract,
+FFAssetProxyAudioChannelCountKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyAudioSampleRateKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyAudioSourceCountKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyAuxVideoFlagsKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyFileExtensionKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyHasAudioKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyHasVideoKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyMediaRangeKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyTimecodeFrameDurationKey,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFAssetProxyUTTypeKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyVideoFormatNameKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyVideoPropsKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAssetProxyVideoSourceCountKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFAudioAngles,Flexo,array,data_storage,decompiled_source,Accessed via arrayForKey
+FFAudioClipAuxComponentsLayoutKey,Flexo,unknown,data_storage,binary_extract,
+FFAudioClipPrimaryComponentsLayoutKey,Flexo,unknown,data_storage,binary_extract,
+FFAudioComponentsAreMinimized,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFAudioComponentsAreOpen,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFAudioComponentsConfigLayoutKey,Flexo,unknown,data_storage,binary_extract,
+FFAudioComponentsLayoutItemCacheKey,Flexo,unknown,data_storage,binary_extract,
+FFAudioComponentsLayoutItemLookupKey,Flexo,unknown,data_storage,binary_extract,
+FFAudioComponentsLayoutItemLookupUpgradeKey,Flexo,unknown,data_storage,binary_extract,
+FFAudioDuckingCurveUpdatedNotificationObjectsKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFAudioDuckingLoudnessManagerDuckLevelKey,Flexo,unknown,data_storage,binary_extract,
+FFAudioDuckingLoudnessManagerSlavesKey,Flexo,unknown,data_storage,binary_extract,
+FFAudioEffectDisableLatencyCompensationKey,Flexo,unknown,data_storage,binary_extract,
+FFAudioEffectPresetKeyframeMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFAudioLayersObjectKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFAudioMeterDisplayOrderKey,Flexo,unknown,data_storage,binary_extract,
+FFAutoAddSpatialEffects,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFAutoAddTemporalEffects,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFAutomaticCrossfadeDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFAutoReframeAnalysisGetOnDemandCropForAnchoredObjects,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFAutoReframeTrackAnalysisGetOnDemandCropForAnchoredObjects,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFAutoRenderDelay,Flexo,unknown,data_storage,binary_extract,
+FFAutoRenderUpdatedDelay,Flexo,unknown,data_storage,binary_extract,
+FFAutoRetimeHFRClipsKey,Flexo,bool,behavior_toggle,binary_extract,Auto-retime high-framerate clips
+FFAutoScale,Flexo,bool,behavior_toggle,binary_extract,Auto-scale on import
+FFAVEditMode,Final Cut Pro;Flexo,enum,mode_enum,binary_extract,Enum/mode value [also accessed via integerForKey in decomp]
+FFAVSplitIsOpen,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFBackgroundTaskQueueInLowOverheadMode,Flexo,bool,behavior_toggle,binary_extract,Background task throttling
+FFBGRenderConsoleLogWhenComplete,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFCameraArchiveArchiveSize,Flexo,number,numeric_config,binary_extract,Size/dimensions
+FFCaptionFactoryLayoutKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionFormatUserDefaultsITTKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionFormatUserDefaultsSCCKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionFormatUserDefaultsSRTKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionInspectorITTDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFCaptionInspectorSCCDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFCaptionInspectorSRTDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFCaptionLayoutBlockFourKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionLayoutBlockOneKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionLayoutBlockThreeKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionLayoutBlockTwoKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionLayoutColumnKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionLayoutRowKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionRolesAndIndexKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionUserLayoutKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionValidationAdjustmentKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionValidationCharacterRangeKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionValidationCharactersKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionValidationErrorClassKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionValidationFrameCountKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFCaptionValidationLineNumberKey,Flexo,mixed,ui_state,binary_extract,Caption subsystem storage
+FFChangeSideBySideSlideDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFCHFoldersGlobalCollapsedState,Flexo,dict,data_storage,decompiled_source,Accessed via dictionaryForKey
+FFCinematicToolEnable,Flexo,bool,behavior_toggle,binary_extract,Enable Cinematic mode tool
+FFColumnSetDefaultOptions,Flexo,dict,data_storage,decompiled_source,Accessed via dictionaryForKey
+FFCompareActiveIndexKey,Flexo,unknown,data_storage,binary_extract,
+FFCompareModeKey,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFCompareModePlayheadKey,Flexo,unknown,data_storage,binary_extract,
+FFCompareSourceMediaIDKey,Final Cut Pro,unknown,data_storage,binary_extract,
+FFConsiderHeliumPreLoadEligibleNodes,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+FFConsolidateRequiredSpaceExternalMediaLocationKey,Flexo,string,path_url,binary_extract,URL/path/location
+FFConsolidateRequiredSpaceMediaRepOptionsKey,Flexo,unknown,data_storage,binary_extract,
+FFConsolidateRequiredSpaceRequiredSpaceInBytesKey,Flexo,unknown,data_storage,binary_extract,
+FFConsumerCinematicToolDisabled,Flexo,bool,behavior_toggle,binary_extract,Hide Cinematic tool in consumer builds
+FFConsumerHideYouTubeSignInWarning,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFDebugSmartConformUseAutoCrop,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFDefaultAudioEffect,Flexo,string,data_storage,decompiled_source,Accessed via stringForKey
+FFDefaultCrossfadeDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFDefaultFadeAudioDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFDefaultsCreativeAnalysisEnabledKey,Flexo,bool,behavior_toggle,binary_extract,Creative-analysis ML
+FFDefaultStillDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFDefaultVideoTransition,Final Cut Pro,string,data_storage,decompiled_source,Accessed via stringForKey
+FFDestRendererDiscardFramesForPerfTest,Flexo,bool,perf_monitor,binary_extract,Perf-test: discard rendered frames
+FFDestVideoForceDrawFloat,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFDFRAnchorOverride,Flexo,unknown,data_storage,binary_extract,
+FFDFRCropMode,Final Cut Pro,enum,mode_enum,binary_extract,Enum/mode value
+FFDFRDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFDFRKenBurnsMode,Final Cut Pro,enum,mode_enum,binary_extract,Enum/mode value
+FFDFRTrimMode,Final Cut Pro,enum,mode_enum,binary_extract,Enum/mode value
+FFDisable4KWarningForTesting,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified [also accessed via integerForKey in decomp]"
+FFDisableAudioScrubbing,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFDisableAutomaticColorConformGeneralPref,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFDisableBeatGridOnClip,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFDisableColorVideoByRolesKey,Flexo,bool,behavior_toggle,binary_extract,Don't colorize clips by role
+FFDisableDupeDetection,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFDisableFilterTransitionColorConform,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFDisableMarqueeSelectionFilterKey,Flexo,bool,behavior_toggle,binary_extract,Disable marquee-selection filter
+FFDisableRenderMenuKey,Flexo,bool,behavior_toggle,binary_extract,Hide render menu
+FFDisableSkimming,Flexo,bool,behavior_toggle,curated_verified,VERIFIED 2026-04-19: Disable clip skimming
+FFDisableSnapping,Flexo,bool,behavior_toggle,curated_verified,VERIFIED 2026-04-19: Disable magnetic snapping
+FFDontCoalesceGaps,Flexo,bool,behavior_toggle,curated_verified,VERIFIED 2026-04-19: Keep adjacent gap items as separate spacers
+FFDragPerformanceTest,Flexo,bool,perf_monitor,binary_extract,Perf-test: drag instrumentation
+FFDupeDetectionEnabledKey,Flexo,bool,behavior_toggle,binary_extract,Duplicate-range detection [also accessed via boolForKey in decomp]
+FFDupeDetectionRetimingEnabledKey,Flexo,bool,behavior_toggle,binary_extract,Duplicate-range detection with retiming
+FFEditToolSkimmingDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFEffectAlertTypeKey,Flexo,unknown,data_storage,binary_extract,
+FFEffectBrowserNewContentCount,Flexo,int,numeric_config,binary_extract,Count
+FFEffectLibraryMakeDefault,Flexo,unknown,data_storage,binary_extract,
+FFEffectNodePlaceholderImageLookupFromBundleAndKey,Flexo,unknown,data_storage,binary_extract,
+FFEffectNodePlaceholderImageLookupFromBundleMessageAndKey,Flexo,unknown,data_storage,binary_extract,
+FFEffectPickerSkimmingMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFEffectPresetCoderKey,Flexo,unknown,data_storage,binary_extract,
+FFEffectPresetDataKey,Flexo,unknown,data_storage,binary_extract,
+FFEffectPresetFilePresetPathKey,Flexo,unknown,data_storage,binary_extract,
+FFEffectPresetFilePresetTypeKey,Flexo,unknown,data_storage,binary_extract,
+FFEffectPresetIDKey,Flexo,unknown,data_storage,binary_extract,
+FFEmptyTimelineOverlayDismissed,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFEnableBeatGridOnClip,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFEnableClipSkimming,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFEnableDupeDetection,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFEnableEDROverride,ProCore,bool,behavior_toggle,binary_extract,Force EDR / HDR override [also accessed via boolForKey in decomp]
+FFEnableExamineQueueForMinFlushAhead,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFEnableGuards,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified [also accessed via integerForKey in decomp]"
+FFEnableHeliumMetalTechnology,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFEnableMetalOscs,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFEnableNewTouchBars,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFEnableScreenSizeOverride,Flexo,bool,behavior_toggle,binary_extract,Override detected display size
+FFEnableSDROnlyEffectFiltering,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFEnableSequenceFramespreads,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFErrorFlexoMediaRepTypeKey,Flexo,unknown,data_storage,binary_extract,
+FFExtendedTimecodeKey,Flexo,bool,behavior_toggle,binary_extract,Extended timecode display
+FFExternalProvidersListDidChangeNotificationNewItemsKey,Flexo,unknown,data_storage,binary_extract,
+FFExternalProvidersListDidChangeNotificationRemovedItemsKey,Flexo,unknown,data_storage,binary_extract,
+FFExternalProvidersSavedWindowInformations,Flexo,dict,data_storage,decompiled_source,Accessed via dictionaryForKey
+FFFadeHandlesObjectKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFFadeHandlesVideoObjectKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFFavoriteFilterKey,Flexo,unknown,data_storage,binary_extract,
+FFFilmStripImplicitTransitionLeftObjectKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFFilmStripImplicitTransitionRightObjectKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFFilmStripLeftObjectKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFFilmStripObjectKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFFilmStripRightObjectKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFFilmStripUnusedMaterialObjectKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFFilmStripViewDidBecomeActiveNotificationKey,Flexo,mixed,notification_userinfo,binary_extract,NSNotification name/key
+FFFilmStripViewDidBecomeInactiveNotificationKey,Flexo,mixed,notification_userinfo,binary_extract,NSNotification name/key
+FFForceIGTextureCacheMode,Flexo,bool,behavior_toggle,binary_extract,Force IOSurface texture caching [also accessed via boolForKey in decomp]
+FFFxPlugEffectDisplayNameKey,Flexo,unknown,data_storage,binary_extract,
+FFHardwarePlaybackEnable,Flexo,bool,behavior_toggle,binary_extract,Hardware playback
+FFHardwarePlaybackEnabledOnHide,Flexo,bool,behavior_toggle,binary_extract,Keep hardware playback when hidden
+FFHas4KDestinationBeenAdded,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFHDRWhiteLevel,Flexo,unknown,data_storage,binary_extract,
+FFHeliumBlendMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFHeliumUsageRequestForUserDefault,Flexo,mixed,internal,binary_extract,Helium / HG subsystem
+FFHeliumXFormScale,Flexo,mixed,internal,binary_extract,Helium / HG subsystem
+FFHGFanoutResultInternal,Flexo,mixed,internal,binary_extract,Helium / HG subsystem
+FFHideAudioAnimation,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFHideClip,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFHideClips,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFHideComponentWhenOnlyOne,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFHideMarkedRanges,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFHideSkimmerInfo,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFHideVideoAnimation,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFHideYouTubeSignInWarning,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified [also accessed via boolForKey in decomp]"
+FFHMDDisabled,Flexo,bool,behavior_toggle,binary_extract,Disable HMD / Vision Pro output
+FFHMDDoGLFinishForEyes,Flexo,int,internal,decompiled_source,Accessed via integerForKey; HMD / Vision Pro
+FFHMDEnabled,Flexo,bool,behavior_toggle,binary_extract,Enable HMD / Vision Pro output
+FFHMDMoreInfoURL,Flexo,string,path_url,binary_extract,HMD info URL
+FFHMDRequestedImageLocMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFImageScalingFactor,Flexo,unknown,data_storage,binary_extract,
+FFiMovieIOSImporterNewestSupportedVersion,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFiMovieIOSImporterOldestSupportedVersion,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFiMovieUpgradeLibraryIndex,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFImportIntoLibraryPanelFrame,Flexo,string,data_storage,decompiled_source,Accessed via stringForKey
+FFImportLastGoToFolderPath,Flexo,string,path_url,binary_extract,URL/path/location
+FFImportLocationCurrentURL,Flexo,string,path_url,binary_extract,URL/path/location
+FFImportLocationOpenSavePanelDefaultURL,Flexo,string,path_url,binary_extract,URL/path/location
+FFImportProxySizingMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFImportSheetCopyToLocationInternal,Final Cut Pro,bool,behavior_toggle,binary_extract,Internal: show copy-to-location in import
+FFImportTagsAsKeywordCollectionsKey,Flexo,unknown,data_storage,binary_extract,
+FFIndexPath,Flexo,string,path_url,binary_extract,URL/path/location
+FFInfoToolChangeDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFInfoToolMaxDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFInfoToolSelectedItemsCount,Flexo,int,numeric_config,binary_extract,Count
+FFInspectorAudioEffectsControllerManagerKey,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFInspectorHeaderControllerButtonHide,Flexo,bool,ui_state,binary_extract,UI show/hide state
+FFInspectorHeaderControllerButtonShow,Flexo,bool,ui_state,binary_extract,UI show/hide state
+FFInspectorLegacyEffectNameEditingDelegateKey,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFInspectorLegacyEffectsRootDelegateKey,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFInspectorModuleCaptionEditorNodeLabelDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFInspectorModuleLibraryPropertiesCacheLocationDefault,Flexo,string,path_url,binary_extract,URL/path/location
+FFInspectorModuleLibraryPropertiesMediaLocationDefault,Flexo,string,path_url,binary_extract,URL/path/location
+FFInspectorModuleLibraryPropertiesTemplateLocationDefault,Flexo,string,path_url,binary_extract,URL/path/location
+FFInspectorModuleProjectSharingHDRContentLightLevel,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFInspectorModuleProjectSharingSaveAsDefault,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFInspectorModuleProjectSharingUpdateToDefault,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFInspectorShowShapeParams,Flexo,int,ui_state,decompiled_source,Accessed via integerForKey; Panel/library state storage
+FFInspectorTabModuleSelectedTabIdentifier,Flexo,string,ui_state,decompiled_source,Accessed via stringForKey; Panel/library state storage
+FFKenBurnsKeyInterpolationType,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+FFKeywordEditorResignKeyOnEnter,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFKeywordEditorWindowFrame,Flexo,string,data_storage,decompiled_source,Accessed via stringForKey
+FFKeywordGroups,Flexo,array,data_storage,decompiled_source,Accessed via arrayForKey
+FFKeywordsAutoKeywords,Flexo,array,data_storage,decompiled_source,Accessed via arrayForKey
+FFKeywordsGroupsVisible,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFLibraryContextThreadKey,Flexo,unknown,data_storage,binary_extract,
+FFLibraryCopyTranscodeEnabled,Flexo,bool,behavior_toggle,binary_extract,Transcode during library copy [also accessed via boolForKey/objectForKey in decomp]
+FFLibraryHostTimeout,Flexo,number,numeric_config,binary_extract,Timeout [also accessed via integerForKey in decomp]
+FFLibraryProjectBackupInterval,Flexo,number,numeric_config,binary_extract,Interval value
+FFLibrarySize,Flexo,number,numeric_config,binary_extract,Size/dimensions
+FFLMOpenSavePanelDefaultURL,Flexo,string,path_url,binary_extract,URL/path/location
+FFLMSelectedURL,Flexo,string,path_url,binary_extract,URL/path/location
+FFMDAllProjectsDisplayKeyLibraryURLString,Flexo,string,data_storage,decompiled_source,Accessed via removeObjectForKey/stringForKey
+FFMDItemCinematicVideoKey,Flexo,unknown,data_storage,binary_extract,
+FFMediaAudioSourceChannelCountKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFMediaAudioSourceChannelLayoutKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFMediaAudioSourceDefaultEnableKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFMediaAudioSourceSampleRateKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFMediaSourceDescriptionChannelMapKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFMediaSourceDescriptionChannelRoutingMapKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFMediaSourceDescriptionMediaKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFMediaSourceDescriptionSourceKeyKey,Flexo,mixed,data_storage,binary_extract,Media/asset property key
+FFMediaTemporalResolutionMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFMemOverdriveEnable,Flexo,bool,behavior_toggle,binary_extract,Enable memory overdrive [also accessed via boolForKey in decomp]
+FFMessageTracerActiveDurationKey,Flexo,CMTime,numeric_config,binary_extract,Duration value [also accessed via doubleForKey in decomp]
+FFMessageTracerActiveDurationStartDateKey,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFMessageTracerActiveLoggedKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerAnchoredObjectTimeSpentKey,Flexo,mixed,telemetry,binary_extract,MessageTracer telemetry
+FFMessageTracerCloudTheaterAveDurationKey,Flexo,CMTime,numeric_config,binary_extract,Duration value [also accessed via integerForKey in decomp]
+FFMessageTracerCloudTheaterClipTypeCountKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerCloudTheaterProjectTypeCountKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerCloudTheaterTotalClipCountKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerCloudTheaterTrailerTypeCountKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerLastLoggedDayKey,Flexo,double,telemetry,binary_extract,MessageTracer telemetry [decomp type: double via doubleForKey/setDouble:forKey]
+FFMessageTracerLastLoggedSharePerWeekKey,Flexo,double,telemetry,binary_extract,MessageTracer telemetry [decomp type: double via doubleForKey/setDouble:forKey]
+FFMessageTracerLastLoggedWeekKey,Flexo,double,telemetry,binary_extract,MessageTracer telemetry [decomp type: double via doubleForKey]
+FFMessageTracerLibraryOpenFailedKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerLibraryOpenOkKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerLibraryOpenWithDamageKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerLibraryOpenWithRepairKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerLibraryOpenWithValidationKey,Flexo,int,telemetry,binary_extract,MessageTracer telemetry [decomp type: int via integerForKey]
+FFMessageTracerSessionDurationArrayKey,Flexo,CMTime,numeric_config,binary_extract,Duration value [also accessed via arrayForKey in decomp]
+FFMessageTracerShareClipInfoArrayKey,Flexo,array,telemetry,binary_extract,MessageTracer telemetry [decomp type: array via arrayForKey]
+FFMessageTracerVideoCodecNamesKey,Flexo,mixed,telemetry,binary_extract,MessageTracer telemetry
+FFMMConsolidateFilesAlertMessageTextInternal,Flexo,unknown,data_storage,binary_extract,
+FFMMOptionsCacheLocationDefault,Flexo,string,path_url,binary_extract,URL/path/location
+FFMMOptionsMediaLocationDefault,Flexo,string,path_url,binary_extract,URL/path/location
+FFMMOptionsMotionContentLocationDefault,Flexo,string,path_url,binary_extract,URL/path/location
+FFModalProgressRunLoopMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFModelCoordinatorEnabled,Flexo,bool,behavior_toggle,binary_extract,Model coordinator subsystem
+FFModelCoordinatorPreferred,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/removeObjectForKey
+FFModelScopeDidEndForKey,Flexo,dict,internal,binary_extract,Model-scope stack frame
+FFModelScopeLibraryKey,Flexo,dict,internal,binary_extract,Model-scope stack frame
+FFModelScopeNestingLevelKey,Flexo,dict,internal,binary_extract,Model-scope stack frame
+FFModelScopeStackKey,Flexo,dict,internal,binary_extract,Model-scope stack frame
+FFModelScopeWillBeginForKey,Flexo,dict,internal,binary_extract,Model-scope stack frame
+FFMonitorAngleAudioChangedObjectsKey,Flexo,object,notification_userinfo,binary_extract,NSNotification userInfo object key
+FFMotionPath,Flexo,string,path_url,binary_extract,URL/path/location
+FFMotionSettingsToolDisabled,Flexo,bool,behavior_toggle,binary_extract,Disable Motion settings panel
+FFMovieExportFailedExceededAllowableFileSize,Flexo,number,numeric_config,binary_extract,Size/dimensions
+FFMultiCamGridQuailtyLevel,Flexo,unknown,data_storage,binary_extract,
+FFNamingTokenAudioRate,Flexo,unknown,data_storage,binary_extract,
+FFNamingTokenShootingRate,Flexo,unknown,data_storage,binary_extract,
+FFNamingTokenVideoBitRate,Flexo,unknown,data_storage,binary_extract,
+FFNamingTokenVideoRate,Flexo,unknown,data_storage,binary_extract,
+FFNearestNeighborKey,Flexo,bool,behavior_toggle,binary_extract,Nearest-neighbor scaling
+FFNoiseReductionDebugForce2vuy,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+FFObjectCacheRespondToMemoryPressure,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFObjectDictKey,Flexo,unknown,data_storage,binary_extract,
+FFOptimizeMediaProxySizingMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFOrganizedMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFOrganizedModeChangedKey,Flexo,unknown,data_storage,binary_extract,
+FFOrganizerContinuousPlayback,Final Cut Pro;Flexo,bool,ui_state,decompiled_source,Accessed via boolForKey; Panel/library state storage
+FFOrganizerFilmstripCapActiveKey,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFOrganizerFilmstripCapScale,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFOrganizerFilmstripCapSelectedKey,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFOrganizerFilmstripCapStyleKey,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFOrganizerFilmstripHeightKey,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFOrganizerFilterHUDFormatInfoAudioChannelCount,Flexo,int,numeric_config,binary_extract,Count
+FFOrganizerFilterHUDFormatInfoAudioSampleRate,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFOrganizerFilterHUDFormatInfoVideoFrameRate,Flexo,mixed,ui_state,binary_extract,Panel/library state storage
+FFOrganizerFilterHUDFormatInfoVideoFrameSize,Flexo,number,numeric_config,binary_extract,Size/dimensions
+FFOrganizerModuleEmptyProjectsMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFOrganizerNoItemsCount,Flexo,int,numeric_config,binary_extract,Count
+FFOrganizerOneItemCount,Flexo,int,numeric_config,binary_extract,Count
+FFOrganizeVideoByRolesKey,Flexo,unknown,data_storage,binary_extract,
+FFOverrideConnectionsKey,Flexo,bool,behavior_toggle,binary_extract,Override connected-clip rules
+FFPeriodicBackupInterval,Flexo,number,numeric_config,binary_extract,Interval value
+FFPeriodicBackupMinimumDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFPeriodicValidationRetryInterval,Final Cut Pro,number,numeric_config,binary_extract,Interval value
+FFPhotosImportTaskNameDefault,Flexo,unknown,data_storage,binary_extract,
+FFPinCaptionLanesToVisibleRectKey,Flexo,bool,behavior_toggle,binary_extract,Pin captions to visible timeline rect
+FFPlayerBackgroundRenderResourceChoiceMode,Final Cut Pro;Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFPlayerDblDbl,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFPlayerDestRunoutBehavior,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+FFPlayerDropExemptionsForLiveEdit,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+FFPlayerDroppedAboveThreshold,Flexo,unknown,data_storage,binary_extract,
+FFPlayerEnableAllowances,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+FFPlayerEnablePreEmptiveSkips,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFPlayerHDRViewingMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFPlayerHMDDroppedAboveThreshold,Flexo,unknown,data_storage,binary_extract,
+FFPlayerLogSuggestedSkipsToConsole,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFPlayerLoopPlayback,Final Cut Pro;Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFPlayerModuleChangedProviderShouldntBeUsingThisOneKey,Final Cut Pro,string,internal,binary_extract,Developer assertion key (name IS the message)
+FFPlayerModuleHideDropFrameWallClockTime,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFPlayerMultiCamRateAdjust,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFPlayerReportGlobalDrops,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFPlayerReportMinRefreshInterval,Flexo,number,numeric_config,binary_extract,Interval value
+FFPlayerStatusKey,Flexo,unknown,data_storage,binary_extract,
+FFPlayerStereoViewModeKey,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFPlayerUIPlaybackResourceChoiceMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFPlayerUseQOSUtilityForRender,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+FFPlayerVideoModuleDidHide,Flexo,bool,ui_state,binary_extract,UI show/hide state
+FFProResRAWStandardPluginRenderMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFProviderFigDebug,Flexo,bool,debug_logging,binary_extract,CoreMedia Fig debug output
+FFProviderNoiseReductionUseAlphaStraight,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+FFQTMovieFragmentInterval,Flexo,number,numeric_config,binary_extract,Interval value
+FFRADIngestExternalURL,Flexo,string,path_url,binary_extract,URL/path/location
+FFRADIngestManagerRADVolumePath,Flexo,string,path_url,binary_extract,URL/path/location
+FFRADOriginalDestinationFolderPath,Flexo,string,path_url,binary_extract,URL/path/location
+FFRADTempFolderURL,Flexo,string,path_url,binary_extract,URL/path/location
+FFRangeCheckDrawMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value [also accessed via integerForKey/objectForKey in decomp]
+FFRangeCheckLumaEPS,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey
+FFRangeCheckLumaEPSHigh,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey
+FFRangeCheckLumaEPSLow,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey
+FFRangeCheckRGBEPS,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey
+FFRangeCheckRGBEPSHigh,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey
+FFRangeCheckRGBEPSLow,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey
+FFRangeCheckStripeWidth,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+FFRangeInvalidationNewAssetAudioSourceDictKey,Flexo,dict,notification_userinfo,binary_extract,NSNotification userInfo key
+FFRangeInvalidationOldAssetAudioSourceDictKey,Flexo,dict,notification_userinfo,binary_extract,NSNotification userInfo key
+FFRefAudioComponentsLayoutChangeInfoKey,Flexo,unknown,data_storage,binary_extract,
+FFRefContainedItemsAddedRemovedOrPlayEnableChangeInformFlagsKey,Flexo,dict,notification_userinfo,binary_extract,NSNotification userInfo key
+FFRefRoleChangeContextKey,Flexo,dict,notification_userinfo,binary_extract,NSNotification userInfo key
+FFRelinkPanelAccessoryViewDisclosed,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFRelinkPanelLocateURL,Flexo,string,path_url,binary_extract,URL/path/location [also accessed via URLForKey in decomp]
+FFRelinkPanelWindowFrame,Flexo,string,data_storage,decompiled_source,Accessed via stringForKey
+FFReloadOperationUsesMultipleThreadsKey,Flexo,bool,behavior_toggle,binary_extract,Multi-threaded reload
+FFRemoteURL,Flexo,string,path_url,binary_extract,URL/path/location
+FFResetInvalidEffectStacks,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFRetimeToolDisabled,Flexo,bool,behavior_toggle,binary_extract,Disable retime tool
+FFScopingWindowPath,Flexo,string,path_url,binary_extract,URL/path/location
+FFScrollTimelineViewPerformanceTest,Flexo,bool,perf_monitor,binary_extract,Perf-test: timeline-scroll instrumentation
+FFSegmentationMaskContourHide,Flexo,bool,ui_state,binary_extract,UI show/hide state
+FFSegmentationMaskContourShow,Flexo,bool,ui_state,binary_extract,UI show/hide state
+FFSegmentationMaskEditorHide,Flexo,bool,ui_state,binary_extract,UI show/hide state
+FFSegmentationMaskEditorShow,Flexo,bool,ui_state,binary_extract,UI show/hide state
+FFSegmentStoreAlphaMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFSegmentStoreFileFrameCount,Flexo,int,numeric_config,binary_extract,Count
+FFSelectEditsAfterPasteKey,Flexo,bool,behavior_toggle,binary_extract,Keep selection after paste
+FFSendCaptionsToCompressorDisabledRolesCount,Flexo,int,numeric_config,binary_extract,Count
+FFSendToCompressorMenuItemDefault,Flexo,unknown,data_storage,binary_extract,
+FFSequenceDefaultCropTypeKey,Flexo,unknown,data_storage,binary_extract,
+FFSequenceDragEditMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFSequenceEditDefaultDurationKey,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFSequencePlacementMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFSequenceSlipSlideMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFSequenceTransDefault,Flexo,unknown,data_storage,binary_extract,
+FFSequenceTransDefaultDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFSequenceTransMinDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFSequenceTrimEditMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFServerErrorRateLimit,Flexo,unknown,data_storage,binary_extract,
+FFSetCutawayMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFSetPIPEffectTransitionDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFSetSideBySideSlideDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFShareActorsKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareCategoryKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareCopyrightKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareCreatorKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareDateKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFSharedAudioUnitInvalidationReasonKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFSharedAudioUnitPoolFormatKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareDescriptionKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareDestinationsKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareDirectorKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareEntireProjectDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFShareEpisodeIDKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareEpisodeNumberKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareGenreKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareMasteringDisplayMaxLuminanceKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareMasteringDisplayMinLuminanceKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareMasteringDisplayPrimariesKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareMasteringDisplayWhitePointKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareMaxCLLKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareMaxFALLKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareMediaKindKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareMenuItemDefault,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareMenuProjectDefault,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFSharePanelColorModeKey,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFSharePanelColorSpaceKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFSharePanelExportSelectedLayersOnlyKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFSharePanelParentBrickFilesCount,Flexo,int,numeric_config,binary_extract,Count
+FFSharePlayRangeDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFShareProducerKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareRatingKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareScreenwriterKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareSeasonNumberKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareShareIDKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareShow,Flexo,bool,ui_state,binary_extract,UI show/hide state
+FFShareShowKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareStatusCountKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareStatusDateKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareStatusDateStringKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareStatusErrorKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareStatusFPKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareStatusIndexKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareStatusKindKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareStatusMultiplePathsKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareStatusVideoPathKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareTagsKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareTitleKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareTVNetworkKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFShareVisibleMetadataKey,Flexo,string,data_storage,binary_extract,Share/export default or metadata key
+FFSharingTokenDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFShouldAllocFCPO,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFShouldAllowCOFitFill,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFShouldAllowDenoise,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+FFShouldAllowDenoiseOnBlacklistedConfigs,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFShouldNotAllowAudioEffectInTranscription,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFShowAudioAnimation,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowConfidenceValuesInListView,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowDateRangesInEventList,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowDisplayTimes,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowDragAlignmentGuides,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowFilmstripWithAllEffects,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified [also accessed via boolForKey in decomp]"
+FFShowHDRAsRawValues,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowHiddenClips,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowHiddenTasksInBackgroundTaskHUDKey,Flexo,bool,behavior_toggle,binary_extract,Reveal hidden background tasks
+FFShowHideTimelineLanesDecorator,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowItemTitles,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowMarkedRanges,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowMisalignedDupeIndicatorsKey,Flexo,bool,behavior_toggle,binary_extract,Highlight duplicate-range misalignments
+FFShowPlayheadInfoPopover,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFShowPlayheadInfoPopoverUserSetting,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowRanges,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowSkimmerInfo,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowTextRulersKey,Flexo,bool,behavior_toggle,binary_extract,Show text rulers in titles
+FFShowUnremarkableTasksInBackgroundTaskHUD,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowUsedMediaRanges,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFShowVideoAnimation,binary_scan,bool,behavior_toggle,binary_strings_scan,"Candidate: discovered via binary strings scan, NOT verified"
+FFSidebarModuleCreateDefaultLibraryKey,Flexo,unknown,data_storage,binary_extract,
+FFSoloAnimation,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFSoloChangedTypeKey,Flexo,unknown,data_storage,binary_extract,
+FFSourceVideoOverrideCameraProjectionMode,Flexo;ProMedia,enum,mode_enum,binary_extract,Enum/mode value
+FFStabilizationUseTripodMode,Flexo,bool,behavior_toggle,binary_extract,Default stabilization to tripod
+FFSwitchLibraryPanelFrame,Flexo,string,data_storage,decompiled_source,Accessed via stringForKey
+FFSyncMediaDisabled,Flexo,bool,behavior_toggle,binary_extract,Disable media sync [also accessed via integerForKey in decomp]
+FFSyncMediaLogging,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFTestTimingSyncKey,Flexo,unknown,data_storage,binary_extract,
+FFTheaterCreateArchives,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFTheaterDeprecationKnowledgeBaseURL,Flexo,string,path_url,binary_extract,URL/path/location
+FFTheaterICloudEnabled,Flexo,bool,behavior_toggle,binary_extract,Enable toggle [also accessed via boolForKey in decomp]
+FFTheaterICloudUnavailableLearnMoreURL,Flexo,string,path_url,binary_extract,URL/path/location
+FFTheaterShareShouldAddToTheater,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFThrottleSegmentStoreWrites,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+FFTimecodeDisplayHUDBackgroundMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFTimecodeDisplayHUDFontSize,Flexo,number,numeric_config,binary_extract,Size/dimensions
+FFTimedMetadataRequestInternal,Flexo,unknown,data_storage,binary_extract,
+FFTimelineDefaultsVersion,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+FFTimelineMediaChangedItemsKey,Flexo,unknown,data_storage,binary_extract,
+FFTimelineRippleAfterRetimeKey,Flexo,bool,behavior_toggle,binary_extract,Ripple after retime
+FFTimingMetadataPrimaryKey,Flexo,unknown,data_storage,binary_extract,
+FFTrackerTransformScaleMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFTrackingTransformScale,Flexo,unknown,data_storage,binary_extract,
+FFTranscodeResourceChoiceMode,Final Cut Pro;Flexo;Ozone,enum,mode_enum,binary_extract,Enum/mode value
+FFTranscoderMediaNoDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFTrimDuration,Flexo,CMTime,numeric_config,binary_extract,Duration value
+FFUIColorOSCsPreferenceKey,Flexo,unknown,data_storage,binary_extract,
+FFURLDownloadTaskNameDefault,Flexo,unknown,data_storage,binary_extract,
+FFURLInfoClipNameKey,Flexo,unknown,data_storage,binary_extract,
+FFURLInfoCreationDateKey,Flexo,unknown,data_storage,binary_extract,
+FFURLInfoRangeKey,Flexo,unknown,data_storage,binary_extract,
+FFUseLUTSAndBalanceInBoard,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFUseOriginalOrOptimizedMediaPlayerQualityKey,Flexo,bool,behavior_toggle,binary_extract,Playback quality preference
+FFUseRunGroupsForAudioAnalysis,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFVAMLSaveTranscription,CFPreferences,bool,debug_logging,curated_cfprefs,Persist transcription data to disk
+FFVerticalIndexPath,Flexo,string,path_url,binary_extract,URL/path/location
+FFVideoAngle,Flexo,string,data_storage,decompiled_source,Accessed via stringForKey
+FFVideoEffectPresetKeyframeMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+FFViewEffectMatteMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value [also accessed via integerForKey in decomp]
+FFViewportSize,Flexo,number,numeric_config,binary_extract,Size/dimensions
+FFXMLExportMetadataView,Flexo,string,data_storage,decompiled_source,Accessed via stringForKey
+FFXMLImportDoNotDeleteiMovieXMLAfterImport,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FFXMLManageFileTypeKey,Flexo,unknown,data_storage,binary_extract,
+FFXMLReasonInvalidImportOptionKey,Flexo,unknown,data_storage,binary_extract,
+FFXMLTranslationXMLDradAndDropMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+firstLineOnlyForLastCastMember,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+FORCE_GL_FINISH,Ozone,bool,debug_logging,decompiled_source,Accessed via boolForKey; Force glFinish between draws (Ozone)
+FrameDropLogLevel,CFPreferences,int,debug_logging,curated_cfprefs,"Frame drop reporting (0=off, higher=more)"
+generatedByTrailer,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+GPU_LOGGING,CFPreferences,bool,debug_logging,curated_cfprefs,GPU/FxPlug pipeline logging
+hasClip,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/removeObjectForKey
+HDRCompatible,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+HELIUM_INERTIACAM_CL_DISABLE,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+HMDDisableIdle,ProCore,bool,behavior_toggle,decompiled_source,Accessed via boolForKey; Keep HMD awake
+HMDLogFramerate,ProCore,bool,debug_logging,decompiled_source,Accessed via boolForKey; Log HMD framerate
+HMDOutuputEnabled,Flexo,bool,behavior_toggle,binary_extract,HMD output toggle (sic: typo in FCP)
+isConstantOffset,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+isVertical,Final Cut Pro,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+junkiness,Flexo,double,numeric_config,decompiled_source,Accessed via setDouble:forKey
+kAnalyzeAndOptimizeCreateLightweightProxy,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+legacy,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+levelsOfUndo,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+lineSpacing,Flexo,float,numeric_config,decompiled_source,Accessed via floatForKey/objectForKey
+LK_DEBUG_COACH_TIP_UPDATES,LunaKit,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+LK_DEBUG_COACH_TIPS,LunaKit,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+LKCoachTipKey,LunaKit,string,state,binary_extract,Coach-tip state key
+LKContainerShowHideMaximumDuration,LunaKit,float,numeric_config,binary_extract,Show/hide animation max [also accessed via doubleForKey in decomp]
+LKContainerShowHideMinimumDuration,LunaKit,float,numeric_config,binary_extract,Show/hide animation min [also accessed via doubleForKey in decomp]
+LKContainerShowHidePixelsPerSecond,LunaKit,double,numeric_config,decompiled_source,Accessed via doubleForKey
+LKDragEventTrackerRunLoopMode,LunaKit,string,internal,binary_extract,Runloop mode for drag tracker
+LKSegmentItemOptionsKey,LunaKit,dict,data_storage,binary_extract,Segment-item options storage
+LogCategory,ProAppSupport,int,log_category,curated_proapp_log,Bitmask of ProAppSupport log subsystems
+LogLevel,ProAppSupport,enum,log_level,curated_proapp_log,trace/debug/info/warning/error/failure
+LogThread,ProAppSupport,bool,debug_logging,curated_proapp_log,Include thread info in log lines
+LogUI,ProAppSupport,bool,debug_logging,curated_proapp_log,Toggle in-app SpliceKit log panel
+lowercase,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+map,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+maskedEffectShapeOscMode,Flexo,int,mode_enum,decompiled_source,Accessed via integerForKey; Enum/mode value
+metadataViews,Flexo,data,data_storage,decompiled_source,Accessed via dataForKey
+monochrome,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+motion,Flexo,double,numeric_config,decompiled_source,Accessed via setDouble:forKey
+newShotList,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+NSScrollWheelMultiplier,Ozone,float,numeric_config,decompiled_source,Accessed via floatForKey
+NSShortTimeDateFormatString,Ozone,string,data_storage,decompiled_source,Accessed via stringForKey
+observationOscShowConfidence,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+observationOscShowObjectType,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+OZMessageTracerLastLoggedWeekKey,Ozone,double,telemetry,decompiled_source,Accessed via doubleForKey/setDouble:forKey; MessageTracer telemetry
+OZMessageTracerLaunchCountKey,Ozone,int,telemetry,decompiled_source,Accessed via integerForKey; MessageTracer telemetry
+PEAppPlaybackandRenderPreferencesGPUInternal,Final Cut Pro,bool,behavior_toggle,binary_extract,Internal GPU playback/render preference
+PEAuditionHUDDimensionsKey,Final Cut Pro,number,numeric_config,binary_extract,Size/dimensions
+PECameraSupportURL,Final Cut Pro,string,path_url,binary_extract,URL/path/location
+PECaptionImportResultsAlertSuppressionKey,Final Cut Pro,unknown,data_storage,binary_extract,
+PEDisplayAreaDefaultMode,Final Cut Pro,enum,mode_enum,binary_extract,Enum/mode value
+PEDisplayAreaMode,Final Cut Pro,enum,mode_enum,binary_extract,Enum/mode value
+PEDisplayAreaPriorScopesMode,Final Cut Pro,enum,mode_enum,binary_extract,Enum/mode value
+PEDisplayAreaScopesLayoutMode,Final Cut Pro,enum,mode_enum,binary_extract,Enum/mode value
+PEDisplayAreaScopesWidthKey,Final Cut Pro,unknown,data_storage,binary_extract,
+PEFCPEcosystemURL,Final Cut Pro,string,path_url,binary_extract,URL/path/location
+PEFCPiPadPromoWindowAppLaunchCountKey,Final Cut Pro,int,data_storage,binary_extract,[decomp type: int via integerForKey]
+PEFCPiPadPromoWindowDismissedDateKey,Final Cut Pro,unknown,data_storage,binary_extract,
+PEFCPiPadPromoWindowDisplayedAtSixMonthsDateKey,Final Cut Pro,unknown,data_storage,binary_extract,
+PEFCPiPadPromoWindowLearnMoreClickedDateKey,Final Cut Pro,unknown,data_storage,binary_extract,
+PEFeedbackURL,Final Cut Pro,string,path_url,binary_extract,URL/path/location
+PEImportCloseWindowAfterImport,Final Cut Pro,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+PEImportOptionsAnalyzeAudioSectionHiddenKey,Final Cut Pro,bool,ui_state,binary_extract,Section hidden state
+PEImportOptionsAnalyzeVideoSectionHiddenKey,Final Cut Pro,bool,ui_state,binary_extract,Section hidden state
+PEImportOptionsFilesSectionHiddenKey,Final Cut Pro,bool,ui_state,binary_extract,Section hidden state
+PEImportOptionsHide,Final Cut Pro,bool,ui_state,binary_extract,UI show/hide state
+PEImportOptionsShow,Final Cut Pro,bool,ui_state,binary_extract,UI show/hide state
+PELogicEffectsURL,Final Cut Pro,string,path_url,binary_extract,URL/path/location
+PEManageSubscriptionURL,Final Cut Pro,string,path_url,binary_extract,URL/path/location
+PEMediaBrowserMode,Final Cut Pro;Flexo,enum,mode_enum,binary_extract,Enum/mode value [also accessed via integerForKey in decomp]
+PERFORMANCE_MONITORING,Final Cut Pro;Ozone,bool,perf_monitor,decompiled_source,Accessed via boolForKey; Legacy perf-monitor toggle
+PESavedHDRViewingMode,Final Cut Pro,enum,mode_enum,binary_extract,Enum/mode value
+PEScopesMonochromeKey,Final Cut Pro,unknown,data_storage,binary_extract,
+PEScopesShowGuidesKey,Final Cut Pro,unknown,data_storage,binary_extract,
+PEScopesTraceBrightnessKey,Final Cut Pro,unknown,data_storage,binary_extract,
+PESelectionBasedOSCsDisabled,Final Cut Pro,bool,behavior_toggle,binary_extract,Disable selection-based OSCs
+PEShowWorkInProgressTools,binary_scan,bool,behavior_toggle,binary_strings_scan,Show WIP developer tools in FCP UI
+PESupportURL,Final Cut Pro,string,path_url,binary_extract,URL/path/location
+PETestBundleDirectory,Final Cut Pro,string,data_storage,decompiled_source,Accessed via stringForKey
+PEVoiceOverSavedWindowControllerOrigin,Final Cut Pro,string,data_storage,decompiled_source,Accessed via stringForKey
+previewAnimatics,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+previewMode,Flexo,bool,mode_enum,decompiled_source,Accessed via boolForKey; Enum/mode value
+ProExtensionDiscoveryMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+ProMSMediaServerResourceChoiceMode,Flexo,enum,mode_enum,binary_extract,Enum/mode value
+rate,Flexo;MXFExportSDK,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey
+rbCost,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+RC_SnowLeoGammaCorrectionRatio,Flexo,float,numeric_config,decompiled_source,Accessed via floatForKey/objectForKey
+RoleEditorWindowFrame,Flexo,string,data_storage,decompiled_source,Accessed via stringForKey
+segCost,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+selectedMetadataView,Flexo,string,data_storage,decompiled_source,Accessed via removeObjectForKey/stringForKey
+ShareAtQOSUtility,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+ShareDidShowAppStoreReviewPrompt,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+showClipTitlesOnly,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+ShowColorGranularityGainScale,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+ShowCommandIcons,LunaKit,bool,behavior_toggle,decompiled_source,Accessed via boolForKey; Show command icons in LK lists
+showGuides,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+ShowHiddenMetadataMenuItems,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+skinColorBlue,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+skinColorGreen,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+skinColorRed,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+skinIndicator,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+skipFaceObservation,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+skipFcpTrackerResultSmoothing,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+strokeWidth,Flexo,float,numeric_config,decompiled_source,Accessed via floatForKey/objectForKey
+styleBreakOffset,Flexo,float,numeric_config,decompiled_source,Accessed via floatForKey/objectForKey
+suppressOlderVersionWarning,Ozone,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+tap2DetectConfidenceThreshold,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey/objectForKey/setDouble:forKey
+TemplateBrowserSelectedCollection,Ozone,array,data_storage,decompiled_source,Accessed via arrayForKey
+TemplateBrowserSelectedCollectionType,Ozone,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+TemplateBrowserSelectedDocument,Ozone,array,data_storage,decompiled_source,Accessed via arrayForKey
+TemplateBrowserSelectedPresetTag,Ozone,string,data_storage,decompiled_source,Accessed via objectForKey/stringForKey
+tilt,Flexo,float,numeric_config,decompiled_source,Accessed via floatForKey/objectForKey
+timelineIndexSearchesEffects,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+timescale,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey
+titleOnTop,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+TLKActionAutoscrollMediaLimitThreshold,TimelineKit,int,numeric_config,binary_extract,Autoscroll distance threshold
+TLKAlternatingLaneColors,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+TLKColorizeLanes,TimelineKit,bool,debug_visual,decompiled_source,"Accessed via boolForKey; Color lane backgrounds (TLK variant, note spelling)"
+TLKColorizeLanesInMonochrome,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+TLKColorizesLanes,TimelineKit (runtime),unknown,data_storage,runtime_tlk_curated,
+TLKDebugColorChangedObjects,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,TLK debug overlay
+TLKDebugErrorsAndWarnings,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,TLK debug overlay
+TLKDebugLayoutConstraints,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,TLK debug overlay
+TLKDebugLogLevel,TimelineKit,int,log_level,binary_extract,TLK subsystem log level
+TLKDisableItemContents,TimelineKit,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+TLKEnableUpdateFilmstripsForItemComponentFragments,TimelineKit (runtime),unknown,data_storage,runtime_tlk_curated,
+TLKForceLayoutOnDrag,TimelineKit (runtime),bool,perf_monitor,runtime_tlk_curated,Force-layout debug toggle
+TLKItemLayerContentsOperations,TimelineKit,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+TLKLegacyLayout,TimelineKit (runtime),unknown,data_storage,runtime_tlk_curated,
+TLKLoadDebugMicaAssets,TimelineKit (runtime),unknown,data_storage,runtime_tlk_curated,
+TLKLogParts,TimelineKit,bool,debug_logging,decompiled_source,Accessed via boolForKey; TLK subsystem log
+TLKLogRecyclingLayerChanges,TimelineKit (runtime),bool,debug_logging,runtime_tlk_curated,TLK subsystem log
+TLKLogReloadRequests,TimelineKit (runtime),bool,debug_logging,runtime_tlk_curated,TLK subsystem log
+TLKLogSegmentationStatistics,TimelineKit (runtime),bool,debug_logging,runtime_tlk_curated,TLK subsystem log
+TLKLogVisibleLayerChanges,TimelineKit (runtime),bool,debug_logging,runtime_tlk_curated,TLK subsystem log
+TLKLogVisibleRectChanges,TimelineKit (runtime),bool,debug_logging,runtime_tlk_curated,TLK subsystem log
+TLKOptimizedReload,TimelineKit (runtime),bool,perf_monitor,runtime_tlk_curated,Optimized render path
+TLKOptimizedZooming,TimelineKit (runtime),bool,perf_monitor,runtime_tlk_curated,Optimized render path
+TLKPartPath,TimelineKit,string,path_url,binary_extract,TLK part path (internal)
+TLKPerformanceMonitorEnabled,Flexo;TimelineKit,bool,perf_monitor,binary_extract,Enable timeline perf monitor [also accessed via boolForKey in decomp]
+TLKPreCacheLayerCount,TimelineKit,int,numeric_config,binary_extract,Layers to pre-cache
+TLKShowContainerBounds,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKShowContentLayers,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKShowHiddenGapItems,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKShowHiddenItemHeaders,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKShowInvalidLayoutRects,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKShowItemLaneIndex,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKShowMisalignedEdges,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKShowRenderBar,TimelineKit,bool,debug_visual,decompiled_source,Accessed via boolForKey; Visual overlay
+TLKShowRulerBounds,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKShowUsedRegion,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKShowZeroHeightSpineItems,TimelineKit (runtime),bool,debug_visual,runtime_tlk_curated,Visual overlay
+TLKTimelineRegularEditingMode,TimelineKit,bool,behavior_toggle,binary_extract,Editing mode toggle
+TLKTimelineSimpleEditingMode,TimelineKit,bool,behavior_toggle,binary_extract,Editing mode toggle
+TLKVerticalIndexTableKey,TimelineKit,dict,cache,binary_extract,Vertical index cache
+TLKViewStateUsesLanePositions,TimelineKit (runtime),unknown,data_storage,runtime_tlk_curated,
+traceBrightness,Flexo,float,numeric_config,decompiled_source,Accessed via floatForKey
+TrackingOptionsDirection,Flexo,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+transform2DOscMode,Flexo,int,mode_enum,decompiled_source,Accessed via integerForKey; Enum/mode value
+transition,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/objectForKey
+transitionAfterDuration,Flexo,float,numeric_config,decompiled_source,Accessed via floatForKey/setFloat:forKey; Duration value
+transitionBeforeDuration,Flexo,float,numeric_config,decompiled_source,Accessed via floatForKey/setFloat:forKey; Duration value
+uppercase,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey/setObject:forKey
+value,Flexo;MIO;Ozone,int,numeric_config,decompiled_source,Accessed via integerForKey/objectForKey
+VAMLAutoCropFilterThresh,VAML,float,numeric_config,decompiled_source,Accessed via floatForKey
+VideoDecoderLogLevelInNLE,CFPreferences,int,debug_logging,curated_cfprefs,"Video decoder verbosity (0=off, higher=more)"
+volume,Flexo;MIO,float,numeric_config,decompiled_source,Accessed via floatForKey/objectForKey
+WaveformsIgnoreVolume,Flexo,bool,behavior_toggle,decompiled_source,Accessed via boolForKey
+whiteBalanceColorBlue,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+whiteBalanceColorGreen,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+whiteBalanceColorRed,Flexo,double,numeric_config,decompiled_source,Accessed via doubleForKey
+XMLExportLastLocation,Flexo,URL,path_url,decompiled_source,Accessed via URLForKey; URL/path/location

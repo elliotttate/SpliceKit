@@ -18,6 +18,7 @@ SpliceKitBRAWDecoderInProcess.mm
 SpliceKitVP9.mm
 SpliceKitMKV.m
 SpliceKitServer.m
+SpliceKitBridgeMetadata.m
 SpliceKitAsync.m
 SpliceKitLogPanel.m
 SpliceKitSentry.m
@@ -39,3 +40,5 @@ SpliceKitTimelinePlayheadOverlay.m
 SpliceKitTimelinePerfMode.m
 SpliceKitURLImport.m
 SpliceKitLiveCam.m
+SpliceKitVisionPro.m
+SpliceKitVisionProPanel.m

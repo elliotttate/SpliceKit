@@ -227,6 +227,8 @@ READ_ONLY_TOOLS = {
     "list_transitions",
     "search_commands",
     "get_livecam_status",
+    "visionpro_status",
+    "visionpro_list_clients",
     "list_menus",
     "get_inspector_properties",
     "get_title_text",
@@ -265,6 +267,13 @@ READ_ONLY_TOOLS = {
     "reload_plugin_tools",
     "mixer_get_state",
     "import_url_status",
+    "bridge_alive",
+    "bridge_describe",
+    "bridge_safety_tags",
+    "events_subscribe",
+    "events_unsubscribe",
+    "events_status",
+    "async_status",
 }
 
 DESTRUCTIVE_TOOLS = {
@@ -408,6 +417,22 @@ CUSTOM_TOOL_TITLES = {
     "open_livecam": "Open LiveCam",
     "close_livecam": "Close LiveCam",
     "get_livecam_status": "Get LiveCam Status",
+    "visionpro_status": "Vision Pro Status",
+    "visionpro_open_panel": "Open Vision Pro Panel",
+    "visionpro_close_panel": "Close Vision Pro Panel",
+    "visionpro_start": "Start Vision Pro Discovery",
+    "visionpro_stop": "Stop Vision Pro Discovery",
+    "visionpro_list_clients": "List Vision Pro Clients",
+    "visionpro_connect": "Connect to Vision Pro",
+    "visionpro_disconnect": "Disconnect Vision Pro",
+    "visionpro_load_aime": "Load Vision Pro AIME Metadata",
+    "visionpro_send_aime": "Send AIME to Vision Pro",
+    "visionpro_export_aime": "Export Vision Pro AIME",
+    "visionpro_set_camera": "Set Vision Pro Camera",
+    "visionpro_set_camera_calibration": "Set Vision Pro Camera Calibration",
+    "visionpro_remove_camera": "Remove Vision Pro Camera",
+    "visionpro_send_mask": "Send Vision Pro Camera Mask",
+    "visionpro_set_max_clients": "Set Vision Pro Max Clients",
     "delete_transcript_silences": "Delete Transcript Silences",
     "set_silence_threshold": "Set Silence Threshold",
     "show_command_palette": "Show Command Palette",
@@ -776,6 +801,84 @@ def bridge_status() -> str:
     return _fmt(r)
 
 
+@mcp.tool(annotations=_tool_annotations("bridge_alive"))
+def bridge_alive() -> str:
+    """Cheap liveness probe that does not touch the main thread.
+
+    Returns {alive, version, pid, timestamp} without any FCP API calls. Use
+    this when you want to verify the bridge is responsive without risking a
+    hang on a stuck main thread.
+    """
+    return _call_or_error("bridge.alive")
+
+
+@mcp.tool(annotations=_tool_annotations("bridge_describe"))
+def bridge_describe(method: str = "", safety: str = "") -> str:
+    """Return self-describing metadata for every known RPC method.
+
+    - method: optional — return metadata for a single method only
+    - safety: optional — filter by classification
+      ("safe", "state_dependent", "modal", "destructive", "system", "unclassified")
+
+    Each entry includes: name, safety classification, one-line summary, source
+    (builtin/plugin). Use this to discover what's safe to call autonomously,
+    what requires selection/project state, and what may open modals.
+    """
+    params = {}
+    if method:
+        params["method"] = method
+    if safety:
+        params["safety"] = safety
+    return _call_or_error("bridge.describe", **params)
+
+
+@mcp.tool(annotations=_tool_annotations("bridge_safety_tags"))
+def bridge_safety_tags() -> str:
+    """List the safety classifications used by bridge_describe with meanings."""
+    return _call_or_error("bridge.safetyTags")
+
+
+@mcp.tool(annotations=_tool_annotations("events_subscribe"))
+def events_subscribe(patterns: list[str] | None = None) -> str:
+    """Subscribe this connection to bridge events matching patterns.
+
+    Patterns: exact event type (e.g. "command.completed"), "prefix.*" wildcard,
+    or "*" for everything. Without a subscription, all events are delivered.
+
+    Events arrive as JSON-RPC notifications with method="event" and params
+    carrying {type, ...}. Relevant types include:
+      - command.completed — when async=true RPCs finish (carries correlation_id)
+      - crash             — when the in-process crash handler catches a signal
+      - trace             — from debug.traceMethod installed traces
+
+    Example: events_subscribe(patterns=["command.*", "crash"])
+    """
+    return _call_or_error("events.subscribe", patterns=patterns or ["*"])
+
+
+@mcp.tool(annotations=_tool_annotations("events_unsubscribe"))
+def events_unsubscribe() -> str:
+    """Remove this connection's event pattern allowlist."""
+    return _call_or_error("events.unsubscribe")
+
+
+@mcp.tool(annotations=_tool_annotations("events_status"))
+def events_status() -> str:
+    """Report this connection's current event subscription state."""
+    return _call_or_error("events.status")
+
+
+@mcp.tool(annotations=_tool_annotations("async_status"))
+def async_status() -> str:
+    """List in-flight async operations with elapsed time.
+
+    Long-running RPCs dispatched with async=true are tracked here. Each entry
+    has a correlation_id, method name, and elapsed_ms since dispatch. When
+    they finish, a `command.completed` event is broadcast with the result.
+    """
+    return _call_or_error("async.status")
+
+
 @mcp.tool(annotations=_tool_annotations("background_render_status"))
 def background_render_status() -> str:
     """Inspect Final Cut Pro's live background-render state.
@@ -827,7 +930,7 @@ def background_render_control(action: str, seconds: float) -> str:
 # Most require a clip to be selected first (selectClipAtPlayhead).
 
 @mcp.tool(annotations=_tool_annotations("timeline_action"))
-def timeline_action(action: str) -> str:
+def timeline_action(action: str, dry_run: bool = False) -> str:
     """Use this legacy catch-all tool when a timeline action does not fit the narrower action tools.
 
     Actions:
@@ -900,8 +1003,12 @@ def timeline_action(action: str) -> str:
              hideClip, removeAllKeywords, removeAnalysisKeywords, addVideoGenerator
 
     You can also pass any raw ObjC selector name.
+
+    Pass dry_run=True to see what would fire without firing it — useful when
+    you want to verify a project is loaded and a clip is selected before a
+    destructive action.
     """
-    return _call_or_error("timeline.action", action=action)
+    return _call_or_error("timeline.action", action=action, dry_run=dry_run)
 
 
 @mcp.tool(annotations=_tool_annotations("timeline_navigation_action"))
@@ -3159,18 +3266,23 @@ def ai_command_gemma(query: str, model: str = "unsloth/gemma-4-E4B-it-UD-MLX-4bi
 # Walks FCP's NSMenu hierarchy by title to reach any menu item.
 
 @mcp.tool(annotations=_tool_annotations("execute_menu_command"))
-def execute_menu_command(menu_path: list[str]) -> str:
+def execute_menu_command(menu_path: list[str], dry_run: bool = False) -> str:
     """Execute ANY FCP menu command by navigating the menu bar hierarchy.
 
     Args:
         menu_path: List of menu item names from top to bottom.
                    e.g. ["File", "New", "Project"] or ["Edit", "Paste as Connected Clip"]
+        dry_run: If True, report what would fire without firing it. Returns
+                 {menuItem, enabled, validates, action, target_class,
+                  likely_modal, would_fire} — useful for checking whether a
+                 menu item is available in the current state and whether
+                 it is likely to open a modal dialog before committing.
 
     This gives you access to every single menu item in FCP, including items
     that don't have dedicated SpliceKit actions. Menu items are matched
     case-insensitively and trailing ellipsis (...) is ignored.
     """
-    r = bridge.call("menu.execute", menuPath=menu_path)
+    r = bridge.call("menu.execute", menuPath=menu_path, dry_run=dry_run)
     if _err(r):
         return f"Error: {r.get('error', r)}"
     return _fmt(r)
@@ -7633,6 +7745,210 @@ def batch_color_correct(correction: str = "addColorBoard", clip_count: int = 0) 
         "correction": correction,
         "results": results,
     }, indent=2, default=str)
+
+
+# ============================================================
+# Vision Pro Live Preview (ImmersiveVideoToolbox)
+# ============================================================
+# Requires Apple Immersive Video Utility to be installed at
+# /Applications/Apple Immersive Video Utility.app — SpliceKit dlopens
+# `ImmersiveVideoToolbox.framework` from that bundle on demand.
+#
+# Workflow:
+#   1. visionpro_open_panel()              — floating UI inside FCP
+#   2. visionpro_start()                   — begin Bonjour discovery
+#   3. visionpro_list_clients()            — see discovered Vision Pro peers
+#   4. visionpro_connect(host="foo.local") — open the remote preview session
+#   5. visionpro_load_aime(path="...aime") — set camera/lens metadata
+#   6. visionpro_send_aime()               — push metadata to the headset
+#   7. (frames then stream; monitor with visionpro_status)
+
+@mcp.tool(annotations=_tool_annotations("visionpro_status"))
+@bridge_tool
+def visionpro_status() -> str:
+    """Report Vision Pro session state.
+
+    Includes: IVT framework availability, session running/streaming flags,
+    discovered client names (Bonjour `_ivtpreviewclient._tcp`), active
+    (connected) clients, current camera id, and last error message (if any).
+    """
+    r = _call("visionpro.status")
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_open_panel"))
+@bridge_tool
+def visionpro_open_panel() -> str:
+    """Open the floating Vision Pro panel inside FCP."""
+    r = _call("menu.execute", menuPath=["Splices", "Vision Pro Preview"])
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_close_panel"))
+@bridge_tool
+def visionpro_close_panel() -> str:
+    """Close the Vision Pro panel (same menu toggles visibility)."""
+    r = _call("menu.execute", menuPath=["Splices", "Vision Pro Preview"])
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_start"))
+@bridge_tool
+def visionpro_start(display_name: str = "SpliceKit") -> str:
+    """Start the Vision Pro discovery + preview session.
+
+    Creates an IVTMppRemotePreviewSession (Bonjour advertised as `_ivtpreviewclient._tcp`)
+    plus a fresh IVTSession for metadata. Required before connecting to a headset.
+
+    Args:
+        display_name: Name broadcast to Vision Pros on the network. Default: SpliceKit.
+    """
+    r = _call("visionpro.start", displayName=display_name)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_stop"))
+@bridge_tool
+def visionpro_stop() -> str:
+    """Stop the Vision Pro session and tear down Bonjour discovery."""
+    r = _call("visionpro.stop")
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_list_clients"))
+@bridge_tool
+def visionpro_list_clients() -> str:
+    """List Bonjour-discovered Vision Pros and actively-connected peers."""
+    r = _call("visionpro.listClients")
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_connect"))
+@bridge_tool
+def visionpro_connect(host: str = "", ip: str = "") -> str:
+    """Connect to a Vision Pro by host name (e.g. `Vision-Pro.local`) or IP address.
+
+    Provide exactly one of `host` or `ip`. Host name is preferred when the
+    device was found via Bonjour (use visionpro_list_clients to see names).
+    """
+    params = {}
+    if host:
+        params["host"] = host
+    if ip:
+        params["ip"] = ip
+    if not params:
+        return "Error: provide host= or ip="
+    r = _call("visionpro.addClient", **params)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_disconnect"))
+@bridge_tool
+def visionpro_disconnect(host: str = "", ip: str = "") -> str:
+    """Disconnect a connected Vision Pro by host name or IP."""
+    params = {}
+    if host:
+        params["host"] = host
+    if ip:
+        params["ip"] = ip
+    if not params:
+        return "Error: provide host= or ip="
+    r = _call("visionpro.removeClient", **params)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_load_aime"))
+@bridge_tool
+def visionpro_load_aime(path: str) -> str:
+    """Load an Apple Immersive Metadata Envelope (.aime) into the IVTSession.
+
+    The .aime defines camera rig geometry, lens calibration, masks, and projection
+    settings. Required before Vision Pro can render immersive video correctly.
+    """
+    r = _call("visionpro.loadAime", path=path)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_send_aime"))
+@bridge_tool
+def visionpro_send_aime(path: str = "") -> str:
+    """Send the currently-loaded AIME (or a specified .aime path) to connected Vision Pros.
+
+    Without `path`, round-trips the IVTSession's current static metadata to a temp
+    file and sends that. Headsets use this to align their immersive rendering
+    with the source rig.
+    """
+    params = {"path": path} if path else {}
+    r = _call("visionpro.sendAime", **params)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_export_aime"))
+@bridge_tool
+def visionpro_export_aime(path: str) -> str:
+    """Export the current IVTSession static metadata to an .aime file on disk."""
+    r = _call("visionpro.exportAime", path=path)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_set_camera"))
+@bridge_tool
+def visionpro_set_camera(camera_id: str) -> str:
+    """Set the session's current camera id. Must match a camera defined in the loaded AIME."""
+    r = _call("visionpro.setCurrentCamera", cameraId=camera_id)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_set_camera_calibration"))
+@bridge_tool
+def visionpro_set_camera_calibration(
+    camera_id: str,
+    usdz_path: str = "",
+    ilpd_path: str = "",
+    json: str = "",
+) -> str:
+    """Install camera calibration data for a given camera id.
+
+    Provide exactly one of:
+      - usdz_path: path to a .usdz describing the camera/lens geometry.
+      - ilpd_path: path to an Apple Immersive Lens Profile Data (ILPD) file.
+      - json: inline JSON description (Apple's Camera Description schema).
+    """
+    params = {"cameraId": camera_id}
+    if usdz_path:
+        params["usdzPath"] = usdz_path
+    elif ilpd_path:
+        params["ilpdPath"] = ilpd_path
+    elif json:
+        params["json"] = json
+    else:
+        return "Error: provide one of usdz_path / ilpd_path / json"
+    r = _call("visionpro.setCameraCalibration", **params)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_remove_camera"))
+@bridge_tool
+def visionpro_remove_camera(camera_id: str) -> str:
+    """Remove a camera entry from the IVTSession by id."""
+    r = _call("visionpro.removeCamera", cameraId=camera_id)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_send_mask"))
+@bridge_tool
+def visionpro_send_mask(path: str) -> str:
+    """Send a camera mask (.usdz / .json) to connected Vision Pros."""
+    r = _call("visionpro.sendMask", path=path)
+    return _fmt(r)
+
+
+@mcp.tool(annotations=_tool_annotations("visionpro_set_max_clients"))
+@bridge_tool
+def visionpro_set_max_clients(max: int) -> str:
+    """Set the maximum number of Vision Pro clients that can connect simultaneously."""
+    r = _call("visionpro.setMaxClients", max=max)
+    return _fmt(r)
 
 
 # MCP servers communicate over stdio -- the AI tool framework handles the transport

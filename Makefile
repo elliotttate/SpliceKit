@@ -385,6 +385,11 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) braw-pr
 	@/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'SpliceKit uses speech recognition to transcribe timeline audio for text-based editing.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
 	@/usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'SpliceKit LiveCam uses the camera for native webcam recording inside Final Cut Pro.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
 	@/usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'SpliceKit LiveCam uses the microphone for native webcam capture inside Final Cut Pro.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
+	@# Local network + Bonjour for Vision Pro preview (required on macOS 15+).
+	@# `_ivtpreviewclient._tcp` is Apple's service type for Vision Pro remote preview peers.
+	@/usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'SpliceKit discovers nearby Vision Pro headsets on your local network to send immersive preview video.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
+	@/usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
+	@/usr/libexec/PlistBuddy -c "Add :NSBonjourServices: string '_ivtpreviewclient._tcp'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
 	@# Deploy tools
 	@mkdir -p "$(TOOLS_DIR)"
 	@$(MAKE) url-import-tools
