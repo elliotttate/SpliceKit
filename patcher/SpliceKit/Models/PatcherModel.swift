@@ -767,11 +767,12 @@ class PatcherModel: ObservableObject {
         await setStepAsync(.installFramework)
         let fwDir = moddedApp + "/Contents/Frameworks/SpliceKit.framework"
         shell("""
+            rm -rf '\(fwDir)'
             mkdir -p '\(fwDir)/Versions/A/Resources'
             cp '\(buildDir)/SpliceKit' '\(fwDir)/Versions/A/SpliceKit'
-            cd '\(fwDir)/Versions' && ln -sf A Current
-            cd '\(fwDir)' && ln -sf Versions/Current/SpliceKit SpliceKit
-            cd '\(fwDir)' && ln -sf Versions/Current/Resources Resources
+            cd '\(fwDir)/Versions' && ln -sfn A Current
+            cd '\(fwDir)' && ln -sfn Versions/Current/SpliceKit SpliceKit
+            cd '\(fwDir)' && ln -sfn Versions/Current/Resources Resources
             """)
         let currentVersion = currentSpliceKitVersion()
         let patcherVersion = currentVersion.isEmpty ? "0.0.0" : currentVersion
@@ -879,17 +880,17 @@ class PatcherModel: ObservableObject {
         shell("/usr/libexec/PlistBuddy -c \"Add :NSMicrophoneUsageDescription string 'SpliceKit LiveCam uses the microphone for native webcam capture inside Final Cut Pro.'\" '\(moddedApp)/Contents/Info.plist' 2>/dev/null")
 
         let quotedIdentity = shellQuote(signIdentity)
-        // Sign inside-out: BRAW plugin bundles (innermost) → framework → app.
-        let brawDecoderBundle = moddedApp + "/Contents/PlugIns/Codecs/SpliceKitBRAWDecoder.bundle"
-        let brawImportBundle = moddedApp + "/Contents/PlugIns/FormatReaders/SpliceKitBRAWImport.bundle"
-        let signBRAW: (String) -> String = { ident in
-            var parts: [String] = []
-            if FileManager.default.fileExists(atPath: brawDecoderBundle) {
-                parts.append("codesign --force --options runtime --sign \(ident) '\(brawDecoderBundle)' 2>&1")
-            }
-            if FileManager.default.fileExists(atPath: brawImportBundle) {
-                parts.append("codesign --force --options runtime --sign \(ident) '\(brawImportBundle)' 2>&1")
-            }
+        // Sign inside-out: any nested SpliceKit plug-in bundles → framework → app.
+        let signSpliceKitBundles: (String) -> String = { ident in
+            let bundlePaths = [
+                moddedApp + "/Contents/PlugIns/Codecs/SpliceKitBRAWDecoder.bundle",
+                moddedApp + "/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle",
+                moddedApp + "/Contents/PlugIns/FormatReaders/SpliceKitBRAWImport.bundle",
+                moddedApp + "/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle"
+            ]
+            let parts = bundlePaths
+                .filter { FileManager.default.fileExists(atPath: $0) }
+                .map { "codesign --force --options runtime --sign \(ident) '\($0)' 2>&1" }
             return parts.isEmpty ? "true" : parts.joined(separator: " && ")
         }
         // Strip extended attributes immediately before signing. Steps between
@@ -899,8 +900,8 @@ class PatcherModel: ObservableObject {
         // "resource fork, Finder information, or similar detritus not allowed"
         // rejection.
         var signResult = shellResult("""
-            xattr -cr '\(moddedApp)' 2>/dev/null && \
-            \(signBRAW(quotedIdentity)) && \
+            (xattr -cr '\(moddedApp)' 2>/dev/null || true) && \
+            \(signSpliceKitBundles(quotedIdentity)) && \
             codesign --force --options runtime --sign \(quotedIdentity) '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
             codesign --force --options runtime --sign \(quotedIdentity) --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
             """)
@@ -911,8 +912,8 @@ class PatcherModel: ObservableObject {
             }
             signIdentity = "-"
             signResult = shellResult("""
-                xattr -cr '\(moddedApp)' 2>/dev/null && \
-                \(signBRAW("-")) && \
+                (xattr -cr '\(moddedApp)' 2>/dev/null || true) && \
+                \(signSpliceKitBundles("-")) && \
                 codesign --force --options runtime --sign - '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
                 codesign --force --options runtime --sign - --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
                 """)
@@ -1035,7 +1036,14 @@ class PatcherModel: ObservableObject {
         // Install framework (overwrite existing binary)
         await setStepAsync(.installFramework)
         let fwDir = moddedApp + "/Contents/Frameworks/SpliceKit.framework"
-        shell("cp '\(buildDir)/SpliceKit' '\(fwDir)/Versions/A/SpliceKit'")
+        shell("""
+            rm -rf '\(fwDir)'
+            mkdir -p '\(fwDir)/Versions/A/Resources'
+            cp '\(buildDir)/SpliceKit' '\(fwDir)/Versions/A/SpliceKit'
+            cd '\(fwDir)/Versions' && ln -sfn A Current
+            cd '\(fwDir)' && ln -sfn Versions/Current/SpliceKit SpliceKit
+            cd '\(fwDir)' && ln -sfn Versions/Current/Resources Resources
+            """)
 
         let currentVersion = currentSpliceKitVersion()
         let patcherVersion = currentVersion.isEmpty ? "0.0.0" : currentVersion
@@ -1114,17 +1122,17 @@ class PatcherModel: ObservableObject {
         try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)
 
         let quotedIdentity = shellQuote(signIdentity)
-        // Sign inside-out: BRAW plugin bundles (innermost) → framework → app.
-        let brawDecoderBundle = moddedApp + "/Contents/PlugIns/Codecs/SpliceKitBRAWDecoder.bundle"
-        let brawImportBundle = moddedApp + "/Contents/PlugIns/FormatReaders/SpliceKitBRAWImport.bundle"
-        let signBRAW: (String) -> String = { ident in
-            var parts: [String] = []
-            if FileManager.default.fileExists(atPath: brawDecoderBundle) {
-                parts.append("codesign --force --options runtime --sign \(ident) '\(brawDecoderBundle)' 2>&1")
-            }
-            if FileManager.default.fileExists(atPath: brawImportBundle) {
-                parts.append("codesign --force --options runtime --sign \(ident) '\(brawImportBundle)' 2>&1")
-            }
+        // Sign inside-out: any nested SpliceKit plug-in bundles → framework → app.
+        let signSpliceKitBundles: (String) -> String = { ident in
+            let bundlePaths = [
+                moddedApp + "/Contents/PlugIns/Codecs/SpliceKitBRAWDecoder.bundle",
+                moddedApp + "/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle",
+                moddedApp + "/Contents/PlugIns/FormatReaders/SpliceKitBRAWImport.bundle",
+                moddedApp + "/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle"
+            ]
+            let parts = bundlePaths
+                .filter { FileManager.default.fileExists(atPath: $0) }
+                .map { "codesign --force --options runtime --sign \(ident) '\($0)' 2>&1" }
             return parts.isEmpty ? "true" : parts.joined(separator: " && ")
         }
         // Strip extended attributes immediately before signing. Steps between
@@ -1134,8 +1142,8 @@ class PatcherModel: ObservableObject {
         // "resource fork, Finder information, or similar detritus not allowed"
         // rejection.
         var signResult = shellResult("""
-            xattr -cr '\(moddedApp)' 2>/dev/null && \
-            \(signBRAW(quotedIdentity)) && \
+            (xattr -cr '\(moddedApp)' 2>/dev/null || true) && \
+            \(signSpliceKitBundles(quotedIdentity)) && \
             codesign --force --options runtime --sign \(quotedIdentity) '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
             codesign --force --options runtime --sign \(quotedIdentity) --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
             """)
@@ -1146,8 +1154,8 @@ class PatcherModel: ObservableObject {
             }
             signIdentity = "-"
             signResult = shellResult("""
-                xattr -cr '\(moddedApp)' 2>/dev/null && \
-                \(signBRAW("-")) && \
+                (xattr -cr '\(moddedApp)' 2>/dev/null || true) && \
+                \(signSpliceKitBundles("-")) && \
                 codesign --force --options runtime --sign - '\(moddedApp)/Contents/Frameworks/SpliceKit.framework' 2>&1 && \
                 codesign --force --options runtime --sign - --entitlements '\(entitlements)' '\(moddedApp)' 2>&1
                 """)

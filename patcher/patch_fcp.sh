@@ -339,15 +339,17 @@ log "Built: $(file "$BUILD_DIR/SpliceKit" | grep -o 'universal.*')"
 step "Step 3: Installing SpliceKit framework"
 
 FW_DIR="$MODDED_APP/Contents/Frameworks/SpliceKit.framework"
+rm -rf "$FW_DIR"
 mkdir -p "$FW_DIR/Versions/A/Resources"
 
 # Copy dylib
 cp "$BUILD_DIR/SpliceKit" "$FW_DIR/Versions/A/SpliceKit"
 
-# Create symlinks
-cd "$FW_DIR/Versions" && ln -sf A Current
-cd "$FW_DIR" && ln -sf Versions/Current/SpliceKit SpliceKit
-cd "$FW_DIR" && ln -sf Versions/Current/Resources Resources
+# Create symlinks. Use -n so repeated patch runs replace the symlink itself
+# instead of following it into Versions/A and creating recursive loops.
+cd "$FW_DIR/Versions" && ln -sfn A Current
+cd "$FW_DIR" && ln -sfn Versions/Current/SpliceKit SpliceKit
+cd "$FW_DIR" && ln -sfn Versions/Current/Resources Resources
 
 # Create Info.plist
 cat > "$FW_DIR/Versions/A/Resources/Info.plist" << 'PLIST'

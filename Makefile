@@ -379,16 +379,18 @@ braw-raw-processor: $(BRAW_RAWPROC_EXEC)
 
 deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) braw-prototype vp9-prototype mkv-prototype
 	@echo "=== Deploying SpliceKit to modded FCP ==="
-	@mkdir -p "$(FW_DIR)/Versions/A/Resources"
+		@rm -rf "$(FW_DIR)"
+		@mkdir -p "$(FW_DIR)/Versions/A/Resources"
 	cp $(OUTPUT) "$(FW_DIR)/Versions/A/SpliceKit"
 	@if [ -f "$(HOME)/Library/Application Support/SpliceKit/SpliceKitSentryConfig.plist" ]; then \
 		cp "$(HOME)/Library/Application Support/SpliceKit/SpliceKitSentryConfig.plist" "$(FW_DIR)/Versions/A/Resources/SpliceKitSentryConfig.plist"; \
 		echo "Copied runtime Sentry config into framework resources"; \
 	fi
-	@# Create framework symlinks (must use cd for relative paths)
-	@cd "$(FW_DIR)/Versions" && ln -sf A Current
-	@cd "$(FW_DIR)" && ln -sf Versions/Current/SpliceKit SpliceKit
-	@cd "$(FW_DIR)" && ln -sf Versions/Current/Resources Resources
+		@# Create framework symlinks. Use -n so repeated deploys replace the
+		@# symlink itself instead of following it into Versions/A.
+		@cd "$(FW_DIR)/Versions" && ln -sfn A Current
+		@cd "$(FW_DIR)" && ln -sfn Versions/Current/SpliceKit SpliceKit
+		@cd "$(FW_DIR)" && ln -sfn Versions/Current/Resources Resources
 	@# Create Info.plist if missing
 	@test -f "$(FW_DIR)/Versions/A/Resources/Info.plist" || \
 		printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string><key>CFBundleName</key><string>SpliceKit</string><key>CFBundleVersion</key><string>1.0.0</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleExecutable</key><string>SpliceKit</string></dict></plist>' \

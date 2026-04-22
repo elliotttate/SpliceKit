@@ -332,11 +332,12 @@ class PatcherModel: ObservableObject {
         await setStepAsync(.installFramework)
         let fwDir = moddedApp + "/Contents/Frameworks/SpliceKit.framework"
         shell("""
+            rm -rf '\(fwDir)'
             mkdir -p '\(fwDir)/Versions/A/Resources'
             cp '\(buildDir)/SpliceKit' '\(fwDir)/Versions/A/SpliceKit'
-            cd '\(fwDir)/Versions' && ln -sf A Current
-            cd '\(fwDir)' && ln -sf Versions/Current/SpliceKit SpliceKit
-            cd '\(fwDir)' && ln -sf Versions/Current/Resources Resources
+            cd '\(fwDir)/Versions' && ln -sfn A Current
+            cd '\(fwDir)' && ln -sfn Versions/Current/SpliceKit SpliceKit
+            cd '\(fwDir)' && ln -sfn Versions/Current/Resources Resources
             """)
         let patcherVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
         let plist = """
