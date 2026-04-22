@@ -60,13 +60,45 @@ detect_sign_identity() {
             }'
 }
 
+sign_if_present() {
+    local identity="$1"
+    local path="$2"
+    shift 2
+
+    if [[ ! -e "$path" ]]; then
+        return 0
+    fi
+
+    if ! codesign --force --options runtime --sign "$identity" "$@" "$path"; then
+        return 1
+    fi
+}
+
 sign_modded_app() {
     local identity="$1"
 
-    if ! codesign --force --sign "$identity" "$MODDED_APP/Contents/Frameworks/SpliceKit.framework"; then
+    # Existing modded copies can already contain custom nested code from prior
+    # SpliceKit installs. Sign those first so the top-level app seal doesn't
+    # fail with "code object is not signed at all" on rebuild / no-copy flows.
+    xattr -cr "$MODDED_APP" 2>/dev/null || true
+
+    if ! sign_if_present "$identity" "$MODDED_APP/Contents/PlugIns/Codecs/SpliceKitBRAWDecoder.bundle"; then
         return 1
     fi
-    if ! codesign --force --sign "$identity" --entitlements "$ENTITLEMENTS" "$MODDED_APP"; then
+    if ! sign_if_present "$identity" "$MODDED_APP/Contents/PlugIns/FormatReaders/SpliceKitBRAWImport.bundle"; then
+        return 1
+    fi
+    if ! sign_if_present "$identity" "$MODDED_APP/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle"; then
+        return 1
+    fi
+    if ! sign_if_present "$identity" "$MODDED_APP/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle"; then
+        return 1
+    fi
+
+    if ! codesign --force --options runtime --sign "$identity" "$MODDED_APP/Contents/Frameworks/SpliceKit.framework"; then
+        return 1
+    fi
+    if ! codesign --force --options runtime --sign "$identity" --entitlements "$ENTITLEMENTS" "$MODDED_APP"; then
         return 1
     fi
 }
