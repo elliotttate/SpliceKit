@@ -20,6 +20,7 @@
 
 #import "SpliceKitVisionPro.h"
 #import "SpliceKit.h"
+#import "SpliceKitBRAWExports.h"
 #import <dlfcn.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -435,6 +436,146 @@ static NSArray<NSString *> *IVTCandidatePaths(void) {
 }
 
 #pragma mark - Frame push
+
+static void SKVPFillError(NSError **error, NSInteger code, NSString *message) {
+    if (!error) return;
+    *error = [NSError errorWithDomain:@"SpliceKitVisionPro"
+                                 code:code
+                             userInfo:@{NSLocalizedDescriptionKey: message ?: @"Vision Pro preview failed"}];
+}
+
+static BOOL SKVPCreatePixelBufferFromPackedBGRA(const void *bytes,
+                                                uint32_t width,
+                                                uint32_t height,
+                                                CVPixelBufferRef *outPixelBuffer,
+                                                NSError **error) {
+    if (!bytes || width == 0 || height == 0 || !outPixelBuffer) {
+        SKVPFillError(error, -30, @"Missing BGRA frame data");
+        return NO;
+    }
+
+    *outPixelBuffer = NULL;
+    NSDictionary *attrs = @{
+        (id)kCVPixelBufferWidthKey: @(width),
+        (id)kCVPixelBufferHeightKey: @(height),
+        (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+        (id)kCVPixelBufferMetalCompatibilityKey: @YES,
+        (id)kCVPixelBufferCGImageCompatibilityKey: @YES,
+        (id)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
+        (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
+    };
+
+    CVPixelBufferRef pixelBuffer = NULL;
+    CVReturn status = CVPixelBufferCreate(kCFAllocatorDefault,
+                                          width,
+                                          height,
+                                          kCVPixelFormatType_32BGRA,
+                                          (__bridge CFDictionaryRef)attrs,
+                                          &pixelBuffer);
+    if (status != kCVReturnSuccess || !pixelBuffer) {
+        SKVPFillError(error, -31, [NSString stringWithFormat:@"CVPixelBufferCreate failed (%d) for %ux%u",
+                                   status, width, height]);
+        return NO;
+    }
+
+    CVPixelBufferLockBaseAddress(pixelBuffer, 0);
+    uint8_t *dst = (uint8_t *)CVPixelBufferGetBaseAddress(pixelBuffer);
+    size_t dstStride = CVPixelBufferGetBytesPerRow(pixelBuffer);
+    const uint8_t *src = (const uint8_t *)bytes;
+    if (!dst || dstStride == 0) {
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+        CVPixelBufferRelease(pixelBuffer);
+        SKVPFillError(error, -32, @"CVPixelBuffer has no writable base address");
+        return NO;
+    }
+
+    size_t packedStride = (size_t)width * 4;
+    for (uint32_t row = 0; row < height; row++) {
+        memcpy(dst + ((size_t)row * dstStride),
+               src + ((size_t)row * packedStride),
+               packedStride);
+    }
+    CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+
+    *outPixelBuffer = pixelBuffer;
+    return YES;
+}
+
+- (BOOL)pushBRAWFrameAtPath:(NSString *)path
+                 frameIndex:(uint32_t)frameIndex
+                  scaleHint:(uint32_t)scaleHint
+                      error:(NSError **)error {
+    if (path.length == 0) {
+        SKVPFillError(error, -33, @"pushBRAWFrameAtPath requires a .braw path");
+        return NO;
+    }
+
+    void *leftBytes = NULL;
+    void *rightBytes = NULL;
+    uint32_t leftWidth = 0, leftHeight = 0, leftSize = 0;
+    uint32_t rightWidth = 0, rightHeight = 0, rightSize = 0;
+    CVPixelBufferRef leftBuffer = NULL;
+    CVPixelBufferRef rightBuffer = NULL;
+    BOOL ok = NO;
+
+    BOOL leftOK = SpliceKitBRAW_DecodeFrameBytesEye((__bridge CFStringRef)path,
+                                                    frameIndex,
+                                                    scaleHint,
+                                                    0,
+                                                    1,
+                                                    &leftWidth,
+                                                    &leftHeight,
+                                                    &leftSize,
+                                                    &leftBytes);
+    BOOL rightOK = SpliceKitBRAW_DecodeFrameBytesEye((__bridge CFStringRef)path,
+                                                     frameIndex,
+                                                     scaleHint,
+                                                     1,
+                                                     1,
+                                                     &rightWidth,
+                                                     &rightHeight,
+                                                     &rightSize,
+                                                     &rightBytes);
+    if (!leftOK || !rightOK || !leftBytes || !rightBytes ||
+        leftWidth == 0 || leftHeight == 0 || rightWidth == 0 || rightHeight == 0 ||
+        leftSize == 0 || rightSize == 0) {
+        SKVPFillError(error, -34, [NSString stringWithFormat:@"Unable to decode BRAW frame %u for Vision Pro preview", frameIndex]);
+        goto cleanup;
+    }
+
+    if (leftWidth != rightWidth || leftHeight != rightHeight) {
+        SKVPFillError(error, -35, [NSString stringWithFormat:@"Stereo eye dimensions differ: left=%ux%u right=%ux%u",
+                                   leftWidth, leftHeight, rightWidth, rightHeight]);
+        goto cleanup;
+    }
+
+    if (!SKVPCreatePixelBufferFromPackedBGRA(leftBytes, leftWidth, leftHeight, &leftBuffer, error) ||
+        !SKVPCreatePixelBufferFromPackedBGRA(rightBytes, rightWidth, rightHeight, &rightBuffer, error)) {
+        goto cleanup;
+    }
+
+    float frameRate = 0.0f;
+    SpliceKitBRAW_ReadClipMetadata((__bridge CFStringRef)path, NULL, NULL, &frameRate, NULL);
+    double fps = frameRate > 0.0f ? (double)frameRate : 24.0;
+    CMTime pts = CMTimeMakeWithSeconds((double)frameIndex / fps, 600);
+    CMTime duration = CMTimeMakeWithSeconds(1.0 / fps, 600);
+
+    ok = [self pushFrameLeft:leftBuffer
+                       right:rightBuffer
+                         pts:pts
+                    duration:duration
+              colorPrimaries:1
+            transferFunction:1
+                 yCbCrMatrix:1
+                       error:error];
+
+cleanup:
+    if (leftBuffer) CVPixelBufferRelease(leftBuffer);
+    if (rightBuffer) CVPixelBufferRelease(rightBuffer);
+    if (leftBytes) free(leftBytes);
+    if (rightBytes) free(rightBytes);
+    return ok;
+}
 
 - (BOOL)pushFrameLeft:(CVPixelBufferRef)leftEye
                 right:(CVPixelBufferRef)rightEye

@@ -14,6 +14,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -82,6 +83,11 @@ extern NSString * const SpliceKitVisionProStateDidChangeNotification;
      transferFunction:(NSInteger)transferFunction
           yCbCrMatrix:(NSInteger)yCbCrMatrix
                 error:(NSError **)error;
+
+- (BOOL)pushBRAWFrameAtPath:(NSString *)path
+                 frameIndex:(uint32_t)frameIndex
+                  scaleHint:(uint32_t)scaleHint
+                      error:(NSError **)error;
 
 // Snapshot of state for RPC consumers.
 - (NSDictionary<NSString *, id> *)stateSnapshot;

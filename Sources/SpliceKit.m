@@ -16,6 +16,7 @@
 #import "SpliceKitSentry.h"
 #import "SpliceKitLiveCam.h"
 #import "SpliceKitURLImport.h"
+#import "SpliceKitImmersivePreviewPanel.h"
 #import <AppKit/AppKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <Security/Security.h>
@@ -3292,6 +3293,10 @@ static void SpliceKit_appDidLaunch(void) {
 
     // Install toolbar button in FCP's main window
     [SpliceKitMenuController installToolbarButton];
+
+    SpliceKit_safeInstall("ImmersiveViewerBridge", ^{
+        SpliceKit_installImmersiveViewerBridge();
+    });
 
     [[NSNotificationCenter defaultCenter] addObserverForName:SpliceKitLiveCamVisibilityDidChangeNotification
                                                       object:nil

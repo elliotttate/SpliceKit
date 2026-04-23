@@ -43,3 +43,5 @@ SpliceKitURLImport.m
 SpliceKitLiveCam.m
 SpliceKitVisionPro.m
 SpliceKitVisionProPanel.m
+SpliceKitImmersivePreviewPanel.mm
+SpliceKitImmersivePreviewRPC.m

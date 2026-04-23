@@ -1,4 +1,5 @@
 #import "SpliceKit.h"
+#import "SpliceKitBRAWExports.h"
 #import "SpliceKitBRAWToolboxCheck.h"
 
 #include <dlfcn.h>
@@ -1614,6 +1615,13 @@ static NSString *SpliceKitBRAWResolveOriginalPath(NSString *path) {
     return original ?: path;
 }
 
+SPLICEKIT_BRAW_EXTERN_C NSString *SpliceKitBRAWResolveOriginalPathForPublic(NSString *path) {
+    NSString *resolved = SpliceKitBRAWResolveOriginalPath(path);
+    if (resolved.length == 0) return resolved;
+    NSURL *url = [[NSURL fileURLWithPath:resolved] URLByResolvingSymlinksInPath];
+    return (url.path.length > 0 ? url.path : resolved).stringByStandardizingPath;
+}
+
 static IMP sSpliceKitBRAWOriginalUTTypeConformsToIMP = NULL;
 static IMP sSpliceKitBRAWOriginalAVURLAssetInitIMP = NULL;
 static IMP sSpliceKitBRAWOriginalAVURLAssetClassMethodIMP = NULL;
@@ -2410,6 +2418,168 @@ static IBlackmagicRawFactory *SpliceKitBRAWCreateFactory(NSString **frameworkBin
     return nullptr;
 }
 
+static NSString *SpliceKitBRAWResolutionScaleName(BlackmagicRawResolutionScale scale) {
+    switch (scale) {
+        case blackmagicRawResolutionScaleFull: return @"full";
+        case blackmagicRawResolutionScaleHalf: return @"half";
+        case blackmagicRawResolutionScaleQuarter: return @"quarter";
+        case blackmagicRawResolutionScaleEighth: return @"eighth";
+        default: return [NSString stringWithFormat:@"0x%08X", (unsigned int)scale];
+    }
+}
+
+static NSArray<NSDictionary *> *SpliceKitBRAWFallbackResolutions(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) return @[];
+
+    const struct {
+        NSString *__unsafe_unretained name;
+        uint32_t divisor;
+    } specs[] = {
+        { @"full", 1 },
+        { @"half", 2 },
+        { @"quarter", 4 },
+        { @"eighth", 8 },
+    };
+
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray arrayWithCapacity:4];
+    for (size_t i = 0; i < sizeof(specs) / sizeof(specs[0]); i++) {
+        [items addObject:@{
+            @"scale": specs[i].name,
+            @"width": @(MAX((uint32_t)1, width / specs[i].divisor)),
+            @"height": @(MAX((uint32_t)1, height / specs[i].divisor)),
+        }];
+    }
+    return items;
+}
+
+static NSArray<NSDictionary *> *SpliceKitBRAWResolutionsForClip(IBlackmagicRawClip *clip,
+                                                                uint32_t width,
+                                                                uint32_t height) {
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+    IBlackmagicRawClipResolutions *resolutions = nullptr;
+    if (clip &&
+        clip->QueryInterface(IID_IBlackmagicRawClipResolutions, (LPVOID *)&resolutions) == S_OK &&
+        resolutions) {
+        BlackmagicRawResolutionScale scales[] = {
+            blackmagicRawResolutionScaleFull,
+            blackmagicRawResolutionScaleHalf,
+            blackmagicRawResolutionScaleQuarter,
+            blackmagicRawResolutionScaleEighth,
+        };
+        for (BlackmagicRawResolutionScale scale : scales) {
+            uint32_t scaledWidth = 0;
+            uint32_t scaledHeight = 0;
+            if (resolutions->GetClosestResolutionForScale(scale, &scaledWidth, &scaledHeight) == S_OK &&
+                scaledWidth > 0 &&
+                scaledHeight > 0) {
+                [items addObject:@{
+                    @"scale": SpliceKitBRAWResolutionScaleName(scale),
+                    @"width": @(scaledWidth),
+                    @"height": @(scaledHeight),
+                }];
+            }
+        }
+
+        if (items.count == 0) {
+            uint32_t count = 0;
+            if (resolutions->GetResolutionCount(&count) == S_OK) {
+                for (uint32_t i = 0; i < MIN(count, (uint32_t)16); i++) {
+                    uint32_t resolvedWidth = 0;
+                    uint32_t resolvedHeight = 0;
+                    uint32_t recordedWidth = 0;
+                    uint32_t recordedHeight = 0;
+                    if (resolutions->GetResolution(i, &resolvedWidth, &resolvedHeight) != S_OK ||
+                        resolvedWidth == 0 ||
+                        resolvedHeight == 0) {
+                        continue;
+                    }
+                    NSMutableDictionary *entry = [@{
+                        @"index": @(i),
+                        @"width": @(resolvedWidth),
+                        @"height": @(resolvedHeight),
+                    } mutableCopy];
+                    if (resolutions->GetRecordedResolution(i, &recordedWidth, &recordedHeight) == S_OK &&
+                        recordedWidth > 0 &&
+                        recordedHeight > 0) {
+                        entry[@"recordedWidth"] = @(recordedWidth);
+                        entry[@"recordedHeight"] = @(recordedHeight);
+                    }
+                    [items addObject:entry];
+                }
+            }
+        }
+
+        resolutions->Release();
+    }
+
+    if (items.count == 0) {
+        [items addObjectsFromArray:SpliceKitBRAWFallbackResolutions(width, height)];
+    }
+    return items;
+}
+
+static void SpliceKitBRAWAddImmersiveInfo(IBlackmagicRawClip *clip,
+                                          NSMutableDictionary *result,
+                                          uint32_t width,
+                                          uint32_t height,
+                                          BOOL forceFallback) {
+    if (!clip || !result) return;
+
+    IBlackmagicRawClipImmersiveVideo *immersive = nullptr;
+    BOOL hasImmersive = (clip->QueryInterface(IID_IBlackmagicRawClipImmersiveVideo,
+                                              (LPVOID *)&immersive) == S_OK &&
+                         immersive);
+    if (!hasImmersive && !forceFallback) return;
+
+    NSMutableDictionary *info = [@{
+        @"available": @(hasImmersive),
+        @"heroEye": @"right",
+        @"heroEyeIndex": @1,
+        @"resolutions": SpliceKitBRAWResolutionsForClip(clip, width, height),
+    } mutableCopy];
+
+    if (hasImmersive) {
+        uint32_t distanceBetweenLenses = 0;
+        int32_t comfortDisparityAdjustment = 0;
+        uint32_t horizontalFieldOfView = 0;
+        if (immersive->GetDistanceBetweenLenses(&distanceBetweenLenses) == S_OK) {
+            info[@"distanceBetweenLenses"] = @(distanceBetweenLenses);
+        }
+        if (immersive->GetComfortDisparityAdjustment(&comfortDisparityAdjustment) == S_OK) {
+            info[@"comfortDisparityAdjustment"] = @(comfortDisparityAdjustment);
+        }
+        if (immersive->GetHorizontalFieldOfView(&horizontalFieldOfView) == S_OK) {
+            info[@"horizontalFieldOfView"] = @(horizontalFieldOfView);
+        }
+
+        NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+        const struct {
+            BlackmagicRawImmersiveAttribute attribute;
+            NSString *__unsafe_unretained key;
+        } attributeSpecs[] = {
+            { blackmagicRawImmersiveAttributeOpticalLensProcessingDataFileUUID, @"opticalLensProcessingDataFileUUID" },
+            { blackmagicRawImmersiveAttributeOpticalILPDFileName, @"opticalILPDFileName" },
+            { blackmagicRawImmersiveAttributeOpticalInteraxial, @"opticalInteraxial" },
+            { blackmagicRawImmersiveAttributeOpticalProjectionKind, @"opticalProjectionKind" },
+            { blackmagicRawImmersiveAttributeOpticalCalibrationType, @"opticalCalibrationType" },
+            { blackmagicRawImmersiveAttributeOpticalProjectionData, @"opticalProjectionData" },
+        };
+        for (size_t i = 0; i < sizeof(attributeSpecs) / sizeof(attributeSpecs[0]); i++) {
+            Variant value;
+            if (VariantInit(&value) != S_OK) continue;
+            if (immersive->GetImmersiveAttribute(attributeSpecs[i].attribute, &value) == S_OK) {
+                attributes[attributeSpecs[i].key] = SpliceKitBRAWVariantPreview(&value, 8) ?: (id)[NSNull null];
+            }
+            VariantClear(&value);
+        }
+        if (attributes.count > 0) info[@"attributes"] = attributes;
+
+        immersive->Release();
+    }
+
+    result[@"immersive"] = info;
+}
+
 static void SpliceKitBRAWAppendPath(NSMutableOrderedSet<NSString *> *paths,
                                     NSMutableArray<NSDictionary *> *skipped,
                                     NSString *path,
@@ -2586,6 +2756,8 @@ static NSDictionary *SpliceKitBRAWProbeClip(IBlackmagicRawFactory *factory,
     if (clip->GetFrameCount(&frameCount) == S_OK) result[@"frameCount"] = @(frameCount);
     if (clip->GetSidecarFileAttached(&sidecarAttached) == S_OK) result[@"sidecarAttached"] = @(sidecarAttached);
     if (clip->GetMulticardFileCount(&multicardFileCount) == S_OK) result[@"multicardFileCount"] = @(multicardFileCount);
+
+    SpliceKitBRAWAddImmersiveInfo(clip, result, width, height, NO);
 
     if (includeMetadata) {
         CFStringRef timecodeRef = nullptr;
@@ -2791,6 +2963,188 @@ SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWProbe(NSDictionary *pa
         @"paths": paths,
         @"skipped": skipped,
         @"clips": clips,
+    };
+}
+
+SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWDescribeImmersive(NSDictionary *params) {
+    NSMutableDictionary *probeParams = [params isKindOfClass:[NSDictionary class]]
+        ? [params mutableCopy]
+        : [NSMutableDictionary dictionary];
+    probeParams[@"includeMetadata"] = @YES;
+    probeParams[@"includeProcessing"] = @YES;
+    probeParams[@"includeAudio"] = @NO;
+
+    NSDictionary *probe = SpliceKit_handleBRAWProbe(probeParams);
+    if (probe[@"error"]) return probe;
+
+    NSMutableDictionary *result = [probe mutableCopy];
+    NSArray *clips = [probe[@"clips"] isKindOfClass:[NSArray class]] ? probe[@"clips"] : @[];
+    NSMutableArray *decoratedClips = [NSMutableArray arrayWithCapacity:clips.count];
+    for (id item in clips) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        NSMutableDictionary *clip = [(NSDictionary *)item mutableCopy];
+        if (![clip[@"immersive"] isKindOfClass:[NSDictionary class]]) {
+            uint32_t width = [clip[@"width"] respondsToSelector:@selector(unsignedIntValue)]
+                ? [clip[@"width"] unsignedIntValue]
+                : 0;
+            uint32_t height = [clip[@"height"] respondsToSelector:@selector(unsignedIntValue)]
+                ? [clip[@"height"] unsignedIntValue]
+                : 0;
+            if (width > 0 && height > 0) {
+                clip[@"immersive"] = @{
+                    @"available": @NO,
+                    @"heroEye": @"right",
+                    @"heroEyeIndex": @1,
+                    @"resolutions": SpliceKitBRAWFallbackResolutions(width, height),
+                    @"source": @"fallback",
+                };
+            }
+        }
+        [decoratedClips addObject:clip];
+    }
+    result[@"clips"] = decoratedClips;
+    result[@"status"] = probe[@"status"] ?: @"ok";
+    return result;
+}
+
+template <typename MotionT>
+static NSDictionary *SpliceKitBRAWMotionDictionary(MotionT *motion,
+                                                   uint64_t startIndex,
+                                                   uint32_t requestedCount) {
+    if (!motion) return @{@"available": @NO};
+
+    float sampleRate = 0.0f;
+    uint32_t totalCount = 0;
+    uint32_t sampleSize = 0;
+    HRESULT rateStatus = motion->GetSampleRate(&sampleRate);
+    HRESULT countStatus = motion->GetSampleCount(&totalCount);
+    HRESULT sizeStatus = motion->GetSampleSize(&sampleSize);
+    if (rateStatus != S_OK || countStatus != S_OK || sizeStatus != S_OK || sampleSize == 0) {
+        return @{
+            @"available": @NO,
+            @"sampleRateStatus": SpliceKitBRAWHRESULTString(rateStatus),
+            @"sampleCountStatus": SpliceKitBRAWHRESULTString(countStatus),
+            @"sampleSizeStatus": SpliceKitBRAWHRESULTString(sizeStatus),
+        };
+    }
+
+    uint64_t remaining = startIndex < totalCount ? ((uint64_t)totalCount - startIndex) : 0;
+    uint32_t readCount = (uint32_t)MIN((uint64_t)requestedCount, remaining);
+    NSMutableDictionary *summary = [@{
+        @"available": @YES,
+        @"sampleRate": @(sampleRate),
+        @"sampleCount": @(totalCount),
+        @"sampleSize": @(sampleSize),
+        @"startIndex": @(startIndex),
+        @"requestedCount": @(requestedCount),
+        @"returnedCount": @0,
+        @"samples": @[],
+    } mutableCopy];
+    if (readCount == 0) return summary;
+
+    std::vector<float> values((size_t)readCount * (size_t)sampleSize);
+    uint32_t samplesRead = 0;
+    HRESULT readStatus = motion->GetSampleRange(startIndex,
+                                                readCount,
+                                                values.data(),
+                                                &samplesRead);
+    if (readStatus != S_OK) {
+        summary[@"available"] = @NO;
+        summary[@"readStatus"] = SpliceKitBRAWHRESULTString(readStatus);
+        return summary;
+    }
+
+    NSMutableArray *samples = [NSMutableArray arrayWithCapacity:samplesRead];
+    for (uint32_t sampleIndex = 0; sampleIndex < samplesRead; sampleIndex++) {
+        NSMutableArray *components = [NSMutableArray arrayWithCapacity:sampleSize];
+        size_t base = (size_t)sampleIndex * (size_t)sampleSize;
+        for (uint32_t component = 0; component < sampleSize; component++) {
+            [components addObject:@(values[base + component])];
+        }
+        [samples addObject:components];
+    }
+    summary[@"returnedCount"] = @(samplesRead);
+    summary[@"samples"] = samples;
+    return summary;
+}
+
+SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWReadMotionSamples(NSDictionary *params) {
+    uint64_t startIndex = [params[@"startIndex"] respondsToSelector:@selector(unsignedLongLongValue)]
+        ? [params[@"startIndex"] unsignedLongLongValue]
+        : 0;
+    uint32_t requestedCount = 64;
+    if ([params[@"sampleCount"] respondsToSelector:@selector(unsignedIntValue)]) {
+        requestedCount = [params[@"sampleCount"] unsignedIntValue];
+    } else if ([params[@"motionPreviewCount"] respondsToSelector:@selector(unsignedIntValue)]) {
+        requestedCount = [params[@"motionPreviewCount"] unsignedIntValue];
+    } else if ([params[@"maxSamples"] respondsToSelector:@selector(unsignedIntValue)]) {
+        requestedCount = [params[@"maxSamples"] unsignedIntValue];
+    }
+    requestedCount = MAX((uint32_t)1, MIN(requestedCount, (uint32_t)4096));
+
+    NSMutableArray<NSDictionary *> *skipped = [NSMutableArray array];
+    NSArray<NSString *> *paths = SpliceKitBRAWResolveProbePaths(params, skipped);
+    if (paths.count == 0) {
+        return SpliceKitBRAWErrorResult(@"No .braw paths were resolved. Provide `path`/`handle`, or select a .braw clip in the active timeline.");
+    }
+    NSString *path = paths.firstObject;
+
+    NSString *frameworkBinary = nil;
+    NSString *frameworkLoadPath = nil;
+    NSString *loadError = nil;
+    IBlackmagicRawFactory *factory = SpliceKitBRAWCreateFactory(&frameworkBinary, &frameworkLoadPath, &loadError);
+    if (!factory) {
+        return SpliceKitBRAWErrorResult(loadError);
+    }
+
+    IBlackmagicRaw *codec = nullptr;
+    IBlackmagicRawClip *clip = nullptr;
+    HRESULT status = factory->CreateCodec(&codec);
+    if (status != S_OK || !codec) {
+        factory->Release();
+        return SpliceKitBRAWErrorResult([NSString stringWithFormat:@"CreateCodec failed (%@)", SpliceKitBRAWHRESULTString(status)]);
+    }
+
+    status = codec->OpenClip((__bridge CFStringRef)path, &clip);
+    if (status != S_OK || !clip) {
+        codec->Release();
+        factory->Release();
+        return SpliceKitBRAWErrorResult([NSString stringWithFormat:@"OpenClip failed (%@)", SpliceKitBRAWHRESULTString(status)]);
+    }
+
+    IBlackmagicRawClipAccelerometerMotion *accelerometer = nullptr;
+    IBlackmagicRawClipGyroscopeMotion *gyroscope = nullptr;
+    NSDictionary *accelerometerInfo = nil;
+    NSDictionary *gyroscopeInfo = nil;
+
+    if (clip->QueryInterface(IID_IBlackmagicRawClipAccelerometerMotion, (LPVOID *)&accelerometer) == S_OK &&
+        accelerometer) {
+        accelerometerInfo = SpliceKitBRAWMotionDictionary(accelerometer, startIndex, requestedCount);
+        accelerometer->Release();
+    } else {
+        accelerometerInfo = @{@"available": @NO};
+    }
+
+    if (clip->QueryInterface(IID_IBlackmagicRawClipGyroscopeMotion, (LPVOID *)&gyroscope) == S_OK &&
+        gyroscope) {
+        gyroscopeInfo = SpliceKitBRAWMotionDictionary(gyroscope, startIndex, requestedCount);
+        gyroscope->Release();
+    } else {
+        gyroscopeInfo = @{@"available": @NO};
+    }
+
+    clip->Release();
+    codec->Release();
+    factory->Release();
+
+    return @{
+        @"status": @"ok",
+        @"frameworkBinary": frameworkBinary ?: @"",
+        @"frameworkLoadPath": frameworkLoadPath ?: @"",
+        @"path": path ?: @"",
+        @"skipped": skipped,
+        @"accelerometer": accelerometerInfo ?: @{@"available": @NO},
+        @"gyroscope": gyroscopeInfo ?: @{@"available": @NO},
     };
 }
 
@@ -4337,6 +4691,7 @@ static BOOL SpliceKitBRAWDecodeFrameBytesOnWorkQueue(
     NSString *path,
     uint32_t frameIndex,
     uint32_t scaleHint,
+    int eyeIndex,
     uint32_t formatHint,
     uint32_t *outWidth,
     uint32_t *outHeight,
@@ -4356,7 +4711,7 @@ static BOOL SpliceKitBRAWDecodeFrameBytesOnWorkQueue(
                                     : blackmagicRawResourceFormatRGBAU8;
     ctx.rawSettings = SpliceKitBRAW_CopyRAWSettingsForPath((__bridge CFStringRef)path);
 
-    if (!SpliceKitBRAWRunDecodeJob(entry, ctx, frameIndex, -1) || ctx.bytes.empty()) {
+    if (!SpliceKitBRAWRunDecodeJob(entry, ctx, frameIndex, eyeIndex) || ctx.bytes.empty()) {
         if (ctx.rawSettings) CFRelease(ctx.rawSettings);
         return NO;
     }
@@ -4463,7 +4818,39 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameBytes(
     __block uint32_t w = 0, h = 0, sz = 0;
     __block void *bytes = nullptr;
     dispatch_sync(SpliceKitBRAWWorkQueue(), ^{
-        result = SpliceKitBRAWDecodeFrameBytesOnWorkQueue(path, frameIndex, scaleHint, formatHint,
+        result = SpliceKitBRAWDecodeFrameBytesOnWorkQueue(path, frameIndex, scaleHint, -1, formatHint,
+                                                         &w, &h, &sz, &bytes);
+    });
+    *outWidth = w;
+    *outHeight = h;
+    *outSizeBytes = sz;
+    *outBytes = bytes;
+    return result;
+}
+
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameBytesEye(
+    CFStringRef pathRef,
+    uint32_t frameIndex,
+    uint32_t scaleHint,
+    int eyeIndex,
+    uint32_t formatHint,
+    uint32_t *outWidth,
+    uint32_t *outHeight,
+    uint32_t *outSizeBytes,
+    void **outBytes)
+{
+    if (!pathRef || !outWidth || !outHeight || !outSizeBytes || !outBytes) return NO;
+    *outWidth = 0;
+    *outHeight = 0;
+    *outSizeBytes = 0;
+    *outBytes = nullptr;
+
+    NSString *path = (__bridge NSString *)pathRef;
+    __block BOOL result = NO;
+    __block uint32_t w = 0, h = 0, sz = 0;
+    __block void *bytes = nullptr;
+    dispatch_sync(SpliceKitBRAWWorkQueue(), ^{
+        result = SpliceKitBRAWDecodeFrameBytesOnWorkQueue(path, frameIndex, scaleHint, eyeIndex, formatHint,
                                                          &w, &h, &sz, &bytes);
     });
     *outWidth = w;
@@ -4694,6 +5081,18 @@ SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWProbe(NSDictionary *pa
     };
 }
 
+SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWDescribeImmersive(NSDictionary *params) {
+    return SpliceKit_handleBRAWProbe(params);
+}
+
+SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWReadMotionSamples(NSDictionary *params) {
+    return SpliceKit_handleBRAWProbe(params);
+}
+
+SPLICEKIT_BRAW_EXTERN_C NSString *SpliceKitBRAWResolveOriginalPathForPublic(NSString *path) {
+    return path;
+}
+
 SPLICEKIT_BRAW_EXTERN_C void SpliceKit_installBRAWProviderShim(void) {
 }
 
@@ -4723,6 +5122,25 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameBytes(
     void **outBytes)
 {
     (void)pathRef; (void)frameIndex; (void)scaleHint; (void)formatHint;
+    if (outWidth) *outWidth = 0;
+    if (outHeight) *outHeight = 0;
+    if (outSizeBytes) *outSizeBytes = 0;
+    if (outBytes) *outBytes = nullptr;
+    return NO;
+}
+
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameBytesEye(
+    CFStringRef pathRef,
+    uint32_t frameIndex,
+    uint32_t scaleHint,
+    int eyeIndex,
+    uint32_t formatHint,
+    uint32_t *outWidth,
+    uint32_t *outHeight,
+    uint32_t *outSizeBytes,
+    void **outBytes)
+{
+    (void)pathRef; (void)frameIndex; (void)scaleHint; (void)eyeIndex; (void)formatHint;
     if (outWidth) *outWidth = 0;
     if (outHeight) *outHeight = 0;
     if (outSizeBytes) *outSizeBytes = 0;
