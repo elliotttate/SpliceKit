@@ -12,6 +12,7 @@
 #import "SpliceKitLua.h"
 #import "SpliceKitPlugins.h"
 #import "SpliceKitCommandPalette.h"
+#import "SpliceKitUprezzer.h"
 #import "SpliceKitDebugUI.h"
 #import "SpliceKitSentry.h"
 #import "SpliceKitLiveCam.h"
@@ -417,6 +418,7 @@ static void SpliceKit_checkCompatibility(void) {
 + (instancetype)shared;
 - (void)toggleTranscriptPanel:(id)sender;
 - (void)toggleCaptionPanel:(id)sender;
+- (void)toggleUprezzerPanel:(id)sender;
 - (void)toggleLiveCamPanel:(id)sender;
 - (void)toggleSections:(id)sender;
 - (void)toggleOverviewBar:(id)sender;
@@ -498,6 +500,11 @@ static void SpliceKit_checkCompatibility(void) {
     } else {
         ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
     }
+}
+
+- (void)toggleUprezzerPanel:(id)sender {
+    (void)sender;
+    [[SpliceKitUprezzerPanel sharedPanel] togglePanel];
 }
 
 - (void)toggleMixerPanel:(id)sender {
@@ -2434,6 +2441,14 @@ static void SpliceKit_installMenu(void) {
     captionItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:captionItem];
 
+    NSMenuItem *uprezzerItem = [[NSMenuItem alloc]
+        initWithTitle:@"Uprezzer"
+               action:@selector(toggleUprezzerPanel:)
+        keyEquivalent:@"u"];
+    uprezzerItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
+    uprezzerItem.target = [SpliceKitMenuController shared];
+    [bridgeMenu addItem:uprezzerItem];
+
     NSMenuItem *liveCamItem = [[NSMenuItem alloc]
         initWithTitle:@"LiveCam"
                action:@selector(toggleLiveCamPanel:)
@@ -2789,7 +2804,7 @@ static void SpliceKit_installMenu(void) {
         SpliceKit_log(@"OTIO import/export added to File menu");
     }
 
-    SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T Transcript, Ctrl+Option+C Captions, Cmd+Shift+P Palette, Ctrl+Option+L Lua REPL)");
+    SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T Transcript, Ctrl+Option+C Captions, Ctrl+Option+U Uprezzer, LiveCam, Cmd+Shift+P Palette, Ctrl+Option+L Lua REPL)");
 }
 
 static NSString * const kSpliceKitLiveCamToolbarID = @"SpliceKitLiveCamItemID";
