@@ -118,6 +118,9 @@ static SKIPFFPlayerFrameCameraModeIMP sSKIPOriginalFFPlayerFrameCameraMode = NUL
 static std::atomic<bool> sSKIPNativeFCP360ProjectionPatchEnabled(false);
 static std::atomic<uint64_t> sSKIPNativeFCP360ProjectionPatchCalls(0);
 static std::atomic<uint64_t> sSKIPNativeFCP360CameraModeOverrides(0);
+// FFSphericalMode value FCP's 360 viewer should see for BRAW immersive frames.
+// 3 = FFSphericalMode_DualFisheye (Apple Immersive / URSA Immersive default).
+static std::atomic<int> sSKIPNativeFCP360CameraModeOverrideValue(3);
 static thread_local const void *sSKIPNativeFCP360ProjectionOverrideFrame = NULL;
 
 static BOOL SKIPNativeFCP360ProjectionPatchIsInstalled(void) {
@@ -174,11 +177,96 @@ static int SKIPPatchedFFPlayerFrameCameraMode(id self, SEL _cmd) {
         sSKIPNativeFCP360ProjectionOverrideFrame != NULL &&
         sSKIPNativeFCP360ProjectionOverrideFrame == (__bridge const void *)self) {
         sSKIPNativeFCP360CameraModeOverrides.fetch_add(1, std::memory_order_relaxed);
-        return 1;
+        return sSKIPNativeFCP360CameraModeOverrideValue.load(std::memory_order_acquire);
     }
 
     SKIPFFPlayerFrameCameraModeIMP original = sSKIPOriginalFFPlayerFrameCameraMode;
     return original ? original(self, _cmd) : 0;
+}
+
+static CGRect SKIPViewportBoundsForNativeFCP360VideoModule(id videoModule) {
+    CGRect bounds = CGRectZero;
+    if (!videoModule) return bounds;
+
+    SEL playerViewBoundsSel = NSSelectorFromString(@"playerViewBounds");
+    if ([videoModule respondsToSelector:playerViewBoundsSel]) {
+        @try {
+            bounds = ((CGRect (*)(id, SEL))SKIP_STRET_MSG)(videoModule, playerViewBoundsSel);
+        } @catch (__unused NSException *exception) {
+            bounds = CGRectZero;
+        }
+    }
+
+    if (bounds.size.width <= 1.0 || bounds.size.height <= 1.0) {
+        SEL sequenceBoundsSel = NSSelectorFromString(@"sequenceBounds");
+        if ([videoModule respondsToSelector:sequenceBoundsSel]) {
+            @try {
+                bounds = ((CGRect (*)(id, SEL))SKIP_STRET_MSG)(videoModule, sequenceBoundsSel);
+            } @catch (__unused NSException *exception) {
+                bounds = CGRectZero;
+            }
+        }
+    }
+
+    if (bounds.size.width <= 1.0 || bounds.size.height <= 1.0) {
+        SEL playerViewSel = NSSelectorFromString(@"playerView");
+        id playerView = [videoModule respondsToSelector:playerViewSel]
+            ? ((id (*)(id, SEL))objc_msgSend)(videoModule, playerViewSel)
+            : nil;
+        if ([playerView isKindOfClass:[NSView class]]) {
+            bounds = [(NSView *)playerView bounds];
+        }
+    }
+
+    if (bounds.size.width <= 1.0 || bounds.size.height <= 1.0) {
+        return CGRectZero;
+    }
+    return CGRectMake(0.0, 0.0, bounds.size.width, bounds.size.height);
+}
+
+static id SKIPCopyProjectedImageWithViewportBounds(id videoModule, id projectedImage) {
+    if (!videoModule || !projectedImage) return projectedImage;
+    if (!SKIPBoolFromSelector(videoModule, NSSelectorFromString(@"is360Viewer"), NO)) {
+        return projectedImage;
+    }
+
+    CGRect viewportBounds = SKIPViewportBoundsForNativeFCP360VideoModule(videoModule);
+    if (viewportBounds.size.width <= 1.0 || viewportBounds.size.height <= 1.0) {
+        return projectedImage;
+    }
+
+    Class matrixClass = objc_getClass("PCMatrix44Double");
+    SEL makeIdentitySel = NSSelectorFromString(@"makeIdentity");
+    SEL updateSel = NSSelectorFromString(@"newFFImageWithUpdatedPT:psb:field:");
+    SEL fieldSel = NSSelectorFromString(@"field");
+    if (!matrixClass || ![projectedImage respondsToSelector:updateSel]) {
+        return projectedImage;
+    }
+
+    id matrix = [[matrixClass alloc] init];
+    if ([matrix respondsToSelector:makeIdentitySel]) {
+        ((void (*)(id, SEL))objc_msgSend)(matrix, makeIdentitySel);
+    }
+
+    unsigned int field = 0;
+    if ([projectedImage respondsToSelector:fieldSel]) {
+        @try {
+            field = ((unsigned int (*)(id, SEL))objc_msgSend)(projectedImage, fieldSel);
+        } @catch (__unused NSException *exception) {
+            field = 0;
+        }
+    }
+
+    __unsafe_unretained id adjustedImage =
+        ((id (*)(id, SEL, id, CGRect, unsigned int))objc_msgSend)(projectedImage,
+                                                                  updateSel,
+                                                                  matrix,
+                                                                  viewportBounds,
+                                                                  field);
+    if (!adjustedImage) return projectedImage;
+
+    CFRelease((__bridge CFTypeRef)projectedImage);
+    return adjustedImage;
 }
 
 static id SKIPPatchedNewProjectedImageForPlayerFrame(id self, SEL _cmd, id playerFrame) {
@@ -187,13 +275,15 @@ static id SKIPPatchedNewProjectedImageForPlayerFrame(id self, SEL _cmd, id playe
 
     if (!sSKIPNativeFCP360ProjectionPatchEnabled.load(std::memory_order_acquire) ||
         !playerFrame ||
-        !SKIPBoolFromSelector(self, NSSelectorFromString(@"is360Viewer"), NO) ||
-        SKIPOriginalCameraModeForPlayerFrame(playerFrame, 0) != 0) {
+        !SKIPBoolFromSelector(self, NSSelectorFromString(@"is360Viewer"), NO)) {
         return original(self, _cmd, playerFrame);
     }
 
+    BOOL shouldOverrideCameraMode = SKIPOriginalCameraModeForPlayerFrame(playerFrame, 0) == 0;
     const void *oldOverrideFrame = sSKIPNativeFCP360ProjectionOverrideFrame;
-    sSKIPNativeFCP360ProjectionOverrideFrame = (__bridge const void *)playerFrame;
+    if (shouldOverrideCameraMode) {
+        sSKIPNativeFCP360ProjectionOverrideFrame = (__bridge const void *)playerFrame;
+    }
     sSKIPNativeFCP360ProjectionPatchCalls.fetch_add(1, std::memory_order_relaxed);
     @try {
         return original(self, _cmd, playerFrame);
@@ -1674,6 +1764,137 @@ static BOOL SKIPSetObjectIfSupported(id target, NSString *selectorName, id value
     }
 }
 
+static id SKIPIntrinsicEffectIfSupported(id effectStack, NSString *effectID, BOOL createIfAbsent) {
+    if (!effectStack || effectID.length == 0) return nil;
+    SEL selector = NSSelectorFromString(@"intrinsicEffectWithID:createIfAbsent:");
+    if (![effectStack respondsToSelector:selector]) return nil;
+    @try {
+        return ((id (*)(id, SEL, id, BOOL))objc_msgSend)(effectStack, selector, effectID, createIfAbsent);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static BOOL SKIPShowAndEnable360EffectIfSupported(id target, NSString *effectID, BOOL show, BOOL enable) {
+    if (!target || effectID.length == 0) return NO;
+    SEL selector = NSSelectorFromString(@"showAndEnable360Effect:show:enable:");
+    if (![target respondsToSelector:selector]) return NO;
+    @try {
+        ((void (*)(id, SEL, id, BOOL, BOOL))objc_msgSend)(target, selector, effectID, show, enable);
+        return YES;
+    } @catch (NSException *exception) {
+        SpliceKit_log(@"[ImmersivePreview] showAndEnable360Effect %@ failed on %@: %@",
+                      effectID,
+                      NSStringFromClass([target class]),
+                      exception.reason ?: exception.name);
+        return NO;
+    }
+}
+
+static NSDictionary *SKIPNativeFCP360EffectSnapshot(id target) {
+    id effectStack = SKIPObjectIfSupported(target, @"videoEffects");
+    if (!effectStack) return @{};
+
+    NSMutableDictionary *snapshot = [NSMutableDictionary dictionary];
+    for (NSString *effectID in @[@"HE360Transform", @"HEOrientation", @"HEReorient", @"HES3DAdjust"]) {
+        id effect = SKIPIntrinsicEffectIfSupported(effectStack, effectID, NO);
+        if (!effect) {
+            snapshot[effectID] = @{@"present": @NO};
+            continue;
+        }
+        snapshot[effectID] = @{
+            @"present": @YES,
+            @"enabled": @(SKIPBoolFromSelector(effect, NSSelectorFromString(@"enabled"), NO)),
+            @"class": NSStringFromClass([effect class]) ?: @"",
+        };
+    }
+    return [snapshot copy];
+}
+
+static NSDictionary *SKIPForceNativeFCP360FisheyeConformEffect(id target, NSInteger sphericalMode) {
+    if (!target) {
+        return @{@"status": @"skipped"};
+    }
+
+    NSMutableDictionary *result = [@{
+        @"status": @"ok",
+        @"targetClass": NSStringFromClass([target class]) ?: @"",
+        @"sphericalMode": @(sphericalMode),
+    } mutableCopy];
+
+    if (sphericalMode == 1) {
+        result[@"hideHE360Transform"] = @(SKIPShowAndEnable360EffectIfSupported(target, @"HE360Transform", NO, NO));
+        result[@"hideHEOrientation"] = @(SKIPShowAndEnable360EffectIfSupported(target, @"HEOrientation", NO, NO));
+        result[@"hideHEReorient"] = @(SKIPShowAndEnable360EffectIfSupported(target, @"HEReorient", NO, NO));
+        result[@"inputAlreadyEquirect"] = @YES;
+        result[@"effects"] = SKIPNativeFCP360EffectSnapshot(target);
+        return [result copy];
+    }
+
+    if (sphericalMode != 2 && sphericalMode != 3) {
+        result[@"status"] = @"skipped";
+        result[@"effects"] = SKIPNativeFCP360EffectSnapshot(target);
+        return [result copy];
+    }
+
+    BOOL isGenerator = SKIPBoolFromSelector(target, NSSelectorFromString(@"isGenerator"), NO);
+    result[@"showHE360Transform"] = @(SKIPShowAndEnable360EffectIfSupported(target, @"HE360Transform", YES, !isGenerator));
+    result[@"hideHEOrientation"] = @(SKIPShowAndEnable360EffectIfSupported(target, @"HEOrientation", NO, NO));
+    result[@"hideHEReorient"] = @(SKIPShowAndEnable360EffectIfSupported(target, @"HEReorient", NO, NO));
+
+    id effectStack = SKIPObjectIfSupported(target, @"videoEffects");
+    id transform = SKIPIntrinsicEffectIfSupported(effectStack, @"HE360Transform", YES);
+    if (transform && [transform respondsToSelector:NSSelectorFromString(@"updateConvergenceAndInteraxial")]) {
+        @try {
+            ((void (*)(id, SEL))objc_msgSend)(transform, NSSelectorFromString(@"updateConvergenceAndInteraxial"));
+            result[@"updatedConvergenceAndInteraxial"] = @YES;
+        } @catch (NSException *exception) {
+            result[@"updatedConvergenceAndInteraxial"] = @NO;
+            result[@"updateError"] = exception.reason ?: exception.name ?: @"unknown error";
+        }
+    }
+
+    result[@"effects"] = SKIPNativeFCP360EffectSnapshot(target);
+    return [result copy];
+}
+
+static NSInteger SKIPNativeFCP360SphericalModeForImmersiveBRAW(NSDictionary *clipSummary) {
+    NSDictionary *immersive = [clipSummary[@"immersive"] isKindOfClass:[NSDictionary class]]
+        ? clipSummary[@"immersive"]
+        : nil;
+    NSDictionary *attributes = [immersive[@"attributes"] isKindOfClass:[NSDictionary class]]
+        ? immersive[@"attributes"]
+        : nil;
+    NSString *projection = SKIPStringOrEmpty(immersive[@"opticalProjectionKind"]).lowercaseString;
+    if (projection.length == 0) {
+        projection = SKIPStringOrEmpty(attributes[@"opticalProjectionKind"]).lowercaseString;
+    }
+
+    // The BRAW VT decoder hands FCP per-eye fisheye pixels unchanged. Tag the
+    // frame with the matching FFSphericalMode so HE360Transform unwraps it
+    // natively — no host-side remap required.
+    if ([projection containsString:@"dual"]) return 3;       // FFSphericalMode_DualFisheye
+    if ([projection containsString:@"equirect"]) return 1;   // FFSphericalMode_Equirectangular
+    if ([projection containsString:@"cube"]) return 4;       // FFSphericalMode_CubeMap
+    if ([projection containsString:@"fisheye"]) return 2;    // FFSphericalMode_Fisheye
+    return 3;                                                // default: URSA Immersive / AIV dual-fisheye
+}
+
+static NSInteger SKIPNativeFCP360HeroEyeForImmersiveBRAW(NSDictionary *clipSummary) {
+    NSDictionary *immersive = [clipSummary[@"immersive"] isKindOfClass:[NSDictionary class]]
+        ? clipSummary[@"immersive"]
+        : nil;
+    NSString *heroEye = SKIPStringOrEmpty(immersive[@"heroEye"]).lowercaseString;
+    if ([heroEye isEqualToString:@"left"]) return 1;   // FFHeroEye_Left
+    if ([heroEye isEqualToString:@"right"]) return 2;  // FFHeroEye_Right
+
+    NSNumber *heroEyeIndex = [immersive[@"heroEyeIndex"] respondsToSelector:@selector(integerValue)]
+        ? immersive[@"heroEyeIndex"]
+        : nil;
+    if (heroEyeIndex) return heroEyeIndex.integerValue == 0 ? 1 : 2;
+    return 0; // FFHeroEye_NoPreference
+}
+
 static void SKIPForceSequenceFormatRefresh(id sequence) {
     if (!sequence) return;
     SEL forceSel = NSSelectorFromString(@"forcePlayerContextChangeForSequence");
@@ -1684,6 +1905,55 @@ static void SKIPForceSequenceFormatRefresh(id sequence) {
             SpliceKit_log(@"[ImmersivePreview] forcePlayerContextChangeForSequence failed: %@",
                           exception.reason ?: exception.name);
         }
+    }
+}
+
+static BOOL SKIPApplySequenceCameraProjectionMode(id sequence,
+                                                  NSInteger targetCameraMode,
+                                                  BOOL *outChanged,
+                                                  NSError **error) {
+    if (outChanged) *outChanged = NO;
+    if (!sequence || ![sequence respondsToSelector:@selector(videoProps)]) {
+        if (error) *error = SKIPImmersivePreviewError(-34, @"Could not find the active FCP project sequence");
+        return NO;
+    }
+
+    id currentVideoProps = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(videoProps));
+    NSInteger currentCameraMode = SKIPCameraModeForVideoProps(currentVideoProps);
+    if (currentCameraMode == targetCameraMode) {
+        return YES;
+    }
+
+    SEL copyProjectionSel = NSSelectorFromString(@"copyPropsWithCameraProjectionMode:adjustPaspForEquirect:");
+    if (!currentVideoProps || ![currentVideoProps respondsToSelector:copyProjectionSel]) {
+        if (error) *error = SKIPImmersivePreviewError(-36, @"FCP sequence video properties cannot be converted to a native 360 projection");
+        return NO;
+    }
+
+    // adjustPaspForEquirect:YES produces a 2:1 production aperture that FCP's
+    // 360 viewer needs to wrap content around a full sphere. Passing NO leaves
+    // the aperture square and the viewer pans a flat panel instead of orbiting.
+    CFTypeRef copiedVideoProps = ((CFTypeRef (*)(id, SEL, NSInteger, BOOL))objc_msgSend)(currentVideoProps,
+                                                                                         copyProjectionSel,
+                                                                                         targetCameraMode,
+                                                                                         YES);
+    id newVideoProps = (__bridge_transfer id)copiedVideoProps;
+    if (!newVideoProps) {
+        if (error) *error = SKIPImmersivePreviewError(-36, @"FCP failed to create native 360 sequence video properties");
+        return NO;
+    }
+
+    @try {
+        ((void (*)(id, SEL, id))objc_msgSend)(sequence, NSSelectorFromString(@"setVideoProps:"), newVideoProps);
+        SKIPForceSequenceFormatRefresh(sequence);
+        if (outChanged) *outChanged = YES;
+        return YES;
+    } @catch (NSException *exception) {
+        if (error) {
+            *error = SKIPImmersivePreviewError(-37,
+                                               exception.reason ?: @"FCP rejected the native 360 sequence video properties");
+        }
+        return NO;
     }
 }
 
@@ -1857,6 +2127,9 @@ static NSDictionary *SKIPNormalizeNativeFCP360PlayerModules(NSDictionary *clipSu
     SEL setSequenceCameraModeSel = NSSelectorFromString(@"setSequenceCameraMode:");
     SEL setSequenceBoundsSel = NSSelectorFromString(@"setSequenceBounds:");
     SEL sequenceFormatChangedSel = NSSelectorFromString(@"_sequenceFormatChanged:");
+    SEL playerViewBoundsSel = NSSelectorFromString(@"playerViewBounds");
+    SEL playerViewSel = NSSelectorFromString(@"playerView");
+    SEL performPlayerUpdateForOSCSel = NSSelectorFromString(@"performPlayerUpdateForOSC");
 
     for (id playerModule in (NSArray *)playerModules) {
         NSMutableDictionary *entry = [@{
@@ -1885,18 +2158,46 @@ static NSDictionary *SKIPNormalizeNativeFCP360PlayerModules(NSDictionary *clipSu
                 entry[@"targetCameraMode"] = @(cameraMode);
             }
 
-            if (!is360Viewer && [videoModule respondsToSelector:setSequenceBoundsSel]) {
-                ((void (*)(id, SEL, CGRect))objc_msgSend)(videoModule, setSequenceBoundsSel, rectangularBounds);
+            if ([videoModule respondsToSelector:setSequenceBoundsSel]) {
+                CGRect targetBounds = rectangularBounds;
+                if (is360Viewer) {
+                    BOOL haveViewportBounds = NO;
+                    if ([videoModule respondsToSelector:playerViewBoundsSel]) {
+                        @try {
+                            targetBounds = ((CGRect (*)(id, SEL))SKIP_STRET_MSG)(videoModule, playerViewBoundsSel);
+                            haveViewportBounds = targetBounds.size.width > 1.0 && targetBounds.size.height > 1.0;
+                        } @catch (__unused NSException *exception) {
+                            haveViewportBounds = NO;
+                        }
+                    }
+                    if (!haveViewportBounds) {
+                        id playerView = ([videoModule respondsToSelector:playerViewSel])
+                            ? ((id (*)(id, SEL))objc_msgSend)(videoModule, playerViewSel)
+                            : nil;
+                        if ([playerView isKindOfClass:[NSView class]]) {
+                            targetBounds = [(NSView *)playerView bounds];
+                            haveViewportBounds = targetBounds.size.width > 1.0 && targetBounds.size.height > 1.0;
+                        }
+                    }
+                    if (!haveViewportBounds) {
+                        targetBounds = CGRectMake(0.0, 0.0, 1920.0, 1080.0);
+                    }
+                }
+
+                ((void (*)(id, SEL, CGRect))objc_msgSend)(videoModule, setSequenceBoundsSel, targetBounds);
                 entry[@"targetSequenceBounds"] = @{
-                    @"x": @(rectangularBounds.origin.x),
-                    @"y": @(rectangularBounds.origin.y),
-                    @"width": @(rectangularBounds.size.width),
-                    @"height": @(rectangularBounds.size.height),
+                    @"x": @(targetBounds.origin.x),
+                    @"y": @(targetBounds.origin.y),
+                    @"width": @(targetBounds.size.width),
+                    @"height": @(targetBounds.size.height),
                 };
             }
 
             if ([videoModule respondsToSelector:sequenceFormatChangedSel]) {
                 ((void (*)(id, SEL, id))objc_msgSend)(videoModule, sequenceFormatChangedSel, nil);
+            }
+            if (is360Viewer && [videoModule respondsToSelector:performPlayerUpdateForOSCSel]) {
+                ((void (*)(id, SEL))objc_msgSend)(videoModule, performPlayerUpdateForOSCSel);
             }
 
             if ([videoModule respondsToSelector:sequenceCameraModeSel]) {
@@ -1959,9 +2260,34 @@ static NSDictionary *SKIPPrepareNativeFCP360ForImmersiveBRAW(NSString *resolvedP
     id oldVideoProps = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(videoProps));
     NSInteger oldCameraMode = SKIPCameraModeForVideoProps(oldVideoProps);
     BOOL frameProjectionPatchInstalled = SKIPNativeFCP360ProjectionPatchIsInstalled();
+    BOOL sequenceChanged = NO;
+    BOOL changedThisStep = NO;
+    NSError *projectionError = nil;
+    NSInteger clipSphericalMode = SKIPNativeFCP360SphericalModeForImmersiveBRAW(clipSummary);
+    NSInteger clipHeroEyeMode = SKIPNativeFCP360HeroEyeForImmersiveBRAW(clipSummary);
+    // Sequence stays in equirect (the 360 viewer's output space); HE360Transform
+    // bridges the clip's real projection (e.g. DualFisheye) into equirect so the
+    // 360 viewer can project it. Setting the sequence itself to DualFisheye gets
+    // silently rejected by FCP and leaves the 360 pipeline with nothing to render.
+    NSInteger targetCameraMode = 1;
+    sSKIPNativeFCP360CameraModeOverrideValue.store(1, std::memory_order_release);
+
+    if (!SKIPApplySequenceCameraProjectionMode(sequence, targetCameraMode, &changedThisStep, &projectionError)) {
+        if (error) *error = projectionError;
+        return nil;
+    }
+    sequenceChanged = sequenceChanged || changedThisStep;
+
+    id primaryObject = SKIPObjectIfSupported(sequence, @"primaryObject");
+    if (primaryObject) {
+        SKIPSetIntegerIfSupported(primaryObject, @"setSphericalProjectionMode:", clipSphericalMode);
+        SKIPSetIntegerIfSupported(primaryObject, @"setStereoscopicMode:", 0);
+        SKIPSetIntegerIfSupported(primaryObject, @"setHeroEye:", clipHeroEyeMode);
+    }
 
     NSString *timelinePath = @"";
     id timelineItem = SKIPTimelineClipNearPlayhead();
+    NSDictionary *forcedConformStatus = nil;
     if (timelineItem) {
         NSURL *mediaURL = SKIPDirectMediaURLForClipObject(timelineItem);
         timelinePath = mediaURL.path.stringByStandardizingPath ?: @"";
@@ -1978,48 +2304,21 @@ static NSDictionary *SKIPPrepareNativeFCP360ForImmersiveBRAW(NSString *resolvedP
             return nil;
         }
 
-        if (!frameProjectionPatchInstalled) {
-            SKIPSetIntegerIfSupported(timelineItem, @"setSphericalProjectionMode:", 1);
-            SKIPSetIntegerIfSupported(timelineItem, @"setStereoscopicMode:", 0);
-            SKIPSetIntegerIfSupported(timelineItem, @"setHeroEye:", 0);
-        }
+        SKIPSetIntegerIfSupported(timelineItem, @"setSphericalProjectionMode:", clipSphericalMode);
+        SKIPSetIntegerIfSupported(timelineItem, @"setStereoscopicMode:", 0);
+        SKIPSetIntegerIfSupported(timelineItem, @"setHeroEye:", clipHeroEyeMode);
+        forcedConformStatus = SKIPForceNativeFCP360FisheyeConformEffect(timelineItem, clipSphericalMode);
     }
 
-    NSInteger targetCameraMode = 1;
-    BOOL sequenceChanged = NO;
     NSString *sequenceDescription = @"";
 
-    if (!frameProjectionPatchInstalled && (oldCameraMode & 0xFFFF) != 1) {
-        SEL copyProjectionSel = NSSelectorFromString(@"copyPropsWithCameraProjectionMode:adjustPaspForEquirect:");
-        if (!oldVideoProps || ![oldVideoProps respondsToSelector:copyProjectionSel]) {
-            if (error) *error = SKIPImmersivePreviewError(-36, @"FCP sequence video properties cannot be converted to a native 360 projection");
-            return nil;
-        }
-
-        CFTypeRef copiedVideoProps = ((CFTypeRef (*)(id, SEL, NSInteger, BOOL))objc_msgSend)(oldVideoProps,
-                                                                                             copyProjectionSel,
-                                                                                             targetCameraMode,
-                                                                                             YES);
-        id newVideoProps = (__bridge_transfer id)copiedVideoProps;
-        if (!newVideoProps) {
-            if (error) *error = SKIPImmersivePreviewError(-36, @"FCP failed to create native 360 sequence video properties");
-            return nil;
-        }
-
-        @try {
-            ((void (*)(id, SEL, id))objc_msgSend)(sequence, NSSelectorFromString(@"setVideoProps:"), newVideoProps);
-            if ([sequence respondsToSelector:NSSelectorFromString(@"forcePlayerContextChangeForSequence")]) {
-                ((void (*)(id, SEL))objc_msgSend)(sequence, NSSelectorFromString(@"forcePlayerContextChangeForSequence"));
-            }
-            sequenceChanged = YES;
-        } @catch (NSException *exception) {
-            if (error) {
-                *error = SKIPImmersivePreviewError(-37,
-                                                   exception.reason ?: @"FCP rejected the native 360 sequence video properties");
-            }
-            return nil;
-        }
+    projectionError = nil;
+    changedThisStep = NO;
+    if (!SKIPApplySequenceCameraProjectionMode(sequence, targetCameraMode, &changedThisStep, &projectionError)) {
+        if (error) *error = projectionError;
+        return nil;
     }
+    sequenceChanged = sequenceChanged || changedThisStep;
 
     id finalVideoProps = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(videoProps));
     NSInteger finalCameraMode = SKIPCameraModeForVideoProps(finalVideoProps);
@@ -2039,8 +2338,20 @@ static NSDictionary *SKIPPrepareNativeFCP360ForImmersiveBRAW(NSString *resolvedP
         @"targetCameraMode": @(targetCameraMode),
         @"sequenceChanged": @(sequenceChanged),
         @"frameProjectionPatch": @(frameProjectionPatchInstalled),
+        @"targetClipSphericalProjectionMode": @(clipSphericalMode),
+        @"targetClipHeroEye": @(clipHeroEyeMode),
+        @"forcedFisheyeConform": forcedConformStatus ?: @{},
         @"sequenceVideoProps": sequenceDescription ?: @"",
     } mutableCopy];
+
+    if (primaryObject) {
+        NSNumber *primarySpherical = SKIPIntegerIfSupported(primaryObject, @"sphericalProjectionMode");
+        NSNumber *primaryStereo = SKIPIntegerIfSupported(primaryObject, @"stereoscopicMode");
+        NSNumber *primaryHero = SKIPIntegerIfSupported(primaryObject, @"heroEye");
+        if (primarySpherical) status[@"primarySphericalProjectionMode"] = primarySpherical;
+        if (primaryStereo) status[@"primaryStereoscopicMode"] = primaryStereo;
+        if (primaryHero) status[@"primaryHeroEye"] = primaryHero;
+    }
 
     if (timelineItem) {
         SEL sphericalSel = NSSelectorFromString(@"sphericalProjectionMode");
@@ -2052,6 +2363,11 @@ static NSDictionary *SKIPPrepareNativeFCP360ForImmersiveBRAW(NSString *resolvedP
         if ([timelineItem respondsToSelector:stereoSel]) {
             NSInteger stereo = ((NSInteger (*)(id, SEL))objc_msgSend)(timelineItem, stereoSel);
             status[@"clipStereoscopicMode"] = @(stereo);
+        }
+        SEL heroEyeSel = NSSelectorFromString(@"heroEye");
+        if ([timelineItem respondsToSelector:heroEyeSel]) {
+            NSInteger heroEye = ((NSInteger (*)(id, SEL))objc_msgSend)(timelineItem, heroEyeSel);
+            status[@"clipHeroEye"] = @(heroEye);
         }
     }
 

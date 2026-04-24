@@ -7,6 +7,7 @@
 #include "Private/VTVideoDecoderSPI.h"
 
 #include <condition_variable>
+#include <cmath>
 #include <dlfcn.h>
 #include <mutex>
 #include <pthread.h>
@@ -234,6 +235,14 @@ struct BRAWVideoDecoder {
     // every per-frame decode call.
     int eyeIndex { -1 };
     ClipInfo info {};
+    uint32_t sourceWidth { 0 };
+    uint32_t sourceHeight { 0 };
+    uint32_t reducedRequestWidth { 0 };
+    uint32_t reducedRequestHeight { 0 };
+    uint32_t scaleWidths[4] { 0, 0, 0, 0 };
+    uint32_t scaleHeights[4] { 0, 0, 0, 0 };
+    bool scaleDimensionsKnown[4] { false, false, false, false };
+    uint32_t lastLoggedScaleHint { 0xffffffffu };
     ComPtr<IBlackmagicRawFactory> factory;
     ComPtr<IBlackmagicRaw> codec;
     ComPtr<IBlackmagicRawConfiguration> configuration;
@@ -303,6 +312,16 @@ struct BRAWVideoDecoder {
         }
         session = nullptr;
         info = ClipInfo {};
+        sourceWidth = 0;
+        sourceHeight = 0;
+        reducedRequestWidth = 0;
+        reducedRequestHeight = 0;
+        for (size_t i = 0; i < 4; ++i) {
+            scaleWidths[i] = 0;
+            scaleHeights[i] = 0;
+            scaleDimensionsKnown[i] = false;
+        }
+        lastLoggedScaleHint = 0xffffffffu;
     }
 };
 
@@ -468,6 +487,16 @@ static bool PopulateInfoFromFormatDescription(BRAWVideoDecoder *decoder, CMVideo
     decoder->info.frameCount = count;
     decoder->info.frameDuration = FrameDurationForRate(fps);
     decoder->info.duration = CMTimeMultiplyByFloat64(decoder->info.frameDuration, (Float64)count);
+    decoder->sourceWidth = decoder->info.width;
+    decoder->sourceHeight = decoder->info.height;
+    decoder->scaleWidths[0] = decoder->sourceWidth;
+    decoder->scaleHeights[0] = decoder->sourceHeight;
+    decoder->scaleDimensionsKnown[0] = true;
+    for (size_t i = 1; i < 4; ++i) {
+        decoder->scaleWidths[i] = 0;
+        decoder->scaleHeights[i] = 0;
+        decoder->scaleDimensionsKnown[i] = false;
+    }
     return true;
 }
 
@@ -586,19 +615,27 @@ static bool ExtractFrameIndex(CMSampleBufferRef sampleBuffer, uint32_t &frameInd
     return true;
 }
 
-static CVPixelBufferRef CreatePixelBuffer(BRAWVideoDecoder *decoder)
+static CVPixelBufferRef CreatePixelBuffer(BRAWVideoDecoder *decoder,
+                                          uint32_t width,
+                                          uint32_t height,
+                                          bool allowSessionPool)
 {
-    CVPixelBufferPoolRef pool = decoder->session ? VTDecoderSessionGetPixelBufferPool(decoder->session) : nullptr;
     CVPixelBufferRef pixelBuffer = nullptr;
-    if (pool && CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixelBuffer) == noErr && pixelBuffer) {
-        return pixelBuffer;
+    if (allowSessionPool) {
+        CVPixelBufferPoolRef pool = decoder->session ? VTDecoderSessionGetPixelBufferPool(decoder->session) : nullptr;
+        if (pool && CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixelBuffer) == noErr && pixelBuffer) {
+            return pixelBuffer;
+        }
     }
 
-    CFDictionaryRef attributes = CreatePixelBufferAttributes(decoder->allocator, decoder->info);
+    ClipInfo outputInfo = decoder->info;
+    outputInfo.width = width;
+    outputInfo.height = height;
+    CFDictionaryRef attributes = CreatePixelBufferAttributes(decoder->allocator, outputInfo);
     CVReturn status = CVPixelBufferCreate(
         decoder->allocator,
-        decoder->info.width,
-        decoder->info.height,
+        width,
+        height,
         kCVPixelFormatType_32BGRA,
         attributes,
         &pixelBuffer);
@@ -609,6 +646,11 @@ static CVPixelBufferRef CreatePixelBuffer(BRAWVideoDecoder *decoder)
         return nullptr;
     }
     return pixelBuffer;
+}
+
+static CVPixelBufferRef CreatePixelBuffer(BRAWVideoDecoder *decoder)
+{
+    return CreatePixelBuffer(decoder, decoder->info.width, decoder->info.height, true);
 }
 
 // The decoder bundle is built with -fvisibility=hidden and links cleanly, so it
@@ -794,6 +836,8 @@ typedef BOOL (*SKBRAWHostDecodeIntoPBFn)(CFStringRef, uint32_t, uint32_t,
 typedef BOOL (*SKBRAWHostDecodeIntoPBEyeFn)(CFStringRef, uint32_t, uint32_t,
                                              int, CVPixelBufferRef,
                                              uint32_t *, uint32_t *);
+typedef BOOL (*SKBRAWHostScaledDimensionsFn)(CFStringRef, uint32_t,
+                                             uint32_t *, uint32_t *);
 
 static SKBRAWHostDecodeFn ResolveHostDecodeFn()
 {
@@ -825,6 +869,16 @@ static SKBRAWHostDecodeIntoPBEyeFn ResolveHostDecodeIntoPBEyeFn()
     return fn;
 }
 
+static SKBRAWHostScaledDimensionsFn ResolveHostScaledDimensionsFn()
+{
+    static SKBRAWHostScaledDimensionsFn fn = (SKBRAWHostScaledDimensionsFn)-1;
+    if (fn == (SKBRAWHostScaledDimensionsFn)-1) {
+        fn = (SKBRAWHostScaledDimensionsFn)dlsym(RTLD_DEFAULT, "SpliceKitBRAW_GetScaledDimensions");
+        Log(@"decoder", @"host scaled-dimensions fn %@", fn ? @"available" : @"unavailable");
+    }
+    return fn;
+}
+
 static SKBRAWHostReleaseFn ResolveHostReleaseFn()
 {
     static SKBRAWHostReleaseFn fn = (SKBRAWHostReleaseFn)-1;
@@ -832,6 +886,101 @@ static SKBRAWHostReleaseFn ResolveHostReleaseFn()
         fn = (SKBRAWHostReleaseFn)dlsym(RTLD_DEFAULT, "SpliceKitBRAW_ReleaseClip");
     }
     return fn;
+}
+
+static bool ScaleDimensions(BRAWVideoDecoder *decoder,
+                            uint32_t scaleHint,
+                            uint32_t *outWidth,
+                            uint32_t *outHeight)
+{
+    if (!decoder || !outWidth || !outHeight || scaleHint > 3) return false;
+    if (decoder->scaleDimensionsKnown[scaleHint] &&
+        decoder->scaleWidths[scaleHint] > 0 &&
+        decoder->scaleHeights[scaleHint] > 0) {
+        *outWidth = decoder->scaleWidths[scaleHint];
+        *outHeight = decoder->scaleHeights[scaleHint];
+        return true;
+    }
+    if (!decoder->currentPath) return false;
+
+    SKBRAWHostScaledDimensionsFn hostDims = ResolveHostScaledDimensionsFn();
+    if (!hostDims) return false;
+
+    uint32_t width = 0;
+    uint32_t height = 0;
+    if (!hostDims(decoder->currentPath, scaleHint, &width, &height) ||
+        width == 0 ||
+        height == 0) {
+        return false;
+    }
+    decoder->scaleWidths[scaleHint] = width;
+    decoder->scaleHeights[scaleHint] = height;
+    decoder->scaleDimensionsKnown[scaleHint] = true;
+    *outWidth = width;
+    *outHeight = height;
+    return true;
+}
+
+static uint64_t PixelCount(uint32_t width, uint32_t height)
+{
+    return (uint64_t)width * (uint64_t)height;
+}
+
+static uint32_t ScaleHintForTarget(BRAWVideoDecoder *decoder,
+                                   uint32_t targetWidth,
+                                   uint32_t targetHeight)
+{
+    if (!decoder || targetWidth == 0 || targetHeight == 0) return 0;
+
+    uint32_t bestHint = 0;
+    uint64_t bestPixels = UINT64_MAX;
+    for (uint32_t hint = 0; hint <= 3; ++hint) {
+        uint32_t width = 0;
+        uint32_t height = 0;
+        if (!ScaleDimensions(decoder, hint, &width, &height)) continue;
+        if (width < targetWidth || height < targetHeight) continue;
+        uint64_t pixels = PixelCount(width, height);
+        if (pixels < bestPixels) {
+            bestPixels = pixels;
+            bestHint = hint;
+        }
+    }
+    return (bestPixels == UINT64_MAX) ? 0 : bestHint;
+}
+
+static uint32_t RealtimeScaleHint(BRAWVideoDecoder *decoder)
+{
+    if (!decoder || decoder->sourceWidth == 0 || decoder->sourceHeight == 0) return 0;
+
+    double fps = decoder->info.frameRate > 1.0f ? (double)decoder->info.frameRate : 1.0;
+    double pixelsPerSecond = (double)decoder->sourceWidth * (double)decoder->sourceHeight * fps;
+    if (pixelsPerSecond < 1500000000.0) {
+        return 0;
+    }
+
+    double aspect = (double)decoder->sourceWidth / (double)decoder->sourceHeight;
+    if (aspect < 0.1) aspect = 0.1;
+    uint32_t targetWidth = pixelsPerSecond >= 4000000000.0 ? 1280 : 1920;
+    uint32_t targetHeight = (uint32_t)ceil((double)targetWidth / aspect);
+    if (targetHeight == 0) targetHeight = 1;
+    return ScaleHintForTarget(decoder, targetWidth, targetHeight);
+}
+
+static uint32_t ScaleHintForDecode(BRAWVideoDecoder *decoder, VTDecodeFrameFlags flags)
+{
+    if (!decoder || decoder->eyeIndex < 0) {
+        return 0;
+    }
+
+    if (decoder->reducedRequestWidth > 0 && decoder->reducedRequestHeight > 0) {
+        return ScaleHintForTarget(decoder, decoder->reducedRequestWidth, decoder->reducedRequestHeight);
+    }
+
+    // FCP 12.2's BRAW playback path sets asynchronous decode (0x1) but does
+    // not reliably set kVTDecodeFrame_1xRealTimePlayback, even while the
+    // player is actively dropping frames. Keep this scoped to immersive/stereo
+    // BRAW so ordinary BRAW viewing remains full-resolution.
+    return RealtimeScaleHint(decoder);
 }
 
 static void BlitBGRA_FromBGRA(uint8_t *dst, size_t dstBytesPerRow,
@@ -855,7 +1004,8 @@ static OSStatus EmitDecodedFrame_FromHostBytes(BRAWVideoDecoder *decoder,
         return kVTVideoDecoderBadDataErr;
     }
 
-    CVPixelBufferRef pixelBuffer = CreatePixelBuffer(decoder);
+    bool fullSize = (width == decoder->info.width && height == decoder->info.height);
+    CVPixelBufferRef pixelBuffer = CreatePixelBuffer(decoder, width, height, fullSize);
     if (!pixelBuffer) {
         Log(@"decoder", @"failed to get pixel buffer");
         return kVTAllocationFailedErr;
@@ -914,7 +1064,7 @@ static OSStatus EmitDecodedFrame_FromHostBytes(BRAWVideoDecoder *decoder,
     return status;
 }
 
-static OSStatus DecodeFrame(VTVideoDecoderRef decoderRef, VTVideoDecoderFrame frame, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags, VTDecodeInfoFlags *infoFlagsOut)
+static OSStatus DecodeFrame(VTVideoDecoderRef decoderRef, VTVideoDecoderFrame frame, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags flags, VTDecodeInfoFlags *infoFlagsOut)
 {
     BRAWVideoDecoder *decoder = DecoderFromRef(decoderRef);
     if (!decoder || !sampleBuffer) {
@@ -929,6 +1079,31 @@ static OSStatus DecodeFrame(VTVideoDecoderRef decoderRef, VTVideoDecoderFrame fr
     }
 
     if (infoFlagsOut) *infoFlagsOut = 0;
+
+    uint32_t scaleHint = ScaleHintForDecode(decoder, flags);
+    uint32_t outputWidth = decoder->info.width;
+    uint32_t outputHeight = decoder->info.height;
+    if (scaleHint > 0 &&
+        !ScaleDimensions(decoder, scaleHint, &outputWidth, &outputHeight)) {
+        scaleHint = 0;
+        outputWidth = decoder->info.width;
+        outputHeight = decoder->info.height;
+    }
+    bool reducedOutput = (scaleHint > 0);
+    if (decoder->lastLoggedScaleHint != scaleHint) {
+        decoder->lastLoggedScaleHint = scaleHint;
+        Log(@"decoder", @"%@ decode scale=%u output=%ux%u source=%ux%u fps=%.2f reducedRequest=%ux%u flags=0x%x",
+            decoder->eyeIndex >= 0 ? @"immersive" : @"mono",
+            scaleHint,
+            outputWidth,
+            outputHeight,
+            decoder->sourceWidth,
+            decoder->sourceHeight,
+            (double)decoder->info.frameRate,
+            decoder->reducedRequestWidth,
+            decoder->reducedRequestHeight,
+            (unsigned)flags);
+    }
 
     // Stub path: safest default. Emits gray frames without touching BRAW SDK,
     // keeps FCP stable.
@@ -951,10 +1126,10 @@ static OSStatus DecodeFrame(VTVideoDecoderRef decoderRef, VTVideoDecoderFrame fr
         // left/right view. For monoscopic clips eyeIndex is -1 and the host
         // falls through to the legacy CreateJobReadFrame path.
         if (SKBRAWHostDecodeIntoPBEyeFn hostDecodePBEye = ResolveHostDecodeIntoPBEyeFn()) {
-            CVPixelBufferRef pb = CreatePixelBuffer(decoder);
+            CVPixelBufferRef pb = CreatePixelBuffer(decoder, outputWidth, outputHeight, !reducedOutput);
             if (pb) {
                 uint32_t w = 0, h = 0;
-                BOOL ok = hostDecodePBEye(decoder->currentPath, frameIndex, 0, decoder->eyeIndex, pb, &w, &h);
+                BOOL ok = hostDecodePBEye(decoder->currentPath, frameIndex, scaleHint, decoder->eyeIndex, pb, &w, &h);
                 if (ok) {
                     OSStatus s = VTDecoderSessionEmitDecodedFrame(decoder->session, frame, noErr, 0, pb);
                     CFRelease(pb);
@@ -965,10 +1140,10 @@ static OSStatus DecodeFrame(VTVideoDecoderRef decoderRef, VTVideoDecoderFrame fr
             }
         } else if (SKBRAWHostDecodeIntoPBFn hostDecodePB = ResolveHostDecodeIntoPBFn()) {
             // Older host build without eye-aware export — fall back to mono.
-            CVPixelBufferRef pb = CreatePixelBuffer(decoder);
+            CVPixelBufferRef pb = CreatePixelBuffer(decoder, outputWidth, outputHeight, !reducedOutput);
             if (pb) {
                 uint32_t w = 0, h = 0;
-                BOOL ok = hostDecodePB(decoder->currentPath, frameIndex, 0, pb, &w, &h);
+                BOOL ok = hostDecodePB(decoder->currentPath, frameIndex, scaleHint, pb, &w, &h);
                 if (ok) {
                     OSStatus s = VTDecoderSessionEmitDecodedFrame(decoder->session, frame, noErr, 0, pb);
                     CFRelease(pb);
@@ -983,8 +1158,7 @@ static OSStatus DecodeFrame(VTVideoDecoderRef decoderRef, VTVideoDecoderFrame fr
         if (SKBRAWHostDecodeFn hostDecode = ResolveHostDecodeFn()) {
             uint32_t w = 0, h = 0, sz = 0;
             void *hostBytes = nullptr;
-            // scale=0 (full), format=0 (RGBAU8).
-            BOOL ok = hostDecode(decoder->currentPath, frameIndex, 0, 0, &w, &h, &sz, &hostBytes);
+            BOOL ok = hostDecode(decoder->currentPath, frameIndex, scaleHint, 0, &w, &h, &sz, &hostBytes);
             if (ok && hostBytes && sz > 0) {
                 OSStatus status = EmitDecodedFrame_FromHostBytes(decoder, frame, w, h, sz, (const uint8_t *)hostBytes);
                 free(hostBytes);
@@ -1015,8 +1189,43 @@ static OSStatus CopySupportedPropertyDictionary(VTVideoDecoderRef decoderRef, CF
     return *dictionaryOut ? noErr : kCMBaseObjectError_ValueNotAvailable;
 }
 
-static OSStatus SetDecoderProperties(VTVideoDecoderRef, CFDictionaryRef)
+static bool CopyUInt32FromDictionary(CFDictionaryRef dictionary, CFStringRef key, uint32_t *outValue)
 {
+    if (!dictionary || !key || !outValue) return false;
+    CFTypeRef value = CFDictionaryGetValue(dictionary, key);
+    if (!value || CFGetTypeID(value) != CFNumberGetTypeID()) return false;
+    int64_t parsed = 0;
+    if (!CFNumberGetValue((CFNumberRef)value, kCFNumberSInt64Type, &parsed) || parsed <= 0) {
+        return false;
+    }
+    *outValue = (uint32_t)std::min<int64_t>(parsed, UINT32_MAX);
+    return true;
+}
+
+static OSStatus SetDecoderProperties(VTVideoDecoderRef decoderRef, CFDictionaryRef properties)
+{
+    BRAWVideoDecoder *decoder = DecoderFromRef(decoderRef);
+    if (!decoder) return paramErr;
+    if (!properties) return noErr;
+
+    std::lock_guard<std::mutex> lock(decoder->decodeMutex);
+    CFTypeRef reduced = CFDictionaryGetValue(properties, kVTDecompressionPropertyKey_ReducedResolutionDecode);
+    if (!reduced) {
+        return noErr;
+    }
+
+    uint32_t width = 0;
+    uint32_t height = 0;
+    if (CFGetTypeID(reduced) == CFDictionaryGetTypeID() &&
+        CopyUInt32FromDictionary((CFDictionaryRef)reduced, kVTDecompressionResolutionKey_Width, &width) &&
+        CopyUInt32FromDictionary((CFDictionaryRef)reduced, kVTDecompressionResolutionKey_Height, &height)) {
+        decoder->reducedRequestWidth = width;
+        decoder->reducedRequestHeight = height;
+    } else {
+        decoder->reducedRequestWidth = 0;
+        decoder->reducedRequestHeight = 0;
+    }
+    decoder->lastLoggedScaleHint = 0xffffffffu;
     return noErr;
 }
 

@@ -32,6 +32,11 @@ BOOL SpliceKitBRAW_DecodeFrameIntoPixelBufferEye(CFStringRef pathRef,
                                                  uint32_t *outWidth,
                                                  uint32_t *outHeight);
 
+BOOL SpliceKitBRAW_GetScaledDimensions(CFStringRef pathRef,
+                                        uint32_t scaleHint,
+                                        uint32_t *outWidth,
+                                        uint32_t *outHeight);
+
 BOOL SpliceKitBRAW_ReadClipMetadata(CFStringRef pathRef,
                                     uint32_t *outWidth,
                                     uint32_t *outHeight,

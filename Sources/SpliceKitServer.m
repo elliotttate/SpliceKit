@@ -19378,8 +19378,100 @@ static NSDictionary *SpliceKit_handleSelectClipAtPlayheadLane(NSDictionary *para
 
 #pragma mark - Capture Viewer Screenshot
 
+static NSView *SpliceKit_findPlayerViewForCapture(NSWindow *mainWindow,
+                                                  NSString *requestedViewer,
+                                                  NSMutableDictionary *debugInfo) {
+    Class playerViewClass = objc_getClass("FFPlayerView");
+    if (!playerViewClass || !mainWindow.contentView) return nil;
+
+    NSString *viewer = [requestedViewer isKindOfClass:[NSString class]]
+        ? requestedViewer.lowercaseString
+        : @"largest";
+    BOOL wants360 = [viewer isEqualToString:@"360"] || [viewer isEqualToString:@"native360"];
+    BOOL wantsNormal = [viewer isEqualToString:@"normal"] || [viewer isEqualToString:@"flat"];
+
+    if (wants360 || wantsNormal) {
+        @try {
+            id editorContainer = SpliceKit_getEditorContainer();
+            SEL targetModulesSel = NSSelectorFromString(@"targetModules");
+            SEL playerModulesSel = NSSelectorFromString(@"playerModules");
+            SEL videoModuleSel = NSSelectorFromString(@"videoModule");
+            SEL playerViewSel = NSSelectorFromString(@"playerView");
+            SEL is360ViewerSel = NSSelectorFromString(@"is360Viewer");
+
+            id targetModules = (editorContainer && [editorContainer respondsToSelector:targetModulesSel])
+                ? ((id (*)(id, SEL))objc_msgSend)(editorContainer, targetModulesSel)
+                : nil;
+
+            if ([targetModules isKindOfClass:[NSArray class]]) {
+                for (id module in (NSArray *)targetModules) {
+                    if (![module respondsToSelector:playerModulesSel]) continue;
+                    id playerModules = ((id (*)(id, SEL))objc_msgSend)(module, playerModulesSel);
+                    if (![playerModules isKindOfClass:[NSArray class]]) continue;
+
+                    for (id playerModule in (NSArray *)playerModules) {
+                        id videoModule = ([playerModule respondsToSelector:videoModuleSel])
+                            ? ((id (*)(id, SEL))objc_msgSend)(playerModule, videoModuleSel)
+                            : nil;
+                        if (!videoModule || ![videoModule respondsToSelector:is360ViewerSel]) continue;
+
+                        BOOL is360Viewer = ((BOOL (*)(id, SEL))objc_msgSend)(videoModule, is360ViewerSel);
+                        if ((wants360 && !is360Viewer) || (wantsNormal && is360Viewer)) continue;
+
+                        NSView *playerView = nil;
+                        if ([videoModule respondsToSelector:playerViewSel]) {
+                            playerView = ((id (*)(id, SEL))objc_msgSend)(videoModule, playerViewSel);
+                        }
+                        if (!playerView && [playerModule respondsToSelector:playerViewSel]) {
+                            playerView = ((id (*)(id, SEL))objc_msgSend)(playerModule, playerViewSel);
+                        }
+                        if (![playerView isKindOfClass:playerViewClass] || playerView.window != mainWindow) {
+                            continue;
+                        }
+
+                        if (debugInfo) {
+                            debugInfo[@"selectedViewer"] = wants360 ? @"360" : @"normal";
+                            debugInfo[@"selectedViewClass"] = NSStringFromClass(playerView.class) ?: @"";
+                            debugInfo[@"selectedVideoClass"] = NSStringFromClass([videoModule class]) ?: @"";
+                        }
+                        return playerView;
+                    }
+                }
+            }
+        } @catch (NSException *exception) {
+            if (debugInfo) {
+                debugInfo[@"selectorError"] = exception.reason ?: exception.name ?: @"unknown exception";
+            }
+        }
+
+        if (debugInfo) debugInfo[@"selectedViewer"] = @"notFound";
+        return nil;
+    }
+
+    NSView *largestPlayerView = nil;
+    CGFloat largestArea = 0;
+    NSMutableArray *queue = [NSMutableArray arrayWithObject:mainWindow.contentView];
+    while (queue.count > 0) {
+        NSView *view = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        if (!view) continue;
+        if ([view isKindOfClass:playerViewClass]) {
+            CGFloat area = view.bounds.size.width * view.bounds.size.height;
+            if (area > largestArea) {
+                largestArea = area;
+                largestPlayerView = view;
+            }
+        }
+        NSArray *subs = [view subviews];
+        if (subs) [queue addObjectsFromArray:subs];
+    }
+    if (debugInfo) debugInfo[@"selectedViewer"] = @"largest";
+    return largestPlayerView;
+}
+
 static NSDictionary *SpliceKit_handleCaptureViewer(NSDictionary *params) {
     NSString *outputPath = params[@"path"] ?: @"/tmp/splicekit_viewer.png";
+    NSString *requestedViewer = params[@"viewer"] ?: params[@"which"];
 
     __block NSDictionary *result = nil;
 
@@ -19415,27 +19507,13 @@ static NSDictionary *SpliceKit_handleCaptureViewer(NSDictionary *params) {
                 return;
             }
 
-            // Find the LARGEST FFPlayerView in the main window for cropping
-            Class playerViewClass = objc_getClass("FFPlayerView");
-            NSView *largestPlayerView = nil;
-            CGFloat largestArea = 0;
-
-            if (playerViewClass) {
-                NSMutableArray *queue = [NSMutableArray arrayWithObject:[mainWindow contentView]];
-                while (queue.count > 0) {
-                    NSView *view = queue.firstObject;
-                    [queue removeObjectAtIndex:0];
-                    if (!view) continue;
-                    if ([view isKindOfClass:playerViewClass]) {
-                        CGFloat area = view.bounds.size.width * view.bounds.size.height;
-                        if (area > largestArea) {
-                            largestArea = area;
-                            largestPlayerView = view;
-                        }
-                    }
-                    NSArray *subs = [view subviews];
-                    if (subs) [queue addObjectsFromArray:subs];
-                }
+            NSMutableDictionary *captureDebug = [NSMutableDictionary dictionary];
+            NSView *targetPlayerView = SpliceKit_findPlayerViewForCapture(mainWindow, requestedViewer, captureDebug);
+            if (requestedViewer && !targetPlayerView) {
+                CGImageRelease(fullImage);
+                result = @{@"error": [NSString stringWithFormat:@"No %@ viewer FFPlayerView found", requestedViewer],
+                           @"capture": captureDebug};
+                return;
             }
 
             NSData *pngData = nil;
@@ -19443,9 +19521,9 @@ static NSDictionary *SpliceKit_handleCaptureViewer(NSDictionary *params) {
             int outHeight = (int)CGImageGetHeight(fullImage);
             BOOL cropped = NO;
 
-            if (largestPlayerView) {
+            if (targetPlayerView) {
                 // Convert view frame to window coordinates (flipped for image)
-                NSRect viewFrameInWindow = [largestPlayerView convertRect:[largestPlayerView bounds] toView:nil];
+                NSRect viewFrameInWindow = [targetPlayerView convertRect:[targetPlayerView bounds] toView:nil];
                 CGFloat imgScaleX = (CGFloat)CGImageGetWidth(fullImage) / mainWindow.frame.size.width;
                 CGFloat imgScaleY = (CGFloat)CGImageGetHeight(fullImage) / mainWindow.frame.size.height;
                 CGFloat windowHeight = mainWindow.frame.size.height;
@@ -19494,6 +19572,7 @@ static NSDictionary *SpliceKit_handleCaptureViewer(NSDictionary *params) {
                 @"height": @(outHeight),
                 @"bytes": @(pngData.length),
                 @"cropped": @(cropped),
+                @"capture": captureDebug,
             };
         } @catch (NSException *e) {
             result = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};

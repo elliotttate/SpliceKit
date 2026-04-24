@@ -14,6 +14,8 @@
 #import <CoreServices/CoreServices.h>
 #import <Metal/Metal.h>
 
+#include <cmath>
+
 extern "C" void MTRegisterPluginFormatReaderBundleDirectory(CFURLRef directoryURL);
 extern "C" void VTRegisterVideoDecoderBundleDirectory(CFURLRef directoryURL);
 
@@ -351,6 +353,20 @@ static BOOL SpliceKitBRAWBoolDefault(NSString *key, BOOL fallback) {
         return fallback;
     }
     return [defaults boolForKey:key];
+}
+
+static BOOL SpliceKitBRAWDecodePerfLoggingEnabled(void) {
+    static BOOL enabled;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *env = getenv("SPLICEKIT_BRAW_DECODE_PERF_LOG");
+        if (env) {
+            enabled = (env[0] == '1' || env[0] == 'y' || env[0] == 'Y');
+            return;
+        }
+        enabled = SpliceKitBRAWBoolDefault(@"SpliceKitBRAWDecodePerfLogging", NO);
+    });
+    return enabled;
 }
 
 static NSString *SpliceKitBRAWBundlePath(NSString *subpath) {
@@ -3382,6 +3398,338 @@ static CVMetalTextureCacheRef SpliceKitBRAWMetalTextureCache() {
     return cache;
 }
 
+typedef struct {
+    uint32_t sourceWidth;
+    uint32_t sourceHeight;
+    uint32_t destWidth;
+    uint32_t destHeight;
+    float halfFovRadians;
+    float lensRadiusScale;
+    float reserved1;
+    float reserved2;
+} SpliceKitBRAWFisheyeEquirectParams;
+
+static NSString * const kSpliceKitBRAWFisheyeEquirectMetalSource =
+@"#include <metal_stdlib>\n"
+@"using namespace metal;\n"
+@"struct RemapParams {\n"
+@"    uint sourceWidth;\n"
+@"    uint sourceHeight;\n"
+@"    uint destWidth;\n"
+@"    uint destHeight;\n"
+@"    float halfFovRadians;\n"
+@"    float lensRadiusScale;\n"
+@"    float reserved1;\n"
+@"    float reserved2;\n"
+@"};\n"
+@"static float4 sampleBGRA(device const uchar4 *src, uint sourceWidth, uint sourceHeight, float2 p) {\n"
+@"    p = clamp(p, float2(0.0), float2((float)sourceWidth - 1.0, (float)sourceHeight - 1.0));\n"
+@"    uint2 p0 = uint2(floor(p));\n"
+@"    uint2 p1 = min(p0 + uint2(1), uint2(sourceWidth - 1, sourceHeight - 1));\n"
+@"    float2 t = p - float2(p0);\n"
+@"    uchar4 c00b = src[p0.y * sourceWidth + p0.x];\n"
+@"    uchar4 c10b = src[p0.y * sourceWidth + p1.x];\n"
+@"    uchar4 c01b = src[p1.y * sourceWidth + p0.x];\n"
+@"    uchar4 c11b = src[p1.y * sourceWidth + p1.x];\n"
+@"    float4 c00 = float4(c00b.z, c00b.y, c00b.x, c00b.w) / 255.0;\n"
+@"    float4 c10 = float4(c10b.z, c10b.y, c10b.x, c10b.w) / 255.0;\n"
+@"    float4 c01 = float4(c01b.z, c01b.y, c01b.x, c01b.w) / 255.0;\n"
+@"    float4 c11 = float4(c11b.z, c11b.y, c11b.x, c11b.w) / 255.0;\n"
+@"    return mix(mix(c00, c10, t.x), mix(c01, c11, t.x), t.y);\n"
+@"}\n"
+@"kernel void fisheyeToEquirect(device const uchar4 *src [[buffer(0)]],\n"
+@"                              constant RemapParams &p [[buffer(1)]],\n"
+@"                              texture2d<float, access::write> dst [[texture(0)]],\n"
+@"                              uint2 gid [[thread_position_in_grid]]) {\n"
+@"    if (gid.x >= p.destWidth || gid.y >= p.destHeight) return;\n"
+@"    const float kPi = 3.14159265358979323846;\n"
+@"    float u = ((float)gid.x + 0.5) / max(1.0f, (float)p.destWidth);\n"
+@"    float v = ((float)gid.y + 0.5) / max(1.0f, (float)p.destHeight);\n"
+@"    float lon = (u - 0.5) * 2.0 * kPi;\n"
+@"    float lat = (0.5 - v) * kPi;\n"
+@"    float3 dir = float3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon));\n"
+@"    float theta = acos(clamp(dir.z, -1.0f, 1.0f));\n"
+@"    float halfFov = clamp(p.halfFovRadians, 0.78539816339f, 2.09439510239f);\n"
+@"    if (theta > halfFov) {\n"
+@"        dst.write(float4(0.0, 0.0, 0.0, 1.0), gid);\n"
+@"        return;\n"
+@"    }\n"
+@"    float phi = atan2(dir.y, dir.x);\n"
+@"    float radial = theta / halfFov;\n"
+@"    float radiusScale = clamp(p.lensRadiusScale, 0.35f, 1.0f);\n"
+@"    float radius = min((float)p.sourceWidth, (float)p.sourceHeight) * 0.5 * radiusScale;\n"
+@"    float2 center = float2((float)p.sourceWidth, (float)p.sourceHeight) * 0.5;\n"
+@"    float2 samplePoint = center + float2(cos(phi), -sin(phi)) * radial * radius;\n"
+@"    float2 delta = samplePoint - center;\n"
+@"    if (length(delta) > radius || any(samplePoint < 0.0) || samplePoint.x > (float)(p.sourceWidth - 1) || samplePoint.y > (float)(p.sourceHeight - 1)) {\n"
+@"        dst.write(float4(0.0, 0.0, 0.0, 1.0), gid);\n"
+@"        return;\n"
+@"    }\n"
+@"    dst.write(sampleBGRA(src, p.sourceWidth, p.sourceHeight, samplePoint), gid);\n"
+@"}\n";
+
+static id<MTLComputePipelineState> SpliceKitBRAWFisheyeEquirectPipeline(std::string &errorOut) {
+    static id<MTLComputePipelineState> pipeline = nil;
+    static NSString *pipelineError = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        id<MTLDevice> device = SpliceKitBRAWMetalDevice();
+        if (!device) {
+            pipelineError = @"Metal device unavailable";
+            return;
+        }
+
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithSource:kSpliceKitBRAWFisheyeEquirectMetalSource
+                                                      options:nil
+                                                        error:&error];
+        if (!library) {
+            pipelineError = [NSString stringWithFormat:@"fisheye shader compile failed: %@",
+                             error.localizedDescription ?: error.description ?: @"unknown error"];
+            return;
+        }
+
+        id<MTLFunction> function = [library newFunctionWithName:@"fisheyeToEquirect"];
+        if (!function) {
+            pipelineError = @"fisheyeToEquirect function unavailable";
+            return;
+        }
+
+        pipeline = [device newComputePipelineStateWithFunction:function error:&error];
+        if (!pipeline) {
+            pipelineError = [NSString stringWithFormat:@"fisheye pipeline creation failed: %@",
+                             error.localizedDescription ?: error.description ?: @"unknown error"];
+        }
+    });
+
+    if (!pipeline && pipelineError.length > 0) {
+        errorOut = pipelineError.UTF8String ?: "fisheye pipeline unavailable";
+    }
+    return pipeline;
+}
+
+static double SpliceKitBRAWHalfFOVRadiansForImmersiveClip(IBlackmagicRawClipImmersiveVideo *immersiveClip) {
+    double fovDegrees = 180.0;
+    if (immersiveClip) {
+        uint32_t horizontalFieldOfView = 0;
+        if (immersiveClip->GetHorizontalFieldOfView(&horizontalFieldOfView) == S_OK &&
+            horizontalFieldOfView > 0) {
+            fovDegrees = (horizontalFieldOfView > 1000)
+                ? ((double)horizontalFieldOfView / 1000.0)
+                : (double)horizontalFieldOfView;
+        }
+    }
+    fovDegrees = MIN(240.0, MAX(90.0, fovDegrees));
+    return (fovDegrees * 0.5) * M_PI / 180.0;
+}
+
+static double SpliceKitBRAWOpticalHorizontalFOVDegreesForImmersiveClip(IBlackmagicRawClipImmersiveVideo *immersiveClip) {
+    if (!immersiveClip) return 0.0;
+
+    Variant value;
+    if (VariantInit(&value) != S_OK) return 0.0;
+
+    double opticalFOV = 0.0;
+    if (immersiveClip->GetImmersiveAttribute(blackmagicRawImmersiveAttributeOpticalProjectionData, &value) == S_OK) {
+        id preview = SpliceKitBRAWVariantPreview(&value, 1);
+        NSString *jsonString = [preview isKindOfClass:[NSString class]] ? (NSString *)preview : nil;
+        NSData *jsonData = jsonString.length > 0 ? [jsonString dataUsingEncoding:NSUTF8StringEncoding] : nil;
+        if (jsonData) {
+            id json = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+            NSDictionary *root = [json isKindOfClass:[NSDictionary class]] ? (NSDictionary *)json : nil;
+            NSDictionary *captureDevice = [root[@"captureDevice"] isKindOfClass:[NSDictionary class]]
+                ? root[@"captureDevice"]
+                : nil;
+            NSArray *views = [captureDevice[@"views"] isKindOfClass:[NSArray class]]
+                ? captureDevice[@"views"]
+                : nil;
+            for (id view in views) {
+                NSDictionary *viewDict = [view isKindOfClass:[NSDictionary class]] ? (NSDictionary *)view : nil;
+                NSDictionary *opticalData = [viewDict[@"opticalData"] isKindOfClass:[NSDictionary class]]
+                    ? viewDict[@"opticalData"]
+                    : nil;
+                NSDictionary *fov = [opticalData[@"Fov"] isKindOfClass:[NSDictionary class]]
+                    ? opticalData[@"Fov"]
+                    : nil;
+                NSNumber *horizontal = [fov[@"horizontal"] respondsToSelector:@selector(doubleValue)]
+                    ? fov[@"horizontal"]
+                    : nil;
+                if (horizontal.doubleValue > 1.0) {
+                    opticalFOV = MAX(opticalFOV, horizontal.doubleValue);
+                }
+            }
+        }
+    }
+
+    VariantClear(&value);
+    return opticalFOV;
+}
+
+static double SpliceKitBRAWLensRadiusScaleForImmersiveClip(IBlackmagicRawClipImmersiveVideo *immersiveClip) {
+    double sdkFOVDegrees = 180.0;
+    if (immersiveClip) {
+        uint32_t horizontalFieldOfView = 0;
+        if (immersiveClip->GetHorizontalFieldOfView(&horizontalFieldOfView) == S_OK &&
+            horizontalFieldOfView > 0) {
+            sdkFOVDegrees = (horizontalFieldOfView > 1000)
+                ? ((double)horizontalFieldOfView / 1000.0)
+                : (double)horizontalFieldOfView;
+        }
+    }
+
+    double opticalFOVDegrees = SpliceKitBRAWOpticalHorizontalFOVDegreesForImmersiveClip(immersiveClip);
+    if (opticalFOVDegrees <= 1.0 || sdkFOVDegrees <= 1.0) return 1.0;
+
+    return MIN(1.0, MAX(0.35, opticalFOVDegrees / sdkFOVDegrees));
+}
+
+static uint8_t *SpliceKitBRAWPixelAt(uint8_t *base, size_t bytesPerRow, uint32_t x, uint32_t y) {
+    return base + ((size_t)y * bytesPerRow) + ((size_t)x * 4);
+}
+
+static const uint8_t *SpliceKitBRAWConstPixelAt(const uint8_t *base, size_t bytesPerRow, uint32_t x, uint32_t y) {
+    return base + ((size_t)y * bytesPerRow) + ((size_t)x * 4);
+}
+
+static void SpliceKitBRAWSampleBGRA(const uint8_t *src,
+                                    uint32_t sourceWidth,
+                                    uint32_t sourceHeight,
+                                    double sampleX,
+                                    double sampleY,
+                                    uint8_t *dstPixel) {
+    if (!src || !dstPixel || sourceWidth == 0 || sourceHeight == 0) return;
+    sampleX = MIN((double)(sourceWidth - 1), MAX(0.0, sampleX));
+    sampleY = MIN((double)(sourceHeight - 1), MAX(0.0, sampleY));
+
+    uint32_t x0 = (uint32_t)floor(sampleX);
+    uint32_t y0 = (uint32_t)floor(sampleY);
+    uint32_t x1 = MIN(x0 + 1, sourceWidth - 1);
+    uint32_t y1 = MIN(y0 + 1, sourceHeight - 1);
+    double tx = sampleX - (double)x0;
+    double ty = sampleY - (double)y0;
+
+    const uint8_t *p00 = SpliceKitBRAWConstPixelAt(src, (size_t)sourceWidth * 4, x0, y0);
+    const uint8_t *p10 = SpliceKitBRAWConstPixelAt(src, (size_t)sourceWidth * 4, x1, y0);
+    const uint8_t *p01 = SpliceKitBRAWConstPixelAt(src, (size_t)sourceWidth * 4, x0, y1);
+    const uint8_t *p11 = SpliceKitBRAWConstPixelAt(src, (size_t)sourceWidth * 4, x1, y1);
+
+    for (int channel = 0; channel < 4; ++channel) {
+        double top = (double)p00[channel] + ((double)p10[channel] - (double)p00[channel]) * tx;
+        double bottom = (double)p01[channel] + ((double)p11[channel] - (double)p01[channel]) * tx;
+        dstPixel[channel] = (uint8_t)MIN(255.0, MAX(0.0, top + (bottom - top) * ty));
+    }
+}
+
+static bool SpliceKitBRAWCopyBGRABytesToPixelBuffer(const uint8_t *src,
+                                                    uint32_t sourceWidth,
+                                                    uint32_t sourceHeight,
+                                                    CVPixelBufferRef destPixelBuffer,
+                                                    std::string &errorOut) {
+    if (!src) { errorOut = "source bytes null"; return false; }
+    if (!destPixelBuffer) { errorOut = "dest CVPixelBuffer null"; return false; }
+
+    CVReturn lockStatus = CVPixelBufferLockBaseAddress(destPixelBuffer, 0);
+    if (lockStatus != kCVReturnSuccess) {
+        errorOut = [NSString stringWithFormat:@"CVPixelBufferLockBaseAddress cvr=%d", lockStatus].UTF8String;
+        return false;
+    }
+
+    uint8_t *dst = static_cast<uint8_t *>(CVPixelBufferGetBaseAddress(destPixelBuffer));
+    size_t dstBytesPerRow = CVPixelBufferGetBytesPerRow(destPixelBuffer);
+    uint32_t destWidth = (uint32_t)CVPixelBufferGetWidth(destPixelBuffer);
+    uint32_t destHeight = (uint32_t)CVPixelBufferGetHeight(destPixelBuffer);
+    if (!dst || dstBytesPerRow < (size_t)destWidth * 4) {
+        CVPixelBufferUnlockBaseAddress(destPixelBuffer, 0);
+        errorOut = "dest CVPixelBuffer base invalid";
+        return false;
+    }
+
+    uint32_t copyWidth = MIN(sourceWidth, destWidth);
+    uint32_t copyHeight = MIN(sourceHeight, destHeight);
+    if (copyWidth < destWidth || copyHeight < destHeight) {
+        memset(dst, 0, dstBytesPerRow * destHeight);
+    }
+    for (uint32_t row = 0; row < copyHeight; ++row) {
+        memcpy(SpliceKitBRAWPixelAt(dst, dstBytesPerRow, 0, row),
+               SpliceKitBRAWConstPixelAt(src, (size_t)sourceWidth * 4, 0, row),
+               (size_t)copyWidth * 4);
+    }
+
+    CVPixelBufferUnlockBaseAddress(destPixelBuffer, 0);
+    return true;
+}
+
+static bool SpliceKitBRAWRemapCPUFisheyeToEquirect(const uint8_t *src,
+                                                   uint32_t sourceWidth,
+                                                   uint32_t sourceHeight,
+                                                   CVPixelBufferRef destPixelBuffer,
+                                                   double halfFovRadians,
+                                                   double lensRadiusScale,
+                                                   std::string &errorOut) {
+    if (!src) { errorOut = "source bytes null"; return false; }
+    if (!destPixelBuffer) { errorOut = "dest CVPixelBuffer null"; return false; }
+
+    CVReturn lockStatus = CVPixelBufferLockBaseAddress(destPixelBuffer, 0);
+    if (lockStatus != kCVReturnSuccess) {
+        errorOut = [NSString stringWithFormat:@"CVPixelBufferLockBaseAddress cvr=%d", lockStatus].UTF8String;
+        return false;
+    }
+
+    uint8_t *dst = static_cast<uint8_t *>(CVPixelBufferGetBaseAddress(destPixelBuffer));
+    size_t dstBytesPerRow = CVPixelBufferGetBytesPerRow(destPixelBuffer);
+    uint32_t destWidth = (uint32_t)CVPixelBufferGetWidth(destPixelBuffer);
+    uint32_t destHeight = (uint32_t)CVPixelBufferGetHeight(destPixelBuffer);
+    if (!dst || destWidth == 0 || destHeight == 0 || dstBytesPerRow < (size_t)destWidth * 4) {
+        CVPixelBufferUnlockBaseAddress(destPixelBuffer, 0);
+        errorOut = "dest CVPixelBuffer base invalid";
+        return false;
+    }
+
+    double halfFov = MIN(2.09439510239, MAX(0.78539816339, halfFovRadians));
+    double radiusScale = MIN(1.0, MAX(0.35, lensRadiusScale));
+    double radius = (double)MIN(sourceWidth, sourceHeight) * 0.5 * radiusScale;
+    double centerX = (double)sourceWidth * 0.5;
+    double centerY = (double)sourceHeight * 0.5;
+    for (uint32_t y = 0; y < destHeight; ++y) {
+        for (uint32_t x = 0; x < destWidth; ++x) {
+            uint8_t *dstPixel = SpliceKitBRAWPixelAt(dst, dstBytesPerRow, x, y);
+            double u = ((double)x + 0.5) / (double)destWidth;
+            double v = ((double)y + 0.5) / (double)destHeight;
+            double lon = (u - 0.5) * 2.0 * M_PI;
+            double lat = (0.5 - v) * M_PI;
+            double dirX = cos(lat) * sin(lon);
+            double dirY = sin(lat);
+            double dirZ = cos(lat) * cos(lon);
+            double theta = acos(MIN(1.0, MAX(-1.0, dirZ)));
+            if (theta > halfFov) {
+                dstPixel[0] = 0;
+                dstPixel[1] = 0;
+                dstPixel[2] = 0;
+                dstPixel[3] = 255;
+                continue;
+            }
+
+            double phi = atan2(dirY, dirX);
+            double radial = theta / halfFov;
+            double sampleX = centerX + cos(phi) * radial * radius;
+            double sampleY = centerY - sin(phi) * radial * radius;
+            if (hypot(sampleX - centerX, sampleY - centerY) > radius ||
+                sampleX < 0.0 || sampleY < 0.0 ||
+                sampleX > (double)(sourceWidth - 1) || sampleY > (double)(sourceHeight - 1)) {
+                dstPixel[0] = 0;
+                dstPixel[1] = 0;
+                dstPixel[2] = 0;
+                dstPixel[3] = 255;
+                continue;
+            }
+            SpliceKitBRAWSampleBGRA(src, sourceWidth, sourceHeight, sampleX, sampleY, dstPixel);
+        }
+    }
+
+    CVPixelBufferUnlockBaseAddress(destPixelBuffer, 0);
+    return true;
+}
+
 struct SpliceKitBRAWHostDecodeContext {
     std::mutex mutex;
     std::condition_variable cv;
@@ -3395,6 +3743,9 @@ struct SpliceKitBRAWHostDecodeContext {
     uint32_t resourceSizeBytes { 0 };
     BlackmagicRawResolutionScale scale { blackmagicRawResolutionScaleHalf };
     BlackmagicRawResourceFormat format { blackmagicRawResourceFormatRGBAU8 };
+    bool remapImmersiveFisheyeToEquirect { false };
+    double fisheyeHalfFovRadians { M_PI_2 };
+    double fisheyeLensRadiusScale { 1.0 };
 
     // Zero-copy Metal target: if set, ProcessComplete blits the SDK's MTLBuffer
     // directly into this CVPixelBuffer's IOSurface-backed MTLTexture instead of
@@ -4238,10 +4589,26 @@ public:
                 ctx->error = "ProcessComplete returned invalid resource";
             } else if (resourceType == blackmagicRawResourceTypeBufferCPU) {
                 const uint8_t *bytes = static_cast<const uint8_t *>(resource);
-                try {
-                    ctx->bytes.assign(bytes, bytes + sz);
-                } catch (...) {
-                    ctx->error = "failed to copy CPU bytes";
+                if (ctx->destPixelBuffer) {
+                    lock.unlock();
+                    std::string cpuError;
+                    bool cpuOK = ctx->remapImmersiveFisheyeToEquirect
+                        ? SpliceKitBRAWRemapCPUFisheyeToEquirect(bytes,
+                                                                 w,
+                                                                 h,
+                                                                 ctx->destPixelBuffer,
+                                                                 ctx->fisheyeHalfFovRadians,
+                                                                 ctx->fisheyeLensRadiusScale,
+                                                                 cpuError)
+                        : SpliceKitBRAWCopyBGRABytesToPixelBuffer(bytes, w, h, ctx->destPixelBuffer, cpuError);
+                    lock.lock();
+                    if (!cpuOK) ctx->error = cpuError.empty() ? "CPU pixel buffer copy failed" : cpuError;
+                } else {
+                    try {
+                        ctx->bytes.assign(bytes, bytes + sz);
+                    } catch (...) {
+                        ctx->error = "failed to copy CPU bytes";
+                    }
                 }
             } else if (resourceType == blackmagicRawResourceTypeBufferMetal) {
                 // Drop the lock while encoding/waiting on the GPU blit — we don't
@@ -4254,7 +4621,15 @@ public:
                 bool blitOK = false;
 
                 if (ctx->destPixelBuffer) {
-                    blitOK = EncodeMetalBlit(srcBuffer, w, h, ctx->destPixelBuffer, blitError);
+                    blitOK = ctx->remapImmersiveFisheyeToEquirect
+                        ? EncodeMetalFisheyeToEquirect(srcBuffer,
+                                                       w,
+                                                       h,
+                                                       ctx->destPixelBuffer,
+                                                       ctx->fisheyeHalfFovRadians,
+                                                       ctx->fisheyeLensRadiusScale,
+                                                       blitError)
+                        : EncodeMetalBlit(srcBuffer, w, h, ctx->destPixelBuffer, blitError);
                 } else {
                     // Bytes API fallback — copy MTLBuffer.contents into the vector.
                     // Shared-storage MTLBuffers are CPU-visible immediately after
@@ -4330,6 +4705,89 @@ public:
                 destinationLevel:0
                destinationOrigin:MTLOriginMake(0, 0, 0)];
             [blit endEncoding];
+            [cmdBuffer commit];
+            [cmdBuffer waitUntilCompleted];
+            if (cmdBuffer.error) {
+                errorOut = cmdBuffer.error.localizedDescription.UTF8String;
+                CFRelease(textureRef);
+                return false;
+            }
+        }
+
+        CFRelease(textureRef);
+        return true;
+    }
+
+    static bool EncodeMetalFisheyeToEquirect(id<MTLBuffer> srcBuffer,
+                                             uint32_t sourceWidth,
+                                             uint32_t sourceHeight,
+                                             CVPixelBufferRef destPixelBuffer,
+                                             double halfFovRadians,
+                                             double lensRadiusScale,
+                                             std::string &errorOut) {
+        if (!srcBuffer) { errorOut = "MTLBuffer null"; return false; }
+        if (!destPixelBuffer) { errorOut = "dest CVPixelBuffer null"; return false; }
+
+        CVMetalTextureCacheRef cache = SpliceKitBRAWMetalTextureCache();
+        id<MTLCommandQueue> queue = SpliceKitBRAWMetalCommandQueue();
+        if (!cache || !queue) {
+            errorOut = "Metal cache/queue unavailable";
+            return false;
+        }
+
+        uint32_t destWidth = (uint32_t)CVPixelBufferGetWidth(destPixelBuffer);
+        uint32_t destHeight = (uint32_t)CVPixelBufferGetHeight(destPixelBuffer);
+        if (destWidth == 0 || destHeight == 0) {
+            errorOut = "dest CVPixelBuffer has zero dimensions";
+            return false;
+        }
+
+        std::string pipelineError;
+        id<MTLComputePipelineState> pipeline = SpliceKitBRAWFisheyeEquirectPipeline(pipelineError);
+        if (!pipeline) {
+            errorOut = pipelineError.empty() ? "fisheye pipeline unavailable" : pipelineError;
+            return false;
+        }
+
+        CVMetalTextureRef textureRef = nullptr;
+        CVReturn cvr = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, cache, destPixelBuffer, nullptr,
+            MTLPixelFormatBGRA8Unorm, destWidth, destHeight, 0, &textureRef);
+        if (cvr != kCVReturnSuccess || !textureRef) {
+            errorOut = [NSString stringWithFormat:@"CVMetalTextureCacheCreateTextureFromImage cvr=%d", cvr].UTF8String;
+            if (textureRef) CFRelease(textureRef);
+            return false;
+        }
+
+        id<MTLTexture> dstTexture = CVMetalTextureGetTexture(textureRef);
+        if (!dstTexture) {
+            errorOut = "CVMetalTextureGetTexture returned null";
+            CFRelease(textureRef);
+            return false;
+        }
+
+        SpliceKitBRAWFisheyeEquirectParams params = {};
+        params.sourceWidth = sourceWidth;
+        params.sourceHeight = sourceHeight;
+        params.destWidth = destWidth;
+        params.destHeight = destHeight;
+        params.halfFovRadians = (float)halfFovRadians;
+        params.lensRadiusScale = (float)MIN(1.0, MAX(0.35, lensRadiusScale));
+
+        @autoreleasepool {
+            id<MTLCommandBuffer> cmdBuffer = [queue commandBuffer];
+            id<MTLComputeCommandEncoder> compute = [cmdBuffer computeCommandEncoder];
+            [compute setComputePipelineState:pipeline];
+            [compute setBuffer:srcBuffer offset:0 atIndex:0];
+            [compute setBytes:&params length:sizeof(params) atIndex:1];
+            [compute setTexture:dstTexture atIndex:0];
+
+            MTLSize gridSize = MTLSizeMake(destWidth, destHeight, 1);
+            NSUInteger threadWidth = MIN((NSUInteger)16, pipeline.threadExecutionWidth);
+            NSUInteger threadHeight = MAX((NSUInteger)1, MIN((NSUInteger)16, pipeline.maxTotalThreadsPerThreadgroup / MAX((NSUInteger)1, threadWidth)));
+            MTLSize threadgroupSize = MTLSizeMake(threadWidth, threadHeight, 1);
+            [compute dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
+            [compute endEncoding];
             [cmdBuffer commit];
             [cmdBuffer waitUntilCompleted];
             if (cmdBuffer.error) {
@@ -4665,6 +5123,63 @@ static BlackmagicRawResolutionScale SpliceKitBRAWScaleForHint(uint32_t scaleHint
     }
 }
 
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_GetScaledDimensions(CFStringRef pathRef,
+                                                               uint32_t scaleHint,
+                                                               uint32_t *outWidth,
+                                                               uint32_t *outHeight) {
+    if (!pathRef || !outWidth || !outHeight) return NO;
+    *outWidth = 0;
+    *outHeight = 0;
+
+    NSString *inputPath = [(__bridge NSString *)pathRef stringByStandardizingPath];
+    NSString *path = SpliceKitBRAWResolveOriginalPath(inputPath);
+    if (path.length == 0) return NO;
+
+    __block BOOL ok = NO;
+    dispatch_block_t work = ^{
+        std::string error;
+        SpliceKitBRAWHostClipEntry *entry = SpliceKitBRAWHostAcquireEntry(path, error);
+        if (!entry || !entry->clip) {
+            SpliceKitBRAWTrace([NSString stringWithFormat:@"[host-decode] dimension acquire failed for %@: %s",
+                                path, error.c_str()]);
+            return;
+        }
+
+        BlackmagicRawResolutionScale scale = SpliceKitBRAWScaleForHint(scaleHint);
+        IBlackmagicRawClipResolutions *resolutions = nullptr;
+        if (entry->clip->QueryInterface(IID_IBlackmagicRawClipResolutions, (LPVOID *)&resolutions) == S_OK &&
+            resolutions) {
+            uint32_t width = 0;
+            uint32_t height = 0;
+            HRESULT hr = resolutions->GetClosestResolutionForScale(scale, &width, &height);
+            resolutions->Release();
+            if (hr == S_OK && width > 0 && height > 0) {
+                *outWidth = width;
+                *outHeight = height;
+                ok = YES;
+                return;
+            }
+        }
+
+        uint32_t probedW = 0;
+        uint32_t probedH = 0;
+        if (SpliceKitBRAWProbeScaledDimsForPath(path, scale, &probedW, &probedH) &&
+            probedW > 0 &&
+            probedH > 0) {
+            *outWidth = probedW;
+            *outHeight = probedH;
+            ok = YES;
+        }
+    };
+
+    if (dispatch_get_specific(&kSpliceKitBRAWWorkQueueSpecificKey)) {
+        work();
+    } else {
+        dispatch_sync(SpliceKitBRAWWorkQueue(), work);
+    }
+    return ok;
+}
+
 // Probe the SDK at the given scale by decoding frame 0 once. Used by the
 // shim path when a clip's native resolution exceeds Metal's 16384 texture
 // cap and we need to know what a smaller scale actually produces. The probe
@@ -4776,6 +5291,11 @@ static BOOL SpliceKitBRAWDecodeIntoPixelBufferOnWorkQueue(
     ctx.format = blackmagicRawResourceFormatBGRAU8;
     ctx.destPixelBuffer = destPixelBuffer;
     ctx.rawSettings = SpliceKitBRAW_CopyRAWSettingsForPath((__bridge CFStringRef)path);
+    ctx.remapImmersiveFisheyeToEquirect = (eyeIndex >= 0 && entry->immersiveClip != nullptr);
+    if (ctx.remapImmersiveFisheyeToEquirect) {
+        ctx.fisheyeHalfFovRadians = SpliceKitBRAWHalfFOVRadiansForImmersiveClip(entry->immersiveClip);
+        ctx.fisheyeLensRadiusScale = SpliceKitBRAWLensRadiusScaleForImmersiveClip(entry->immersiveClip);
+    }
 
     if (!SpliceKitBRAWRunDecodeJob(entry, ctx, frameIndex, eyeIndex)) {
         if (ctx.rawSettings) CFRelease(ctx.rawSettings);
@@ -4901,16 +5421,10 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameIntoPixelBufferEye(
     });
     NSTimeInterval elapsedMs = ([NSDate timeIntervalSinceReferenceDate] - t0) * 1000.0;
 
-    // Only log when there's something actionable: a failure, or a genuinely
-    // slow frame. The 40 ms 24fps budget is noisy because FCP's frame
-    // prefetcher often queues multiple decodes — the serial BRAW work queue
-    // forces later frames to wait on earlier ones, so "elapsed" reflects
-    // queue wait time, not decode time. 80 ms is the threshold where actual
-    // viewer stutter becomes visible.
-    // Diagnostic: log EVERY decode along with the current ISO from the
-    // settings cache. This lets us correlate "user moved slider" → "decoder
-    // saw new ISO" → "frame emitted" in the log timeline. Toggle off later.
-    {
+    // Keep the decode hot path quiet by default. Per-frame logging opens the
+    // trace file and copies RAW settings, which is measurable at 90 fps.
+    BOOL shouldLogDecode = !result || elapsedMs >= 80.0 || SpliceKitBRAWDecodePerfLoggingEnabled();
+    if (shouldLogDecode) {
         CFDictionaryRef settings = SpliceKitBRAW_CopyRAWSettingsForPath(pathRef);
         NSNumber *iso = nil;
         if (settings && CFGetTypeID(settings) == CFDictionaryGetTypeID()) {

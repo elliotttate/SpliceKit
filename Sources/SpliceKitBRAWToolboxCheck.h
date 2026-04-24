@@ -1,10 +1,8 @@
-// SpliceKitBRAWToolboxCheck.h — gate BRAW features on Braw Toolbox presence.
+// SpliceKitBRAWToolboxCheck.h — optional Braw Toolbox ownership check.
 //
-// SpliceKit's BRAW integration is only enabled when the user has a valid
-// Mac App Store copy of LateNite Films' Braw Toolbox installed. The check
-// validates the app's code signature (Team ID + Apple Mac OS Application
-// Signing certificate authority) so substituting an arbitrary app with the
-// same bundle ID doesn't bypass the gate.
+// The original check validated a Mac App Store copy of LateNite Films' Braw
+// Toolbox before enabling BRAW support. That requirement is currently disabled
+// while SpliceKit's direct BRAW implementation is being tested.
 //
 // Pattern mirrors CommandPost's LateNite-app validation in MJAppDelegate.m.
 
@@ -14,10 +12,7 @@
 extern "C" {
 #endif
 
-// Returns YES if a valid Mac App Store copy of com.latenitefilms.BRAWToolbox
-// (team A5HDJTY9X5, signed by Apple Mac OS Application Signing) is installed.
-// Result is cached after first call. Set the NSUserDefaults key
-// SpliceKitBypassBRAWToolboxCheck=YES to force YES (development only).
+// Returns YES while the ownership gate is disabled.
 BOOL SpliceKit_isBRAWToolboxInstalled(void);
 
 #ifdef __cplusplus

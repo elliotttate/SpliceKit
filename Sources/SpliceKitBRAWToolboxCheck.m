@@ -2,6 +2,7 @@
 
 #import "SpliceKitBRAWToolboxCheck.h"
 
+#if 0
 #import <CoreServices/CoreServices.h>
 #import <Security/Security.h>
 
@@ -113,4 +114,10 @@ BOOL SpliceKit_isBRAWToolboxInstalled(void) {
         installed = SpliceKitBRAWToolboxComputeInstalled();
     });
     return installed;
+}
+#endif
+
+BOOL SpliceKit_isBRAWToolboxInstalled(void) {
+    // Ownership gate disabled while BRAW support is being tested directly.
+    return YES;
 }
