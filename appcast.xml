@@ -7,14 +7,11 @@
     <language>en</language>
     <item>
       <title>SpliceKit v3.3.7</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.3.7</sparkle:version>
       <sparkle:shortVersionString>3.3.7</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Fri, 24 Apr 2026 22:01:10 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.3.7</h2>
-        <p>Continues the Apple Immersive/BRAW work-in-progress with safer immersive preview decoding, reduced-resolution playback handling, fisheye/equirect preview improvements, native viewer state hardening, and crash fixes for affected users.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.3.7/SpliceKit-v3.3.7.dmg"
         sparkle:edSignature="WJnn1VFPkPNW0lvXdSSR4wh6PjkrSdcSUdIT0jIAhLjBgSYqnelogPlzQi9BYE0MfpX8tuzGNo3nBismHRyyDA=="
@@ -23,14 +20,11 @@
     </item>
     <item>
       <title>SpliceKit v3.3.6</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.3.6</sparkle:version>
       <sparkle:shortVersionString>3.3.6</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Fri, 24 Apr 2026 03:48:04 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.3.6</h2>
-        <p>Adds Whisper large-v3 CoreML transcription for the social captions plugin (engine picker with Parakeet v3, Whisper large-v3-turbo, and Whisper large-v3; models download on first use). Fixes caption positions resetting to center on FCP relaunch by running the persisted-caption repair headlessly when the panel isn't open. Adds Sentry Logs support.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.3.6/SpliceKit-v3.3.6.dmg"
         sparkle:edSignature="oFPDI1JGVEH2EljPeSlz50/ACICcRMp17kBGSkoTGiKavXPn32hJ2Bix3Kq4VxehDFjT0GEl02EbYXQF3Sv8DA=="
@@ -39,14 +33,11 @@
     </item>
     <item>
       <title>SpliceKit v3.3.5</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.3.5</sparkle:version>
       <sparkle:shortVersionString>3.3.5</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 23 Apr 2026 23:26:25 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.3.5</h2>
-        <p>Adds the Siri-style command palette with voice dictation, polished liquid-glass layout and single-selection handling, immersive BRAW preview support, and patcher diagnostics/Sentry runtime hardening.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.3.5/SpliceKit-v3.3.5.dmg"
         sparkle:edSignature="BxnzA1LUcPj+dp7SdiW0u5hJx2SKg9tfVk9A6zd7PBUh8kajdi3oOji75Dr6bxY287vPodh0RTQh4o/NbhURCg=="
@@ -55,14 +46,11 @@
     </item>
     <item>
       <title>SpliceKit v3.3.4</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.3.4</sparkle:version>
       <sparkle:shortVersionString>3.3.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Wed, 22 Apr 2026 22:31:37 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.3.4</h2>
-        <p>Fixes the patcher update path on existing modded installs by rebuilding SpliceKit.framework cleanly before signing, avoiding recursive framework symlink loops that caused the installer to fail at Re-signing application. Also re-signs nested SpliceKit bundles during patch/update and makes xattr cleanup non-fatal so harmless attribute cleanup issues do not abort the install.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.3.4/SpliceKit-v3.3.4.dmg"
         sparkle:edSignature="hVbFWjJDmHICcRHU5gJj6K4LPiGew9wH6gOofFL1M4kcATwY6lD1Mw/d60/UcUkNiyKTbK/wkNnyPM9hGKiVAw=="
@@ -71,14 +59,11 @@
     </item>
     <item>
       <title>SpliceKit v3.3.3</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.3.3</sparkle:version>
       <sparkle:shortVersionString>3.3.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Wed, 22 Apr 2026 21:56:56 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.3.3</h2>
-        <p>Fixes the patcher signing path for existing modded installs so nested SpliceKit bundles, framework, and app wrapper are re-signed correctly during rebuilds and updates.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.3.3/SpliceKit-v3.3.3.dmg"
         sparkle:edSignature="fxaV0zLeh+cJc6E7oYlJpYLxMu+xtPPLoaOyK2QDfK8v7hKWxl147l8oa9svmlTMkOxZkSDcYH9uJ0pxMN80Bw=="
@@ -87,14 +72,11 @@
     </item>
     <item>
       <title>SpliceKit v3.3.2</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.3.2</sparkle:version>
       <sparkle:shortVersionString>3.3.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 21 Apr 2026 13:01:20 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.3.2</h2>
-        <p>Fixes BRAW thumbnail crash when third-party Media Extensions are installed, restores LiveCam camera/microphone access, fixes rare installer signing failures from stray extended attributes, and adds build-time guards against undefined SpliceKit_ symbols.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.3.2/SpliceKit-v3.3.2.dmg"
         sparkle:edSignature="QmJah8GhlHU0PALA45Mx4SsB9gdh6JkFXH8jHDRGPZC9vvE8B+854Va5yRa5962hLgPp/sPDj9xTaNHCiIBlBA=="
@@ -103,14 +85,11 @@
     </item>
     <item>
       <title>SpliceKit v3.3.1</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.3.1</sparkle:version>
       <sparkle:shortVersionString>3.3.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 21 Apr 2026 02:52:03 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.3.1</h2>
-        <p>Fixes crash-on-launch in v3.3.0. The SpliceKitBridgeMetadata module had its declaration and call site committed but its implementation file was never included in the build, so the safe-install block jumped to 0x0 during FCP's didFinishLaunching fanout. Also lands the Vision Pro preview panel, Bonjour discovery for _ivtpreviewclient._tcp, MCP bridge additions for the Vision Pro tools, and the Resolve Immersive BRAW reverse-engineering notes.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.3.1/SpliceKit-v3.3.1.dmg"
         sparkle:edSignature="pVMSPmHnYtny+egkIPL0uoqXYIUFo7oEhtR2wLCXw2zg9P6TdwhR8apyjKdleIVVBGzZV/oi64D5ZXaYmgRTCA=="
@@ -119,14 +98,11 @@
     </item>
     <item>
       <title>SpliceKit v3.3.0</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.3.0</sparkle:version>
       <sparkle:shortVersionString>3.3.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 21 Apr 2026 02:36:13 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.3.0</h2>
-        <p>New icon by Matthew Skiles. Wider Wizard layout so the update buttons fit correctly when updating. Launch FCP button improvements. Help button fix. Switched Sparkle from a vendored framework to Swift Package Manager for easier updating. Closes #34 and #47. Thanks to @latenitefilms for the contribution.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.3.0/SpliceKit-v3.3.0.dmg"
         sparkle:edSignature="LfAS2IJ5dGphDhsV0eKWv0UseNYk6M0b5t0m0jVOK8T0ZVIdYDv5a56HTIqXxCQngAOnuCCbGC6w/n25Xoq5Aw=="
@@ -135,14 +111,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.10</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.10</sparkle:version>
       <sparkle:shortVersionString>3.2.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 20 Apr 2026 22:36:10 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.10</h2>
-        <p>Smooth Scroll (Splices menu) now respects the Continuous Scrolling preference. The gate was reading a rate-derived property (keepsPlayheadCenteredDuringPlayback) that is only true during fast-forward/rewind, so normal-rate playback was silently skipping the 120Hz centered takeover and feeling jerky. Swapped to scrollDuringPlayback backed by FFScrollDuringPlaybackKey — Continuous Scrolling ON engages our smooth centered path, OFF leaves FCP native edge-tracking intact with a smooth 120Hz overlay line on top. Also fixes a first-install crash in the Overview bar where the renderer could hit a half-built collection synchronously; both entry points now defer via performSelector.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.10/SpliceKit-v3.2.10.dmg"
         sparkle:edSignature="94L1VrIp7ROIC2WP5N1BSzR4Uqnuqo4IsgG4TqUSyCN6+5uoyAKjZMJQB2QcuLUZf4QS01lb1S7Eh/oIcGhKCw=="
@@ -151,14 +124,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.09</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.09</sparkle:version>
       <sparkle:shortVersionString>3.2.09</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 20 Apr 2026 21:47:33 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.09</h2>
-        <p>Smooth Scroll (on by default in Splices menu). 120Hz centered-playback path replaces FCP native 24/30Hz step scroll: clip view now slides continuously under a stationary playhead line on ProMotion displays instead of hopping sideways once per source frame. Implemented via CADisplayLink-driven clipView.setBoundsOrigin + reflectScrolledClipView, with TLKScrollingTimeline paused for the duration of playback so Apple step-centering does not fight the smooth path. Filmstrip and anchored-clip layer updates are also suspended during active pinch/marquee/scrollbar drag via TLKEventHandlerDid{Start,Stop}TrackingNotification and a swizzle on TLKTimelineHandler.magnifyWithEvent - removes the cell-rebuild hitch you used to see when zooming. Apples hidden TLKOptimizedReload fast path is enabled via a getter swizzle. Fixes MCP bridge event-frame contamination (events are now opt-in; bridge client skips notifications), async command.completed now reports status:error for normal RPC failures, per-fd serial write queues keep RPC replies and events ordered without byte interleave, and the overview bar tears down its notification observers on uninstall. Toggle Smooth Scroll from Splices > Smooth Scroll or via the timelinePerformanceMode bridge option.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.09/SpliceKit-v3.2.09.dmg"
         sparkle:edSignature="XmF5bwxrqp3ZEnGg1ijwUqufq2OCiRnL0WoThvFnsFmXn8B9C8WbtVnx7brPPf37lBUJ3nB16fDFFjX6D/AyBA=="
@@ -167,14 +137,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.08</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.08</sparkle:version>
       <sparkle:shortVersionString>3.2.08</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 20 Apr 2026 20:01:42 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.08</h2>
-        <p>Inline timeline overview bar sits below the ruler and shows a scaled-down view of the whole project, color-coded by lane. Click or double-click anywhere to jump the playhead; drag the visible-region rectangle's body to pan the main timeline or its edges to zoom. Uses FCP's own FFAnchoredCollectionImageCreation renderer (the same one the Touch Bar overview uses) so lanes match FCP's internal representation exactly. All redraws are event-driven — CADisplayLink during playback (matches 60Hz / 120Hz ProMotion display refresh), TLKPlayheadViewFrameDidChangeNotification for scrub or step, FFSequenceEditedNotification for edits — zero CPU when idle. Toggle from Splices menu > Overview, or via the timelineOverviewBar bridge option.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.08/SpliceKit-v3.2.08.dmg"
         sparkle:edSignature="fTrYbJh3tukWRPOhDE04+RYTXBvT6TA0jhtqAh463C7nd4/tct5hnilVPZ8EHg8ZnOn5w3Wwj6qQZ4M36PIWBQ=="
@@ -183,14 +150,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.07</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.07</sparkle:version>
       <sparkle:shortVersionString>3.2.07</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Sun, 19 Apr 2026 05:03:06 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.07</h2>
-        <p>HEVC MP4s tagged hev1 (Dolby Vision iTunes rips, DV.HDR10+ WEB-DLs, and other tool-transcoded HEVC material) now import into Final Cut. Previously those files showed up as unimportable because AVFoundation / QuickTime / Final Cut only decode HEVC muxed with the hvc1 sample-entry tag. SpliceKit now detects hev1 at import time and retags the file using an APFS clonefile() COW snapshot plus a 2-byte edit to the moov box — no stream-copy remux required, no extra disk space consumed, a few seconds even on 19 GB rips. The original file on disk is untouched; only the clone is modified.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.07/SpliceKit-v3.2.07.dmg"
         sparkle:edSignature="Qsl3Afti9dRT9849gyBaPeLuMGiDMqYRJyii3p4pZhjOTfg8OprAK8kn4p9nT8G4pQacP31aiwdV0de3IiGZDA=="
@@ -199,14 +163,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.06</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.06</sparkle:version>
       <sparkle:shortVersionString>3.2.06</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Sun, 19 Apr 2026 04:15:22 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.06</h2>
-        <p>Shadow-remux now handles h264, hevc, av1, and prores Matroska sources (previously VP9/VP8 only), with audio transcoded to AAC when the source codec can't go into MP4. HEVC gets the hvc1 sample-entry tag so Final Cut actually decodes Main-10 MKVs. Subtitle and attachment tracks are dropped from the mux. B-frame-safe CFR timestamp rewrite preserves h264/hevc/av1 display order. Media Import 'Processing files for import...' no longer stalls on folders with unrelated files — the hook short-circuits non-Matroska extensions and uses a deterministic shadow path so the same source is never remuxed twice. Menu renamed from Enhancements to Splices; Debug dropdown hidden from the menu bar.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.06/SpliceKit-v3.2.06.dmg"
         sparkle:edSignature="CNZ98nnrJieTnQ82GdmeMYwYTIsAdEE3KcjUrh3nAq1XZi4szxggzP8Guc2FrTPgjRjrj2FBU5TzlXAT6CVEDQ=="
@@ -215,14 +176,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.05</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.05</sparkle:version>
       <sparkle:shortVersionString>3.2.05</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Sat, 18 Apr 2026 21:38:01 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.05</h2>
-        <p>**MKV / WebM imports** — drop .mkv or .webm files onto Final Cut and SpliceKit generates a shadow MP4 remux on the fly so FCP sees a native container while the original file stays untouched on disk. **Highest Quality toggle for URL imports** — new checkbox in the Import URL dialog fetches the highest available resolution from YouTube / Vimeo (1080p, 1440p, or 4K via VP9 / AV1) instead of YouTube's 720p progressive-mp4 cap; leave it off for the fast path. **URL import reliability** — fixes an FCPXML parse failure when downloaded filenames contain ampersands or other XML-reserved characters (e.g. 'PS5 & PS5 Pro'), replaces the misleading twin-percent progress HUD with a single smooth readout, and vertically aligns the spinner with its label. **Share Logs** — one-click upload of the latest Final Cut Pro crash log plus SpliceKit logs to filebin.net, added to the Patcher status panel. **LiveCam** mask kernel dispatch and shader-coordinate fix resolves subject-lift / green-screen edge artifacts on some machines. **BRAW** settings inspector locks to dark appearance to match FCP's other inspectors. Also points the bundled .mcp.json at the mcp-setup venv interpreter so Claude Desktop MCP works without hand-editing Python paths.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.05/SpliceKit-v3.2.05.dmg"
         sparkle:edSignature="rJuaiWpceKpR9f+VhyP5EYIdOSdwtr/QGXd8hbpGlz1fnai+7uwAs7HAl+gg92n3ce/HTdiZ+JSpdSMJt+XZAQ=="
@@ -231,14 +189,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.04</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.04</sparkle:version>
       <sparkle:shortVersionString>3.2.04</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Sat, 18 Apr 2026 03:52:34 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.04</h2>
-        <p>**LiveCam** — native webcam booth that records direct to your Library or active timeline without leaving Final Cut Pro. Live preview with looks, color/exposure/contrast/saturation/temperature/sharpness/glow adjustments, audio meter, mirror, date/time stamp overlay, and Library / Timeline placement (Append, At Playhead, or Connected Above). **Subject-lift green screen** uses Visions VNGenerateForegroundInstanceMaskRequest (macOS 14+) for a tight, edge-aware matte that works on people *and* objects, with a custom Metal pipeline that runs joint-bilateral edge refinement, signed choke, temporal smoothing, spill suppression, and light wrap every frame; falls back to person segmentation on macOS 12-13. **Transparent recording** — pick "Transparent" as the green-screen color and LiveCam writes ProRes 4444 with a real alpha plane via CIRenderDestination + kVTCompressionPropertyKey_AlphaChannelMode, so the clip drops onto your timeline ready to composite without an external keyer. Open via the LiveCam toolbar button, the Enhancements menu, the Command Palette, or liveCam.show / open_livecam. **URL import** now auto-discovers yt-dlp and ffmpeg from your login shell PATH and symlinks them into the SpliceKit tools dir at install time, so Homebrew installs work without `make url-import-tools`. Also fixes scroll dead space in the Captions panel.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.04/SpliceKit-v3.2.04.dmg"
         sparkle:edSignature="cP/+Nldm4Otu/5w1CRjVJxZRlC4LUYgE5o3RL6QtxPxD8XnHAu2kOjcWlYN6RMwCK+1va2g2qQ0HMozWAIKeDw=="
@@ -247,14 +202,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.03</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.03</sparkle:version>
       <sparkle:shortVersionString>3.2.03</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Sat, 18 Apr 2026 01:43:01 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.03</h2>
-        <p>**URL import workflow** — pull remote media straight into your library or timeline. Supports direct .mp4/.mov/.m4v/.webm links plus YouTube VOD URLs. Access via the Command Palette ("Import URL to Library" / "Import URL to Timeline"), Lua, or MCP (`import_url`, `import_url_status`, `cancel_import_url`). Three placement modes: import-only, insert at playhead, append to end. Async downloads with live progress, cancellation, and a clear guard against live streams. Requires `yt-dlp` and `ffmpeg` on PATH — run `brew install yt-dlp ffmpeg` and `make url-import-tools` to wire them in. Thanks to @JT-Apps (#40).</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.03/SpliceKit-v3.2.03.dmg"
         sparkle:edSignature="2p0clSyhucodPYBi21/6y4uH5+bDpVeBtEQygGasa7Yd0aG2PK9y2BoMepCuzCadq8rHasTY8k+xF8We9h/aAQ=="
@@ -263,14 +215,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.02</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.02</sparkle:version>
       <sparkle:shortVersionString>3.2.02</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Fri, 17 Apr 2026 21:56:59 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.02</h2>
-        <p>Fix jerky Effects browser category sidebar scroll on installs with many effects. Every row vended during scroll was re-filtering the full effect registry with ~10k locale-aware string comparisons per frame (via FFBKEffectLibraryFolder.items → FFEffect.userVisibleEffectIDs → bsearch); those results are now cached per-folder and invalidated on effect-registry notifications.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.02/SpliceKit-v3.2.02.dmg"
         sparkle:edSignature="j9U3/9VYLZqXsOfURiB9LbK+BkY1csyVM/7RhY1bFz0pBRF9qApfeL/dzf1iWC4CZe7RklFxHfRV9MqoSzu1AA=="
@@ -279,14 +228,11 @@
     </item>
     <item>
       <title>SpliceKit v3.2.01</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.2.01</sparkle:version>
       <sparkle:shortVersionString>3.2.01</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Fri, 17 Apr 2026 21:09:23 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.2.01</h2>
-        <p>**Native Blackmagic BRAW Color Grading.** New BRAW Settings inspector menu modeled after FCP's ProRes RAW panel — Gamma / Gamut / Color Science Gen, ISO / Color Temp / Tint / Exposure / Analog Gain, full tone curve (Saturation, Contrast, Midpoint, Highlights, Shadows, Black Level, White Level), Highlight Recovery, Gamut Compression, and 3D LUT Mode. Open it from the Info inspector by clicking 'Modify BRAW…' on any selected .braw clip. **Fixed playback for several BRAW files** that were silently dropping persisted color settings on library reopen — the in-process decoder now primes its settings cache from the asset's persisted dict during render setup, so adjustments apply on the first frame after relaunch instead of only after touching a slider. Also fixed a thumbnail-thread race that could crash FCP on rapid slider drags.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.2.01/SpliceKit-v3.2.01.dmg"
         sparkle:edSignature="JCjGXVGJjb3Chxt+Ayd8LsHlwPaaHBuP6ZR1w107oXvwmtlc+UqQjokZeX2tLZOS6uGFmtvsuzVXhGLFh+WXDg=="
@@ -295,14 +241,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.151</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.151</sparkle:version>
       <sparkle:shortVersionString>3.1.151</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Fri, 17 Apr 2026 02:25:34 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.151</h2>
-        <p>Fix missing BRAW support on fresh installs. The patcher was shipping only the SpliceKit framework dylib — the VideoToolbox decoder and MediaToolbox format-reader bundles that actually register .braw with Final Cut Pro were never getting installed. Drag-and-drop and Import Media now work out of the box on every machine.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.151/SpliceKit-v3.1.151.dmg"
         sparkle:edSignature="eQ00IPGg9L/+aB9Xpuu24cTS0hGuFoUD5C+WIF+zimT5cgngIfqseWh40GYSZLdNO+ojlRJKWEoBC7oq/Yo/DQ=="
@@ -311,14 +254,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.150</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.150</sparkle:version>
       <sparkle:shortVersionString>3.1.150</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Fri, 17 Apr 2026 02:06:05 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.150</h2>
-        <p>Fix a BRAW decode crash: when VideoToolbox tore down a session while a decode was in flight on our BRAW serial queue, the race could free the host callback mid-Unbind and abort FCP. Release now serializes through the same queue as decode.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.150/SpliceKit-v3.1.150.dmg"
         sparkle:edSignature="pbt9b1UzFls4POLa56d6omWunvbtArSW5uasVzSHDsUQEikVZ3hyQIiU5W3FTK9FmL+8cCku/r+E4zsXXFbAAQ=="
@@ -327,14 +267,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.149</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.149</sparkle:version>
       <sparkle:shortVersionString>3.1.149</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Fri, 17 Apr 2026 01:45:51 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.149</h2>
-        <p>Native Blackmagic RAW (BRAW) playback in Final Cut Pro — import, preview, and edit .braw files from URSA Cine / BMPCC / Pocket 4K/6K cameras without transcoding. Works with every codec variant we've seen in the wild (braw, brxq, brst, brvn) including URSA Cine 17K. Playback runs through the Blackmagic RAW SDK with zero-copy Metal decode and realtime framerates at 6K+.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.149/SpliceKit-v3.1.149.dmg"
         sparkle:edSignature="5hA0YWtBr+mk0uPYLU0c784mdCWlusplXqt1WXv3jsxnZv50NZZS5t0VJRIypC7ntrEATUVH5VmR/0fZNq80DQ=="
@@ -343,14 +280,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.148</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.148</sparkle:version>
       <sparkle:shortVersionString>3.1.148</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 16 Apr 2026 02:52:18 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.148</h2>
-        <p>Automatically expose Apple's AUSoundIsolation effect on startup so Voice Isolation stays available in the audio effects browser across launches.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.148/SpliceKit-v3.1.148.dmg"
         sparkle:edSignature="9ixqlw4F6mRdXb8EmuB1Z0CJE1n7vMVJIlB7Bec4yzoWs7VK+ZrZuCN8V/Fqzcl0FQyeYCRQGwQyI6xkeHD3CQ=="
@@ -359,14 +293,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.147</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.147</sparkle:version>
       <sparkle:shortVersionString>3.1.147</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 16 Apr 2026 02:14:23 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.147</h2>
-        <p>Fix OTIO and FCPXML import reliability: preserve source in-points, normalize media URLs, avoid library-picker fallbacks, and import projects through the in-process pipeline.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.147/SpliceKit-v3.1.147.dmg"
         sparkle:edSignature="s/wx1aO4zkSRziTg+mBYp7nvJmTs9Yo8euz41r9sdgSl8Dgs9c5eIAc+SXTalA973VdonW6YwPnGhiMOde4qDw=="
@@ -375,14 +306,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.146</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.146</sparkle:version>
       <sparkle:shortVersionString>3.1.146</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 16 Apr 2026 01:35:10 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.146</h2>
-        <p>Fix an Audio Mixer bug that could cause a major performance drop after adding audio bus effects. Mixer polling now avoids repeated effect-stack mutations while keeping bus effects attached to their roles.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.146/SpliceKit-v3.1.146.dmg"
         sparkle:edSignature="KC25b2n3kkCvAPpSmgZfkiH4cDor3fcqg50TndMetsyKvp0iGw9sKBySfNVLNbD7PG5y2n4sFevB2ZJNCbCiBA=="
@@ -391,14 +319,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.145</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.145</sparkle:version>
       <sparkle:shortVersionString>3.1.145</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Wed, 15 Apr 2026 19:29:07 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.145</h2>
-        <p>Audio Mixer: managed role-bus effects, solo/mute controls, FX menu, state mirroring, diagnostics</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.145/SpliceKit-v3.1.145.dmg"
         sparkle:edSignature="cwytAnd0J2r9Pp0zKlc+4DOOO3irUZWEGMH7mXLT26FzQ18lT90R8Aiw1Qg1fucz02sQceyzbBmWJmnotgn0BQ=="
@@ -407,14 +332,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.144</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.144</sparkle:version>
       <sparkle:shortVersionString>3.1.144</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Wed, 15 Apr 2026 15:17:10 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.144</h2>
-        <p>Transcript Editor diagnostics, timestamp mapping fixes, speaker cleanup, and faster pause deletion</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.144/SpliceKit-v3.1.144.dmg"
         sparkle:edSignature="aLQDhJcj+CQxnzR4KbFYoTQ9SUqrjY4W7Q4PuChhyDTPhBuQmMETUWvlsjJWvg3WQnwnsvCc5VhakoUtQfWrAg=="
@@ -423,14 +345,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.143</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.143</sparkle:version>
       <sparkle:shortVersionString>3.1.143</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Wed, 15 Apr 2026 02:45:05 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.143</h2>
-        <p>Add song cut workflow for beat-synced video assembly from sequence-backed sources. Fix cumulative frame drift in FCPXML builds, fix connected song alignment, add half-beat pairing rule, add sequence name substring matching, resolve timeline clips to browser equivalents for native insertion.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.143/SpliceKit-v3.1.143.dmg"
         sparkle:edSignature="JrvyU+L+W0K+CvtbuPIg6dTcgB5cJzyEHx7i/fu2Zq23PjTURHC2cTinwd3esHxu7b4AoFeMWQgbKW7l9lkxDg=="
@@ -439,14 +358,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.142</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.142</sparkle:version>
       <sparkle:shortVersionString>3.1.142</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 14 Apr 2026 20:49:33 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.142</h2>
-        <p>Fix audio mixer clip discovery for nested compound clips and storylines, handle deduplication, caption panel visibility guard</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.142/SpliceKit-v3.1.142.dmg"
         sparkle:edSignature="5VNyZlYWwXjM9VGyCOD7PiI3mmlxBCvqgjhHigD6+PnzFqySN6XZUtOU5+MHBMaDobuGEky9g5vr0tkaOz40CA=="
@@ -455,14 +371,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.141</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.141</sparkle:version>
       <sparkle:shortVersionString>3.1.141</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 14 Apr 2026 19:35:28 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.141</h2>
-        <p>Fix Remove All Keyframes command: recursive discovery of keyframe targets across child clips, effect stacks, and audio channels</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.141/SpliceKit-v3.1.141.dmg"
         sparkle:edSignature="1qfHg4KJVaYMYXZ+/06AoWGX5O8SVHaOzINqxQJX3SuBuEID5nYeKLVx5/ddaMZDh88W2pLZeb0kNTn4YsO4DA=="
@@ -471,14 +384,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.14</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.14</sparkle:version>
       <sparkle:shortVersionString>3.1.14</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 14 Apr 2026 18:58:31 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.14</h2>
-        <p>All-new Audio Mixer UI: role-colored faders with gradient strips, segmented LED meters with clipping detection, per-fader automation arming, real-time volume during playback, keyframe management</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.14/SpliceKit-v3.1.14.dmg"
         sparkle:edSignature="fqnxhNn3GzSK4g+HdRZcl8ajwF9QXlcaeiMBQJdQSvEQF1eROsvyg9VynjljBG6PABbpN1Ckhnz0g1b549ABBw=="
@@ -487,14 +397,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.13</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.13</sparkle:version>
       <sparkle:shortVersionString>3.1.13</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 14 Apr 2026 01:41:10 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.13</h2>
-        <p>Mixer metering works without Audio Meters panel, CALayer tree search for mini transport meters</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.13/SpliceKit-v3.1.13.dmg"
         sparkle:edSignature="SR+x43PcSmq27V+9OA/DCMQMhDf8IieA0z1T0+XfMBfxivBaNcf2PXQB3X77tg1kfZAI91ckCpDyzuWZ7e+6Cw=="
@@ -503,14 +410,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.12</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.12</sparkle:version>
       <sparkle:shortVersionString>3.1.12</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 14 Apr 2026 01:25:10 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.12</h2>
-        <p>Live audio metering in mixer panel, FCP role colors, keyframed volume support</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.12/SpliceKit-v3.1.12.dmg"
         sparkle:edSignature="Lq0DefJfIQmHV6sxPVtOM8vlV6gBakRjgR2N7TPL+LFKPqcQ8zY/uj2C5WuYge87G9ptsKSEz9k+ziKNmqY9Bg=="
@@ -519,14 +423,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.11</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.11</sparkle:version>
       <sparkle:shortVersionString>3.1.11</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 22:32:36 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.11</h2>
-        <p>Fix transcript editor missing connected clips (FFAnchoredClip URL resolution), mixer panel, caption enhancements, CloudContent diagnostic logging, patcher launch monitoring</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.11/SpliceKit-v3.1.11.dmg"
         sparkle:edSignature="bCDhw5Leze3lmgM5wksLBkNIdy+Kr76iS11nVANqa0tW5WSFOSRpYQtV2T5Ldc3y1rKG3Ty35FGPJKloyr+GAg=="
@@ -535,14 +436,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.11</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.11</sparkle:version>
       <sparkle:shortVersionString>3.1.11</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 21:00:58 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.11</h2>
-        <p>CloudContent guard summary logging, patcher launch monitoring, enhanced diagnostic coverage</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.11/SpliceKit-v3.1.11.dmg"
         sparkle:edSignature="E0h4EfNKBRTjB2rbuRB/4n6o3Ii6XInU3RO7zyVtkBsxlRHOEOydwrsOFx8Lm2Bs440epRxh1DnJePnMbeMLCQ=="
@@ -551,14 +449,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.10</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.10</sparkle:version>
       <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 20:15:19 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.10</h2>
-        <p>Fix CloudKit crash on FCP 12.2+, patcher diagnostic logging to ~/Library/Logs/SpliceKit/patcher.log, comprehensive startup diagnostics in dylib, disable spring-loaded blade</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.10/SpliceKit-v3.1.10.dmg"
         sparkle:edSignature="EscsY8hfVcC8OFjT+qMuv2RAfbH3sgAEeFGfCZUbziUIJqsIPAnMHBybe17Kffz66ojaJsBv1TzCgqPJa0E1DQ=="
@@ -567,14 +462,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.10</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.10</sparkle:version>
       <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 19:23:19 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.10</h2>
-        <p>Fix CloudKit crash on FCP 12.2+, disable spring-loaded blade, comprehensive startup diagnostics</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.10/SpliceKit-v3.1.10.dmg"
         sparkle:edSignature="xVbZ7Otv02HY9NoBf+NFMerUiDKMQUEQL9k/Z1OEKsxwIL45J6LxDE3iDQ7kg2snEWV5CdNWArlvjMhxqUsXDQ=="
@@ -583,14 +475,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.10</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.10</sparkle:version>
       <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 19:12:41 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.10</h2>
-        <p>Fix CloudKit crash on FCP 12.2+ with ad-hoc signing (brute-force class enumeration + WillFinishLaunching retry), disable spring-loaded blade, improved startup diagnostics (OS/FCP version, signing status, log rotation)</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.10/SpliceKit-v3.1.10.dmg"
         sparkle:edSignature="Hqvp3ZUKsl/k8IGB9qRNzcGS6S1g26Ts8VyQBo1Jt1yxmFkN/7aCSZG7JTZWA2yn4nX4+Jbf366Jw+b/98h9CA=="
@@ -599,14 +488,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.10</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.10</sparkle:version>
       <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 18:37:42 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.10</h2>
-        <p>Fix CloudKit crash on FCP 12.2+ — brute-force class enumeration at both constructor and WillFinishLaunching to catch lazily-registered Swift classes, disable spring-loaded blade</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.10/SpliceKit-v3.1.10.dmg"
         sparkle:edSignature="8DGafzXv+7ExwgyyRMeAcZFUP64YV+Ihc49PsJPZl09qcmMrmLhkFON/dds8mm5HUa/xRCMdyIoyHPQwu01IDQ=="
@@ -615,14 +501,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.10</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.10</sparkle:version>
       <sparkle:shortVersionString>3.1.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 18:31:05 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.10</h2>
-        <p>Fix CloudKit crash on FCP 12.2+ with ad-hoc signing, disable spring-loaded blade (conflicts with Option+click editing)</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.10/SpliceKit-v3.1.10.dmg"
         sparkle:edSignature="TVCXcYteABgUJMDq7sMi1dxciLldpurw6SoNvTWWzxXybSNyKpgNMVB5DirpE1tNAZ7Y2rRbMetMnxv6auHgBw=="
@@ -631,14 +514,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.9</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.9</sparkle:version>
       <sparkle:shortVersionString>3.1.9</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 18:20:02 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.9</h2>
-        <p>Fix CloudKit crash on FCP 12.2+ (macOS 15.7.3/Tahoe) — swizzle renamed CloudContentFirstLaunchHelper and CloudContentCatalog classes, apply full entitlements. Add beginner-friendly explainer doc.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.9/SpliceKit-v3.1.9.dmg"
         sparkle:edSignature="pb1eRM2FmAYotvPegOujTJ0SQuernNUNp1c+RgML3TQa+09rqdi4tVEVEaB6lv0ArdIZrlYGUfzgGfKHJZc1DA=="
@@ -647,14 +527,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.9</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.9</sparkle:version>
       <sparkle:shortVersionString>3.1.9</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 18:10:57 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.9</h2>
-        <p>Fix patcher signing on macOS 15.7.3 — apply full entitlements (app-sandbox=false, disable-library-validation, allow-dyld-environment-variables, get-task-allow) to prevent CloudKit crash. Add plain-English explainer doc.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.9/SpliceKit-v3.1.9.dmg"
         sparkle:edSignature="Bx/GntRXBGf/aWRlyYLLFkzr7DAKSYbBZSe90r6E/M7yGulFiqKaadImNt0soI0IYzIz6zQYdGa6PTWc6Z0ACA=="
@@ -663,14 +540,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.8</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.8</sparkle:version>
       <sparkle:shortVersionString>3.1.8</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 17:24:16 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.8</h2>
-        <p>OpenTimelineIO import/export, fix transcript persistence across projects, fix addTodoMarker, fix silence detection, fix timeline duration, compound clip nested items, batch editing tools, expanded command palette</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.8/SpliceKit-v3.1.8.dmg"
         sparkle:edSignature="vbASIS1XT2cV0kR82DRE2WLoqQlAvYALugZkFP6hS8/LBMK1aSPWAJG8s+anA+dWwBYd9sVaZHgwzVkKifkgDg=="
@@ -679,14 +553,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.8</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.8</sparkle:version>
       <sparkle:shortVersionString>3.1.8</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 13 Apr 2026 17:23:01 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.8</h2>
-        <p>OpenTimelineIO import/export, fix transcript persistence across projects, fix addTodoMarker, fix silence detection, fix timeline duration, compound clip nested items, batch editing tools, expanded command palette</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.8/SpliceKit-v3.1.8.dmg"
         sparkle:edSignature="Vl0+eeeFlAqvIAG6UtlGjN+UYKvKNo/7JGRUTnonbM4AJWQYS922kK+KX8UShXdcRHJVI1CQA/NBxRhe0KQCCA=="
@@ -695,14 +566,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.7</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.7</sparkle:version>
       <sparkle:shortVersionString>3.1.7</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Sat, 11 Apr 2026 23:44:57 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.7</h2>
-        <p>Sections bar for timeline song structure, add default transition to all clips command, fuzzy search stop-word handling</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.7/SpliceKit-v3.1.7.dmg"
         sparkle:edSignature="XAn9g3Wfp3Xv9fD2ceKAJ2/xCM7RrJP0DqYvod8v6a6m3+fXQu6aHYMjJc3fw/favB4/c7Qs0OQLtf/YWeJhBA=="
@@ -711,14 +579,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.6</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.6</sparkle:version>
       <sparkle:shortVersionString>3.1.6</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Fri, 10 Apr 2026 04:22:08 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.6</h2>
-        <p>Dual timeline workflow updates, cross-window drag and copy, secondary window controls, and browser sizing/layout fixes.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.6/SpliceKit-v3.1.6.dmg"
         sparkle:edSignature="DhRWgUP2hbFMxdSI/q4l2+XYIGlbiFuL/Gb1qna+g/WIaCZEaDuYvrJcYSqYHuODn9onR0YuC5xlU35H4PG2CQ=="
@@ -727,14 +592,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.5</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.5</sparkle:version>
       <sparkle:shortVersionString>3.1.5</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 09 Apr 2026 18:17:16 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.5</h2>
-        <p>Improves patcher update detection and rebuild/update flows, fixes bundled Parakeet packaging for updates, and reduces patched-app signing friction by removing unnecessary debug entitlements.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.5/SpliceKit-v3.1.5.dmg"
         sparkle:edSignature="aB8Y4tQZQKjRi8QDZ2lZ8mnBFHVCovizhm6dumiZXWKjPk2wHAKlNK9kn/cfMCQ1sxoectkyR1Cos5CtsyHkBg=="
@@ -743,14 +605,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.4</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.4</sparkle:version>
       <sparkle:shortVersionString>3.1.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Wed, 08 Apr 2026 23:02:51 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.4</h2>
-        <p>Improves social caption insertion and relaunch restore. Fixes title placeholder recovery on restart, preserves caption placement on reload, and tightens word highlighting behavior.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.4/SpliceKit-v3.1.4.dmg"
         sparkle:edSignature="XGHA3fUQ8orTCQPyiS3KlA9sBiuBin6im9gTC5vzGhe+Leie+07G+jpDgvTiynPZWyVLwwAJf1Rzva+HMtHABQ=="
@@ -759,14 +618,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.3</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.3</sparkle:version>
       <sparkle:shortVersionString>3.1.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Wed, 08 Apr 2026 05:35:29 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.3</h2>
-        <p>Social media captions with word-by-word highlighting and drop shadows, Apple Intelligence+ agentic mode in command palette, Lua scripting in Xcode build, customizable default Spatial Conform Type, caption engine and Lua RPC deadlock fixes, Parakeet transcriber FluidAudio update</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.3/SpliceKit-v3.1.3.dmg"
         sparkle:edSignature="fRTXLttOlzPvehNBqpaVHzq5PD/uWQkbTdAgrAM1wll2WDF6ID9aKlNVCCo/yMr3De1sOGlC5szNatOom7FSBg=="
@@ -775,14 +631,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.2</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.2</sparkle:version>
       <sparkle:shortVersionString>3.1.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 07 Apr 2026 14:18:53 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.2</h2>
-        <p>App Store receipt validation for Creator Studio: verify subscription locally via PKCS7 receipt before launching, show alert if no valid subscription found</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.2/SpliceKit-v3.1.2.dmg"
         sparkle:edSignature="jGtNv/6u2AzX6KgOvAMEX/K4SwWzGjqhakjPTVylVUyOLDNV2OjAPUKah4mQXQarYlggzQ+ni4+bek4Yhn/NBw=="
@@ -791,14 +644,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.1</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.1</sparkle:version>
       <sparkle:shortVersionString>3.1.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 07 Apr 2026 13:16:29 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.1</h2>
-        <p>Support Final Cut Pro Creator Studio: fixed subscription validation and CloudKit crash on ad-hoc signed builds</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.1/SpliceKit-v3.1.1.dmg"
         sparkle:edSignature="zEtp28uEs21wtf6/AeO/Rn2PBinZNJi/ZsyzM7jmqtyfuB2Pv88sSyrbxYCiAYH0HWo5Z3El5d6+VqJkFkGJBw=="
@@ -807,14 +657,11 @@
     </item>
     <item>
       <title>SpliceKit v3.1.0</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.1.0</sparkle:version>
       <sparkle:shortVersionString>3.1.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Mon, 06 Apr 2026 20:11:44 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.1.0</h2>
-        <p>Configurable J/L playback speed ladders — swizzle fastForward:/rewind: to walk user-defined speed steps (e.g. 1, 1.5, 1.8, 2, 4, 8) instead of hardcoded powers-of-two. Configure via Enhancements > Playback Speed menu or bridge API.</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.1.0/SpliceKit-v3.1.0.dmg"
         sparkle:edSignature="diXKIQTtV4gPl/iE+gIwtr9ic6ZM6AACWmz04lLkQraT497lhaEEW39uFmcIprFYfhoahRky5kUaZZ2CEzoVCQ=="
@@ -823,19 +670,11 @@
     </item>
     <item>
       <title>SpliceKit v3.0.2</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.0.2</sparkle:version>
       <sparkle:shortVersionString>3.0.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Sun, 06 Apr 2026 17:57:00 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.0.2</h2>
-        <ul>
-          <li><b>Auto-discover FCP</b> — Uses Spotlight to find Final Cut Pro anywhere on the system, not just /Applications</li>
-          <li><b>Browse for FCP</b> — If auto-discovery fails, a Browse button lets you locate FCP manually</li>
-          <li><b>Fix launch crash</b> — SpliceKitLogPanel was missing from the dylib build, causing FCP to crash on launch</li>
-          <li><b>Fix version display</b> — No longer shows PlistBuddy error text as the FCP version when the app is missing</li>
-        </ul>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.0.2/SpliceKit-v3.0.2.dmg"
         sparkle:edSignature="sPIOFAJG4r9nLdDcaTLDI5j3MdaIvpJPcZi4zfMJ8vtpEc6qhzP3Panb0VFkPlV8oKwc+9Vpd7MOrS3FqFjqDQ=="
@@ -844,14 +683,11 @@
     </item>
     <item>
       <title>SpliceKit v3.0.1</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.0.1</sparkle:version>
       <sparkle:shortVersionString>3.0.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Sun, 05 Apr 2026 04:08:38 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.0.1</h2>
-        <p>Fix Sparkle false update, improved Parakeet error messages, bundle parakeet-transcriber in release</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.0.1/SpliceKit-v3.0.1.dmg"
         sparkle:edSignature="6pmrS+MX5ueJnltll3BW8jw96nBUYHrVAStD1Ft+92BFYT6amTyo4blUZbAyBingsMvB8QeMQGgJhs096Zu0DQ=="
@@ -860,14 +696,11 @@
     </item>
     <item>
       <title>SpliceKit v3.0.0</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>3.0.0</sparkle:version>
       <sparkle:shortVersionString>3.0.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Sun, 05 Apr 2026 03:51:52 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 3.0.0</h2>
-        <p>Rebrand to SpliceKit with wizard UI, Xcode project, DMG distribution, Enhancements menu, and portable tool paths</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v3.0.0/SpliceKit-v3.0.0.dmg"
         sparkle:edSignature="J615fECNhwgkTLyRypXk6SSWKr+jHTaVFvy+vZ2ooRnvnD8zVuqHNllCWByuUdjcuQ4ejFINw9F4CcoKu0sACw=="
@@ -876,20 +709,11 @@
     </item>
     <item>
       <title>SpliceKit v2.8.4</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.8.4</sparkle:version>
       <sparkle:shortVersionString>2.8.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 03 Apr 2026 20:18:00 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.8.4</h2>
-        <ul>
-          <li><b>Effect Browser Favorites</b> — Right-click any effect to Add/Remove from Favorites using FCP's built-in favorites API</li>
-          <li><b>FCP Debug & Diagnostics</b> — Expose FCP's internal developer tools: timeline visual overlays, performance monitoring, structured logging, framerate monitor</li>
-          <li><b>Patcher Signing Fix</b> — Ad-hoc signing preserves Apple framework signatures (fixes ProAppSupport crash)</li>
-          <li><b>Crash Prevention</b> — Block unsafe trim selectors with nil error pointers</li>
-          <li><b>Bug Fix</b> — Fix retimeHold action mapping</li>
-        </ul>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.4/SpliceKitPatcher-v2.8.4.zip"
         sparkle:edSignature="1rtBeHZ5H+tKxfL8hJ5M4rxJsDu/rrAoiJENL7ZGosEptYlldTG7na0pcXG+TXLFUB85+UCwHgOiADMoN1NTDg=="
@@ -898,14 +722,11 @@
     </item>
     <item>
       <title>SpliceKit v2.8.3</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.8.3</sparkle:version>
       <sparkle:shortVersionString>2.8.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 02 Apr 2026 19:00:28 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.8.3</h2>
-        <p>Effect drag as adjustment clip: drag effects to empty timeline space to create named adjustment clips with effects applied, toggle via SpliceKit menu</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.3/SpliceKitPatcher-v2.8.3.zip"
         sparkle:edSignature="AhoT5U/0NCdIyixcXq4uZoCRO28wPChE5b6CqtqOWwRwjPZNrzopoOJS8UgQwXkhnx7UP58SnT/3fcy81XYQAg=="
@@ -914,14 +735,11 @@
     </item>
     <item>
       <title>SpliceKit v2.8.2</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.8.2</sparkle:version>
       <sparkle:shortVersionString>2.8.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 02 Apr 2026 17:59:28 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.8.2</h2>
-        <p>Support Final Cut Pro Creator Studio edition with auto-detection and edition picker, effect drag to empty timeline creates adjustment clip</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.2/SpliceKitPatcher-v2.8.2.zip"
         sparkle:edSignature="HlWhOw1inlXs+IZ4m5631jQ93VTmMm7H00Qp7hEyWotDBXkx9BhuTiNf3fwTXCrc/ONtNJmz8xD6W72MxTyZBA=="
@@ -930,14 +748,11 @@
     </item>
     <item>
       <title>SpliceKit v2.8.1</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.8.1</sparkle:version>
       <sparkle:shortVersionString>2.8.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 02 Apr 2026 16:52:00 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.8.1</h2>
-        <p>Improved Parakeet error messages: download progress, network/disk/memory diagnostics, Xcode CLT detection, 120+ command palette entries</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.1/SpliceKitPatcher-v2.8.1.zip"
         sparkle:edSignature="LtsO2Egui/fbfA46o7M2CmeoksIaZT/qYzGfNXy/NhfNTHNJN7vv3pfJMSjEPr+0AMMDyQo3933Yf1etXbsIBw=="
@@ -946,14 +761,11 @@
     </item>
     <item>
       <title>SpliceKit v2.8.1</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.8.1</sparkle:version>
       <sparkle:shortVersionString>2.8.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 02 Apr 2026 16:27:18 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.8.1</h2>
-        <p>Add 120+ commands to in-app command palette, fix Sparkle rpath for standalone launch</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.1/SpliceKitPatcher-v2.8.1.zip"
         sparkle:edSignature="Q96BXV73EIsB6FCfHQ2fM6eWLMcn8MpjXJQ/YbsWfsNN7x23hJO7Jmaa5fRFrGvEaDMbfJP3NHyBW5IhLY3dAQ=="
@@ -962,14 +774,11 @@
     </item>
     <item>
       <title>SpliceKit v2.8.1</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.8.1</sparkle:version>
       <sparkle:shortVersionString>2.8.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 02 Apr 2026 16:12:56 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.8.1</h2>
-        <p>Add 120+ commands to in-app command palette covering all MCP actions</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.1/SpliceKitPatcher-v2.8.1.zip"
         sparkle:edSignature="aJsFGUpDGfXv2EDLSQKxtAJl4Y08J7WC29QhMarC5PgNF63yIMUlICoj6+qJ60RBS5DYF680ayHzROTZwr3WCA=="
@@ -978,14 +787,11 @@
     </item>
     <item>
       <title>SpliceKit v2.8.0</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.8.0</sparkle:version>
       <sparkle:shortVersionString>2.8.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Thu, 02 Apr 2026 16:08:06 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.8.0</h2>
-        <p>Full MCP control: universal menu access, dialog handling, effect parameter read/write (opacity, transform, crop, volume), 200+ timeline actions, tool selection, playhead monitoring, modal-safe dispatch</p>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.8.0/SpliceKitPatcher-v2.8.0.zip"
         sparkle:edSignature="r4OB4eIl2QeR0ErNRZLKkWZekiso1xiqcbISCAHh57fzACOSLlShyQen+WH3gQUJwzw3RAP8KfvCVuHJZXLICw=="
@@ -994,18 +800,11 @@
     </item>
     <item>
       <title>SpliceKit v2.7.0 — Batch Export</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.7.0</sparkle:version>
       <sparkle:shortVersionString>2.7.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Wed, 02 Apr 2026 01:00:00 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.7.0</h2>
-        <ul>
-          <li><b>Batch Export</b> — Export each timeline clip individually to a folder. Pick a folder once, all clips export automatically with effects baked in. No dialogs per clip.</li>
-          <li><b>Set Timeline Range</b> — Programmatically set in/out marks via MCP or command palette</li>
-          <li><b>Clip Positions</b> — Timeline clips now include absolute start/end times</li>
-        </ul>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.7.0/SpliceKitPatcher-v2.7.0.zip"
         sparkle:edSignature="6n67XJJMQ/SWovuDoFEsfrH6j50H1xnj1TZoTq6bULI7p7zpDvw6Oq8+dsoG2aqsYxEs1WbHt4m0Iy7KH2HYBg=="
@@ -1014,17 +813,11 @@
     </item>
     <item>
       <title>SpliceKit v2.6.1 — Fix Parakeet in release patcher</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.6.1</sparkle:version>
       <sparkle:shortVersionString>2.6.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 01 Apr 2026 23:15:00 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.6.1</h2>
-        <ul>
-          <li><b>Fix Parakeet in Release Patcher</b> — Parakeet transcriber source is now embedded in the patcher app bundle, fixing "Failed to build Parakeet transcriber" for users without the repo cloned locally</li>
-          <li><b>Read-only Bundle Handling</b> — Patcher copies source to a writable temp directory before building when running from the app bundle</li>
-        </ul>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.6.1/SpliceKitPatcher-v2.6.1.zip"
         sparkle:edSignature="r3e5fpUXgDReqTzDWG5M/yhqiKTLgKenh9/u22nZiOixQqnq6RgP1S+Q63RTwXPsYiFY7aOu8iYsJRdQxAJVBA=="
@@ -1033,22 +826,11 @@
     </item>
     <item>
       <title>SpliceKit v2.6.0 — Parakeet v3 Multilingual, Batch Transcription</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.6.0</sparkle:version>
       <sparkle:shortVersionString>2.6.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 01 Apr 2026 22:00:00 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.6.0</h2>
-        <ul>
-          <li><b>Parakeet v3 Multilingual</b> — Default engine now supports 25 languages</li>
-          <li><b>Parakeet v2 English</b> — Available as dropdown option for English-optimized transcription</li>
-          <li><b>Batch Transcription</b> — Single process for all clips, ~2x faster on multi-clip timelines</li>
-          <li><b>Concurrent Diarization</b> — Speaker detection runs in parallel across files</li>
-          <li><b>Source Deduplication</b> — Clips from the same file transcribed only once</li>
-          <li><b>Installation Fix</b> — Parakeet now works for all users (removed hardcoded paths)</li>
-          <li><b>Project Cleanup</b> — Logs moved to ~/Library/Logs, added MIT license, .gitignore</li>
-        </ul>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.6.0/SpliceKitPatcher-v2.6.0.zip"
         sparkle:edSignature="hfanxljAVER2kF894o4QjaHG+axToURy8OicDbx+0ve85pbwyAYatAacesfwgkPpkEsKXFJ3Kp86/Lp9wCN8Cg=="
@@ -1057,21 +839,11 @@
     </item>
     <item>
       <title>SpliceKit v2.5.0 — Parakeet, Speaker Diarization, Titles Fix, Auto-Update</title>
+      <sparkle:releaseNotesLink>https://elliotttate.github.io/SpliceKit/releasenotes.html</sparkle:releaseNotesLink>
       <sparkle:version>2.5.0</sparkle:version>
       <sparkle:shortVersionString>2.5.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Tue, 01 Apr 2026 18:00:00 +0000</pubDate>
-      <description><![CDATA[
-        <h2>What's New in 2.5.0</h2>
-        <ul>
-          <li><b>Parakeet Transcription Engine</b> — NVIDIA Parakeet TDT as default (fastest, most accurate)</li>
-          <li><b>Speaker Diarization</b> — Automatic speaker detection via FluidAudio</li>
-          <li><b>Speaker Rename</b> — Click speaker labels to rename, with rename-all option</li>
-          <li><b>Browse Titles Fixed</b> — Titles now insert correctly on the timeline</li>
-          <li><b>Auto-Update</b> — Sparkle integration for automatic updates</li>
-          <li><b>Playhead Sync</b> — Fixed sync after move/delete operations</li>
-        </ul>
-      ]]></description>
       <enclosure
         url="https://github.com/elliotttate/SpliceKit/releases/download/v2.5.0/SpliceKitPatcher-v2.5.0.zip"
         sparkle:edSignature="9lEMTLmpHAAFqbCqRq+i42GXVlbZ/6wkVbQl10nvolbMaCg8hynNsqIiLG3Kfom8m7uvHUVg1AgIVBTCMZrhCg=="

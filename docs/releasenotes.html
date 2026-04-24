@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+		<title>SpliceKit</title>
+	</head>
+	<body>
+		<div class="head-title-fixed"><strong>SpliceKit</strong> - Final Cut Pro, unlocked.<span></span></div>
+		<div class="head-title"><strong>SpliceKit</strong> - Final Cut Pro, unlocked.<span></span></div>
+		<div class="content">
+			<h1>SpliceKit 3.3.7</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>25th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Continues the Apple Immersive/BRAW work-in-progress with safer immersive preview decoding, reduced-resolution playback handling, fisheye/equirect preview improvements, native viewer state hardening, and crash fixes for affected users.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.3.6</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>24th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Adds Whisper large-v3 CoreML transcription for the social captions plugin (engine picker with Parakeet v3, Whisper large-v3-turbo, and Whisper large-v3; models download on first use).</li>
+				<li>Adds Sentry Logs support.</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fixes caption positions resetting to center on FCP relaunch by running the persisted-caption repair headlessly when the panel isn&rsquo;t open.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.3.5</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>24th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Adds the Siri-style command palette with voice dictation.</li>
+				<li>Polished liquid-glass layout and single-selection handling.</li>
+				<li>Immersive Blackmagic RAW preview support.</li>
+				<li>Patcher diagnostics/Sentry runtime hardening.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.3.4</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>23rd April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fixes the patcher update path on existing modded installs by rebuilding SpliceKit.</li>
+				<li>Framework cleaned before signing, avoiding recursive framework symlink loops that caused the installer to fail at Re-signing application.</li>
+				<li>Also re-signs nested SpliceKit bundles during patch/update and makes <code>xattr</code> clean-up non-fatal so harmless attribute clean-up issues do not abort the install.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.3.3</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>23rd April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Fixes the patcher signing path for existing modded installs so nested SpliceKit bundles, framework, and app wrapper are re-signed correctly during rebuilds and updates.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.3.2</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>21st April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fixes Blackmagic RAW thumbnail crash when third-party Media Extensions are installed.</li>
+				<li>Restores LiveCam camera/microphone access.</li>
+				<li>Fixes rare installer signing failures from stray extended attributes.</li>
+				<li>Adds build-time guards against undefined <code>SpliceKit_</code> symbols.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.3.1</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>21st April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Adds a Vision Pro preview panel, Bonjour discovery for <code>_ivtpreviewclient._tcp</code>, MCP bridge additions for the Vision Pro tools, and the Resolve Immersive BRAW reverse-engineering notes.</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fixes crash-on-launch regression in <code>v3.3.0</code>. The SpliceKitBridgeMetadata module had its declaration and call site committed but its implementation file was never included in the build, so the safe-install block jumped to <code>0x0</code> during Final Cut Pro&rsquo;s <code>didFinishLaunching</code> fanout.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.3.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>21st April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>New icon by the amazing <a href="http://matthewskiles.com">Matthew Skiles</a>. 🥳</li>
+				<li>Wider Wizard layout so the update buttons fit correctly when updating.</li>
+				<li><strong>Launch Final Cut Pro</strong> button improvements. Thanks for reporting Jonny!</li>
+				<li>Help button now opens the website.</li>
+				<li>Switched Sparkle from a vendored framework to Swift Package Manager for easier updating.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.10</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>21st April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Smooth Scroll (Splices menu) now respects the Continuous Scrolling preference.</li>
+				<li>The gate was reading a rate-derived property (<code>keepsPlayheadCenteredDuringPlayback</code>) that is only true during fast-forward/rewind, so normal-rate playback was silently skipping the 120Hz centred takeover and feeling jerky.</li>
+				<li>Swapped to <code>scrollDuringPlayback</code> backed by <code>FFScrollDuringPlaybackKey</code> &mdash; Continuous Scrolling ON engages our smooth centered path, OFF leaves FCP native edge-tracking intact with a smooth 120Hz overlay line on top.</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fixes a first-install crash in the Overview bar where the renderer could hit a half-built collection synchronously; both entry points now defer via <code>performSelector</code>.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.9</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>21st April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Smooth Scroll (on by default in Splices menu).</li>
+				<li>120Hz centered-playback path replaces Final Cut Pro native 24/30Hz step scroll: clip view now slides continuously under a stationary playhead line on ProMotion displays instead of hopping sideways once per source frame.</li>
+				<li>Implemented via <code>CADisplayLink-driven clipView.setBoundsOrigin + reflectScrolledClipView</code>, with <code>TLKScrollingTimeline</code> paused for the duration of playback so Apple step-centering does not fight the smooth path.</li>
+				<li>Filmstrip and anchored-clip layer updates are also suspended during active pinch/marquee/scrollbar drag via <code>TLKEventHandlerDid{Start,Stop}TrackingNotification</code> and a swizzle on <code>TLKTimelineHandler.magnifyWithEvent</code> - removes the cell-rebuild hitch you used to see when zooming.</li>
+				<li>Apple&rsquo;s hidden <code>TLKOptimizedReload</code> fast path is enabled via a getter swizzle.</li>
+				<li>Fixes MCP bridge event-frame contamination (events are now opt-in; bridge client skips notifications), async <code>command.completed</code> now reports <code>status:error</code> for normal RPC failures, per-fd serial write queues keep RPC replies and events ordered without byte interleave, and the overview bar tears down its notification observers on uninstall.</li>
+				<li>Toggle Smooth Scroll from <strong>Splices &gt; Smooth Scroll</strong> or via the <code>timelinePerformanceMode</code> bridge option.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.8</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>21st April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Inline timeline overview bar sits below the ruler and shows a scaled-down view of the whole project, color-coded by lane.</li>
+				<li>Click or double-click anywhere to jump the playhead; drag the visible-region rectangle&rsquo;s body to pan the main timeline or its edges to zoom.</li>
+				<li>Uses FCP&rsquo;s own <code>FFAnchoredCollectionImageCreation</code> renderer (the same one the Touch Bar overview uses) so lanes match FCP&rsquo;s internal representation exactly.</li>
+				<li>All redraws are event-driven &mdash; <code>CADisplayLink</code> during playback (matches 60Hz / 120Hz ProMotion display refresh), <code>TLKPlayheadViewFrameDidChangeNotification</code> for scrub or step, <code>FFSequenceEditedNotification</code> for edits &mdash; zero CPU when idle.</li>
+				<li>Toggle from <strong>Splices &gt; Overview</strong> menubar, or via the <code>timelineOverviewBar</code> bridge option.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.07</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>19th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>HEVC MP4s tagged hev1 (Dolby Vision, DV.HDR10+ WEB-DLs, and other tool-transcoded HEVC material) now import into Final Cut.</li>
+				<li>Previously those files showed up as unimportable because AVFoundation / QuickTime / Final Cut only decode HEVC muxed with the hvc1 sample-entry tag.</li>
+				<li>SpliceKit now detects hev1 at import time and retags the file using an APFS clonefile() COW snapshot plus a 2-byte edit to the moov box &mdash; no stream-copy remux required, no extra disk space consumed, a few seconds even on 19 GB files. The original file on disk is untouched; only the clone is modified.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.06</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>19th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Shadow-remux now handles h264, hevc, av1, and prores Matroska sources (previously VP9/VP8 only), with audio transcoded to AAC when the source codec can&rsquo;t go into MP4.</li>
+				<li>HEVC gets the hvc1 sample-entry tag so Final Cut actually decodes Main-10 MKVs.</li>
+				<li>Subtitle and attachment tracks are dropped from the mux.</li>
+				<li>B-frame-safe CFR timestamp rewrite preserves h264/hevc/av1 display order.</li>
+				<li>Media Import &lsquo;Processing files for import&hellip;&rsquo; no longer stalls on folders with unrelated files &mdash; the hook short-circuits non-Matroska extensions and uses a deterministic shadow path so the same source is never remuxed twice.</li>
+				<li>Menu renamed from Enhancements to Splices; Debug dropdown hidden from the menu bar.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.05</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>19th April 2026</li>
+			</ul>
+
+			<h2>🥳 New Features</h2>
+
+			<ul>
+				<li><strong>MKV / WebM imports</strong> &mdash; drop <code>.mkv</code> or <code>.webm</code> files onto Final Cut and SpliceKit generates a shadow <code>MP4</code> remux on the fly so Final Cut Pro sees a native container while the original file stays untouched on disk. Highest Quality toggle for URL imports &mdash; new checkbox in the Import URL dialog fetches the highest available resolution from YouTube / Vimeo (1080p, 1440p, or 4K via <code>VP9</code> / <code>AV1</code>) instead of YouTube&rsquo;s 720p progressive-mp4 cap; leave it off for the fast path.</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li><strong>URL import reliability</strong> &mdash; fixes an FCPXML parse failure when downloaded filenames contain ampersands or other XML-reserved characters (e.g. &lsquo;PS5 &amp; PS5 Pro&rsquo;), replaces the misleading twin-percent progress HUD with a single smooth readout, and vertically aligns the spinner with its label.</li>
+				<li><strong>Share Logs</strong> &mdash; one-click upload of the latest Final Cut Pro crash log plus SpliceKit logs to filebin.net, added to the Patcher status panel.</li>
+				<li>LiveCam mask kernel dispatch and shader-coordinate fix resolves subject-lift / green-screen edge artifacts on some machines.</li>
+				<li>BRAW settings inspector locks to dark appearance to match FCP&rsquo;s other inspectors.</li>
+				<li>Points the bundled <code>.mcp.json</code> at the <code>mcp-setup venv</code> interpreter so Claude Desktop MCP works without hand-editing Python paths.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.04</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>18th April 2026</li>
+			</ul>
+
+			<h2>🥳 New Features</h2>
+
+			<ul>
+				<li><strong>LiveCam</strong> &mdash; native webcam booth that records direct to your Library or active timeline without leaving Final Cut Pro. Live preview with looks, color/exposure/contrast/saturation/temperature/sharpness/glow adjustments, audio meter, mirror, date/time stamp overlay, and Library / Timeline placement (Append, At Playhead, or Connected Above). Subject-lift green screen uses Visions <code>VNGenerateForegroundInstanceMaskRequest</code> (macOS 14+) for a tight, edge-aware matte that works on people and objects, with a custom Metal pipeline that runs joint-bilateral edge refinement, signed choke, temporal smoothing, spill suppression, and light wrap every frame; falls back to person segmentation on macOS 12-13.</li>
+				<li><strong>Transparent recording</strong> &mdash; pick &ldquo;Transparent&rdquo; as the green-screen color and LiveCam writes ProRes 4444 with a real alpha plane via <code>CIRenderDestination</code> + <code>kVTCompressionPropertyKey_AlphaChannelMode</code>, so the clip drops onto your timeline ready to composite without an external keyer. Open via the LiveCam toolbar button, the Enhancements menu, the Command Palette, or <code>liveCam.show</code> / <code>open_livecam</code>.</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>URL import now auto-discovers <code>yt-dlp</code> and <code>ffmpeg</code> from your login shell PATH and symlinks them into the SpliceKit tools dir at install time, so Homebrew installs work without <code>make url-import-tools</code>.</li>
+				<li>Fixes scroll dead space in the Captions panel.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.03</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>18th April 2026</li>
+			</ul>
+
+			<h2>🥳 New Features</h2>
+
+			<ul>
+				<li><strong>URL import workflow</strong> &mdash; pull remote media straight into your library or timeline. Supports direct <code>.mp4</code>/<code>.mov</code>/<code>.m4v</code>/<code>.webm</code> links plus YouTube VOD URLs. Access via the Command Palette (<strong>Import URL to Library</strong> / <strong>Import URL to Timeline</strong>), Lua, or MCP (<code>import_url</code>, <code>import_url_status</code>, <code>cancel_import_url</code>). Three placement modes: import-only, insert at playhead, append to end. Async downloads with live progress, cancellation, and a clear guard against live streams. Requires <code>yt-dlp</code> and <code>ffmpeg</code> on PATH &mdash; run <code>brew install yt-dlp ffmpeg</code> and <code>make url-import-tools</code> to wire them in. Thanks to @JT-Apps (#40).</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.02</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>18th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fix jerky Effects browser category sidebar scroll on installs with many effects. Every row vended during scroll was re-filtering the full effect registry with ~10k locale-aware string comparisons per frame (via FFBKEffectLibraryFolder.items &rarr; FFEffect.userVisibleEffectIDs &rarr; bsearch); those results are now cached per-folder and invalidated on effect-registry notifications.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.2.01</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>18th April 2026</li>
+			</ul>
+
+			<h2>🥳 New Features</h2>
+
+			<ul>
+				<li>Native Blackmagic BRAW Color Grading. New BRAW Settings inspector menu modeled after FCP&rsquo;s ProRes RAW panel &mdash; Gamma / Gamut / Color Science Gen, ISO / Color Temp / Tint / Exposure / Analog Gain, full tone curve (Saturation, Contrast, Midpoint, Highlights, Shadows, Black Level, White Level), Highlight Recovery, Gamut Compression, and 3D LUT Mode. Open it from the Info inspector by clicking &lsquo;Modify BRAW&hellip;&rsquo; on any selected .braw clip. Fixed playback for several BRAW files that were silently dropping persisted color settings on library reopen &mdash; the in-process decoder now primes its settings cache from the asset&rsquo;s persisted dict during render setup, so adjustments apply on the first frame after relaunch instead of only after touching a slider. Also fixed a thumbnail-thread race that could crash FCP on rapid slider drags.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.151</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>17th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Fix missing BRAW support on fresh installs. The patcher was shipping only the SpliceKit framework dylib &mdash; the VideoToolbox decoder and MediaToolbox format-reader bundles that actually register .braw with Final Cut Pro were never getting installed. Drag-and-drop and Import Media now work out of the box on every machine.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.150</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>17th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Fix a BRAW decode crash: when VideoToolbox tore down a session while a decode was in flight on our BRAW serial queue, the race could free the host callback mid-Unbind and abort FCP. Release now serializes through the same queue as decode.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.149</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>17th April 2026</li>
+			</ul>
+
+			<h2>🥳 New Features</h2>
+
+			<ul>
+				<li>Native Blackmagic RAW (BRAW) playback in Final Cut Pro &mdash; import, preview, and edit .braw files from URSA Cine / BMPCC / Pocket 4K/6K cameras without transcoding. Works with every codec variant we&rsquo;ve seen in the wild (braw, brxq, brst, brvn) including URSA Cine 17K. Playback runs through the Blackmagic RAW SDK with zero-copy Metal decode and realtime framerates at 6K+.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.148</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>16th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Automatically expose Apple&rsquo;s AUSoundIsolation effect on startup so Voice Isolation stays available in the audio effects browser across launches.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.147</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>16th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Fix OTIO and FCPXML import reliability: preserve source in-points, normalize media URLs, avoid library-picker fallbacks, and import projects through the in-process pipeline.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.146</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>16th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Fix an Audio Mixer bug that could cause a major performance drop after adding audio bus effects. Mixer polling now avoids repeated effect-stack mutations while keeping bus effects attached to their roles.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.145</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>16th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Audio Mixer: managed role-bus effects, solo/mute controls, FX menu, state mirroring, diagnostics.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.144</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>16th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Transcript Editor diagnostics, timestamp mapping fixes, speaker cleanup, and faster pause deletion.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.143</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>15th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Add song cut workflow for beat-synced video assembly from sequence-backed sources. Fix cumulative frame drift in FCPXML builds, fix connected song alignment, add half-beat pairing rule, add sequence name substring matching, resolve timeline clips to browser equivalents for native insertion.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.142</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>15th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Fix audio mixer clip discovery for nested compound clips and storylines, handle deduplication, caption panel visibility guard</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.141</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>15th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Fix Remove All Keyframes command: recursive discovery of keyframe targets across child clips, effect stacks, and audio channels</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.14</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>15th April 2026</li>
+			</ul>
+
+			<h2>🥳 New Features</h2>
+
+			<ul>
+				<li><strong>All-new Audio Mixer UI:</strong> role-colored faders with gradient strips, segmented LED meters with clipping detection, per-fader automation arming, real-time volume during playback, keyframe management</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.13</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>14th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Mixer metering works without Audio Meters panel, CALayer tree search for mini transport meters.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.12</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>14th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Live audio metering in mixer panel, Final Cut Pro role colors, keyframed volume support.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.11</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>14th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Fix transcript editor missing connected clips (<code>FFAnchoredClip</code> URL resolution), mixer panel, caption enhancements, CloudContent diagnostic logging, patcher launch monitoring.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.10</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>14th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fix</h2>
+
+			<ul>
+				<li>Fix CloudKit crash on Final Cut Pro 12.2+, patcher diagnostic logging to <code>~/Library/Logs/SpliceKit/patcher.log</code>, comprehensive startup diagnostics in <code>dylib</code>, disable spring-loaded blade.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.9</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>14th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fix patcher signing on macOS 15.7.3 &mdash; the patcher was applying only 1 entitlement (cs-disable-library-validation) instead of the full set needed for ad-hoc signing. This caused the re-signed app to launch unsigned on some systems, triggering a CloudKit crash (EXC_BREAKPOINT in CloudContentCatalog.updateCatalogAndRegistry()). Now applies all 4 required entitlements including explicit app-sandbox=false to prevent CloudKit entitlement validation failures. Fixed across all patcher paths: GUI app (initial patch + update), shell script, and entitlements.plist. (Fixes #23)</li>
+			</ul>
+
+			<h2>📄 Documentation</h2>
+
+			<ul>
+				<li>Added plain-English explainer &mdash; What Is SpliceKit? covers what it is, how it works, and whether it&rsquo;s safe, written for non-technical users. Linked from the top of the README.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.8</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>14th April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li><strong>Transcript persistence across projects</strong> &mdash; switching projects no longer shows stale transcript from previous project; added <code>transcript.clear</code> RPC endpoint</li>
+				<li><strong>addTodoMarker fixed</strong> &mdash; was returning &ldquo;No responder handled&rdquo;; now uses direct sequence method</li>
+				<li><strong>Silence detection</strong> &mdash; was returning 0 silences on clips with obvious pauses; improved threshold algorithm and added start-to-start interval detection</li>
+				<li><strong>Timeline duration</strong> &mdash; was reporting 0.000s; now falls back to summing spine clip durations</li>
+				<li><strong>add_markers_at_times offset</strong> &mdash; now accounts for timeline start offset (e.g. 01:00:00:00)</li>
+			</ul>
+
+			<h2>🥳 New Features</h2>
+
+			<ul>
+				<li><strong>OpenTimelineIO import/export</strong> &mdash; universal timeline exchange with DaVinci Resolve, Premiere Pro, Avid (<code>.otio</code>, <code>.edl</code>, <code>.aaf</code>)</li>
+				<li><strong>Native OTIO-to-FCPXML converter</strong> &mdash; frame-exact conversion with canonical SMPTE timebases</li>
+				<li><strong>Compound clip drilling</strong> &mdash; <code>get_timeline_clips</code> now exposes <code>isCompound</code>, <code>nestedItemCount</code>, and <code>include_nested</code> parameter</li>
+				<li><strong>Batch editing tools</strong> &mdash; <code>apply_transition_to_all_clips</code>, <code>batch_apply_effect</code>, <code>batch_color_correct</code></li>
+				<li><strong>Expanded command palette</strong> &mdash; full categorized action lists, comprehensive AI capabilities prompt</li>
+				<li><strong>Lua example</strong> &mdash; <code>shuffle_clips.lua</code> script</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.7</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>12th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Sections bar for timeline song structure, add default transition to all clips command, fuzzy search stop-word handling. Watch <a href="https://youtu.be/plirvqHe6o0" target="_blank">video</a>.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.6</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>10th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Dual timeline workflow updates, cross-window drag and copy, secondary window controls, and browser sizing/layout fixes.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.5</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>10th April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Improves patcher update detection and rebuild/update flows, fixes bundled Parakeet packaging for updates, and reduces patched-app signing friction by removing unnecessary debug entitlements.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.4</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>8 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Improves social caption insertion and relaunch restore. Fixes title placeholder recovery on restart, preserves caption placement on reload, and tightens word highlighting behavior.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.3</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>8 April 2026</li>
+			</ul>
+
+			<h2>Apple Intelligence+ (Agentic Mode)</h2>
+
+			<ul>
+				<li>New <strong>Apple Intelligence+</strong> engine in the Command Palette &mdash; an agentic AI mode powered by Apple&rsquo;s on-device FoundationModels framework with tool-calling capabilities</li>
+				<li>Apple Intelligence+ can read your timeline, seek to specific times, blade/cut clips, add markers, apply effects, execute menu commands, and repeat actions at intervals &mdash; all from a natural language prompt</li>
+				<li>6 built-in tools: <strong>edit</strong> (timeline actions), <strong>seek</strong> (playhead positioning), <strong>clips</strong> (read timeline state), <strong>repeat_action</strong> (batch operations like &ldquo;blade every 5 seconds&rdquo;), <strong>effect</strong> (apply effects), <strong>menu</strong> (execute any Final Cut Pro menu command)</li>
+				<li>Timeline-aware context: Apple Intelligence+ automatically knows your project name, duration, clip count, frame rate, and playhead position</li>
+				<li>Smart pattern detection: phrases like &ldquo;cut every 3 seconds&rdquo; or &ldquo;add markers every 10 seconds&rdquo; are intercepted for fast direct execution</li>
+				<li>Three AI engines selectable from the Command Palette dropdown: <strong>Apple Intelligence</strong> (basic), <strong>Gemma 4</strong> (local MLX), and <strong>Apple Intelligence+</strong> (agentic with tools) &mdash; Apple Intelligence+ is now the default</li>
+				<li>Engine preference persists across sessions via <code>NSUserDefaults</code></li>
+			</ul>
+
+			<h2>Lua Scripting Engine</h2>
+
+			<ul>
+				<li>Embedded Lua 5.4 VM running directly in FCP&rsquo;s process (zero latency)</li>
+				<li><code>sk</code> module with 25+ actions: <code>sk.blade()</code>, <code>sk.seek()</code>, <code>sk.clips()</code>, <code>sk.rpc()</code>, <code>sk.eval()</code></li>
+				<li>REPL panel (<code>CONTROL+OPTION+L</code>) for interactive scripting</li>
+				<li>Live coding: save <code>.lua</code> files to <code>~/Library/Application Support/SpliceKit/lua/auto/</code></li>
+				<li>8 built-in menu scripts (timeline report, remove silences, blade every 5s, balance color, cross dissolves, generate captions, export XML, screenshot viewer)</li>
+				<li>25+ example scripts (podcast producer, music video editor, conform tool, batch export, and more)</li>
+				<li>MCP tools: <code>lua_execute</code>, <code>lua_execute_file</code>, <code>lua_reset</code>, <code>lua_watch</code>, <code>lua_state</code></li>
+			</ul>
+
+			<h2>Social Captions (Improved)</h2>
+
+			<ul>
+				<li>Uses Final Cut Pro&rsquo;s built-in Basic Title &mdash; works on all Final Cut Pro installations, no custom templates needed</li>
+				<li>Word-by-word karaoke highlighting via per-word <code>&lt;text-style&gt;</code> colouring</li>
+				<li>Auto-transcribe: generates captions without manual transcription step</li>
+				<li>Drop shadow on all caption text for readability</li>
+				<li>Lower-third positioning via Motion channel hierarchy</li>
+				<li>Screen freeze hides temp project switch (seamless UX)</li>
+				<li><code>reloadMicaDocument</code> fix: no more greyed-out text or Inspector crashes</li>
+			</ul>
+
+			<h2>Default Spatial Conform Type (PR #22)</h2>
+
+			<ul>
+				<li>Override default spatial conform (Fit/Fill/None) for new timeline clips</li>
+				<li>Menu: <code>Enhancements &gt; Options &gt; Default Spatial Conform</code></li>
+				<li>Options panel dropdown + Command Palette cycling</li>
+				<li>Bridge API: <code>set_bridge_option_value("defaultSpatialConformType", "fill")</code></li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fix Lua RPC main thread deadlock: <code>sk.rpc()</code> no longer forces every call through main thread, preventing soft deadlocks during polling loops</li>
+				<li>Fix caption engine override: caption generation now uses the user&rsquo;s configured transcription engine instead of forcing FCP Native</li>
+				<li>Fix parakeet-transcriber build for updated FluidAudio API (<code>AsrManager.initialize</code> &rarr; <code>loadModels</code>, new model version enum variants)</li>
+				<li>Caption script is now non-blocking for long clips with transcript reuse</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.2</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>7 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added local App Store receipt validation for Creator Studio subscriptions before launch.</li>
+				<li>Shows an alert when no valid subscription is found.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.1</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>7 April 2026</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Added support fixes for Final Cut Pro Creator Studio.</li>
+				<li>Fixed subscription validation and a CloudKit crash on ad-hoc signed builds.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.1.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>6 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added configurable J/L playback speed ladders instead of Final Cut Pro&rsquo;s fixed shuttle progression.</li>
+				<li>Added menu and API controls for custom playback ladders.</li>
+				<li>Added MCP playback speed controls and current-rate reporting.</li>
+				<li>Preserved original K+L and K+J single-frame stepping behavior.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.0.2</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>6 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Improved Final Cut Pro discovery so SpliceKit can find non-standard app locations automatically.</li>
+				<li>Added a manual &ldquo;Browse for Final Cut Pro&hellip;&rdquo; fallback.</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fixed a launch crash caused by a missing log panel class in the dylib build.</li>
+				<li>Fixed incorrect version display when Final Cut Pro is installed outside the default path.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.0.1</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>5 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Bundled the pre-built <code>parakeet-transcriber</code> in the DMG for easier setup.</li>
+				<li>Improved Parakeet error messages and skipped clips shorter than 0.5s.</li>
+				<li>Deployed helper tools into the SpliceKit tools folder during deployment and added more detailed logging.</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<ul>
+				<li>Fixed Sparkle showing false update prompts on the latest version.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 3.0.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>5 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Rebranded FCPBridge as <strong>SpliceKit</strong>.</li>
+				<li>Introduced a new wizard-style patcher app, DMG distribution, and app icon.</li>
+				<li>Renamed the Final Cut Pro menu item to <strong>Enhancements</strong>.</li>
+				<li>Removed hardcoded user-specific paths and standardized tool locations.</li>
+				<li>Existing users need to re-patch because the framework name changed.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.8.4</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>4 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added effect browser favorites support through Final Cut Pro&rsquo;s built-in favorites API.</li>
+				<li>Exposed Final Cut Pro internal debug and diagnostics tools through MCP presets.</li>
+				<li>Fixed patcher signing to preserve Apple framework signatures.</li>
+				<li>Added crash prevention for unsafe trim selectors and fixed the <code>retimeHold</code> action mapping.</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+
+			<hr />
+
+			<h1>SpliceKit 2.8.3</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>2 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added effect dragging to empty timeline space to create named adjustment clips.</li>
+				<li>Included a toggle for this behavior in the FCPBridge menu.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.8.2</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>2 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added support for Final Cut Pro Creator Studio with auto-detection and an edition picker.</li>
+				<li>Added adjustment clip creation when dragging effects into empty timeline space.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.8.1</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>2 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Improved Parakeet error messages with download progress and network, disk, memory, and Xcode CLT diagnostics.</li>
+				<li>Expanded the command palette to 120+ entries.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.8.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>2 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added full MCP control with universal menu access and dialog handling.</li>
+				<li>Added effect parameter read/write support for opacity, transform, crop, and volume.</li>
+				<li>Expanded timeline actions to 200+ operations.</li>
+				<li>Improved playhead monitoring, tool selection, and modal-safe dispatch.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.7.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>2 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added batch export to export timeline clips individually to a folder with one initial destination prompt.</li>
+				<li>Added <code>batch_export()</code> and <code>set_timeline_range()</code> MCP tools.</li>
+				<li>Added absolute <code>startTime</code> and <code>endTime</code> positions for timeline clips.</li>
+				<li>Used swizzling and range controls to automate Final Cut Pro&rsquo;s export pipeline.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.6.1</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>1 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Fixed Parakeet in the release patcher by embedding transcriber source in the patcher app bundle.</li>
+				<li>Added handling for read-only app bundles by copying sources to a writable temp directory before building.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.6.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>1 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Made Parakeet v3 Multilingual the default transcription engine, with Parakeet v2 still available.</li>
+				<li>Added batch transcription with shared model loading, source deduplication, and concurrent diarization.</li>
+				<li>Fixed installation issues caused by hardcoded paths and improved binary deployment.</li>
+				<li>Cleaned up logs, sockets, repo files, and patcher resources.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.5.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>1 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added Sparkle auto-update support to the patcher.</li>
+				<li>Fixed &ldquo;Browse Titles&hellip;&rdquo; so titles insert correctly as connected clips.</li>
+				<li>Made NVIDIA Parakeet the default transcription engine.</li>
+				<li>Added speaker diarization and improved transcript/playhead sync after edits.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.4.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>1 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added NVIDIA Parakeet transcription as the default engine.</li>
+				<li>Added speaker diarization for Parakeet and Apple Speech.</li>
+				<li>Added speaker renaming in the transcript UI.</li>
+				<li>Improved transcript/playhead sync, long-audio stability, authorization flow, and progress updates.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.3.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>1 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added a VS Code-style command palette inside Final Cut Pro.</li>
+				<li>Added Apple Intelligence integration for natural-language editing commands.</li>
+				<li>Added silence detection and removal using Apple-native audio analysis.</li>
+				<li>Added scene detection with configurable marking and blading actions.</li>
+				<li>Improved timeline state, playhead positioning, and media path resolution.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.2.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>1 April 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Fixed live playhead sync for transcript highlighting during playback.</li>
+				<li>Moved patcher shell commands off the main thread to prevent beachballing.</li>
+				<li>Removed the git dependency by switching downloads to <code>curl</code>.</li>
+				<li>Fixed button overflow and clean Cmd+Q shutdown.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.1.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>31 March 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Added a transcript editor for text-based video editing inside Final Cut Pro.</li>
+				<li>Added word-level transcription, click-to-seek, delete-to-ripple-delete, and drag-to-reorder.</li>
+				<li>Added toolbar, menu bar, and keyboard shortcut integration.</li>
+				<li>Added a self-contained signed patcher app.</li>
+				<li>Added MCP tools for opening, reading, deleting, and moving transcript words.</li>
+			</ul>
+
+			<hr />
+
+			<h1>SpliceKit 2.0.0</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>31 March 2026</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+
+			<ul>
+				<li>Introduced <strong>FCPBridge 2.0.0</strong> with direct programmatic control of Final Cut Pro via injected dylib and MCP server.</li>
+				<li>Added 28 MCP tools, 40+ timeline actions, JSON-RPC access, object handles, KVC property access, and FCPXML generation/import.</li>
+				<li>Added patcher app support for copying, injecting, re-signing, and launching a modded Final Cut Pro build.</li>
+				<li>Verified the system with 30 passing tests across editing, playback, color, effects, and timeline analysis.</li>
+			</ul>
+		</div>
+	</body>
+	<style>
+		html,
+		body {
+			padding: 0;
+			margin: 0;
+			color: #282829;
+			background-color: white;
+			font: 13px/20px "Helvetica Neue", Arial;
+			height: 100%;
+			position: relative;
+		}
+
+		h1 {
+			font: 16px/23px "Helvetica Neue", Arial;
+			font-weight:bold;
+		}
+
+		h2 {
+			font: 13px/20px "Helvetica Neue", Arial;
+			font-weight:bold;
+		}
+
+		* {
+			-webkit-box-sizing: border-box;
+			box-sizing: border-box;
+		}
+
+		body {
+			padding: 0;
+			overflow: auto
+		}
+
+		.head-title,
+		.head-title-fixed {
+			background: -webkit-linear-gradient(top, #fff, #f5f5f5);
+			background: -moz-linear-gradient(top, #fff, #f5f5f5);
+			background: linear-gradient(to bottom, #fff, #f5f5f5);
+			-ms-filter: progid: DXImageTransform.Microsoft.gradient(startColorstr='#ffffff', endColorstr='#f5f5f5', GradientType=0);
+			filter: progid: DXImageTransform.Microsoft.gradient(startColorstr='#ffffff', endColorstr='#f5f5f5', GradientType=0);
+			min-height: 20px;
+			line-height: 20px;
+			border-bottom: 1px #d2d2d2 solid;
+			color: #333;
+			background-repeat: no-repeat;
+			background-position: 0 center;
+			padding: 10px 20px 10px 20px;
+			margin: 0;
+			width: 100%;
+			-webkit-box-shadow: 0 1px 1px #f2f2f2, inset 0 -1px 0 #fbfbfb;
+			box-shadow: 0 1px 1px #f2f2f2, inset 0 -1px 0 #fbfbfb;
+		}
+
+		.head-title-fixed {
+			top: 0;
+			width: 100%;
+			margin-left: 0px;
+			position: fixed;
+		}
+
+		.head-title span,
+		.head-title-fixed span {
+			color: #666;
+		}
+
+		hr {
+			height: 1px;
+			background: #d6d6d6;
+			border: 0;
+			overflow: hidden;
+			margin: 30px 0;
+		}
+
+		.content {
+			padding: 10px 20px 20px 20px;
+		}
+
+		.red {
+			color: red;
+		}
+	</style>
+</html>

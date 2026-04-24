@@ -31,6 +31,8 @@ SPARKLE_SIGN="/tmp/bin/sign_update"
 SENTRY_RELEASE_NAME="splicekit@${VERSION}"
 SENTRY_PATCHER_PROJECT="${SENTRY_PATCHER_PROJECT:-apple-macos}"
 SENTRY_RUNTIME_PROJECT="${SENTRY_RUNTIME_PROJECT:-apple-macos}"
+RELEASE_NOTES_URL="${RELEASE_NOTES_URL:-https://elliotttate.github.io/SpliceKit/releasenotes.html}"
+RELEASE_NOTES_FILE="${RELEASE_NOTES_FILE:-docs/releasenotes.html}"
 
 # Auto-resolve Sentry auth from the new `sentry` CLI's OAuth store so dSYM
 # upload works without manually hardcoding a token. The new CLI refreshes
@@ -146,6 +148,69 @@ maybe_upload_sentry_symbols() {
     else
         echo "  WARNING: patcher dSYM missing at ${PATCHER_DSYM}"
     fi
+}
+
+update_release_notes_html() {
+    python3 - "${RELEASE_NOTES_FILE}" "${VERSION}" "${NOTES}" <<'PY'
+from datetime import datetime
+from html import escape
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+version = sys.argv[2]
+notes = sys.argv[3].strip() or "Bug fixes and improvements"
+
+if not path.exists():
+    raise SystemExit(f"ERROR: release notes HTML not found: {path}")
+
+text = path.read_text(encoding="utf-8")
+if re.search(rf"<h1>SpliceKit {re.escape(version)}</h1>", text):
+    print(f"  Release notes already contain v{version}; skipping")
+    raise SystemExit(0)
+
+def ordinal(day):
+    if 10 <= day % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix}"
+
+today = datetime.now()
+released = f"{ordinal(today.day)} {today.strftime('%B %Y')}"
+note_items = [
+    re.sub(r"^[-*]\s+", "", line.strip())
+    for line in re.split(r"\r?\n+", notes)
+    if line.strip()
+]
+items_html = "\n".join(f"\t\t\t\t<li>{escape(item)}</li>" for item in note_items)
+section = f"""\t\t\t<h1>SpliceKit {escape(version)}</h1>
+
+\t\t\t<h2>🎉 Released</h2>
+
+\t\t\t<ul>
+\t\t\t\t<li>{escape(released)}</li>
+\t\t\t</ul>
+
+\t\t\t<h2>🔨 Improvements</h2>
+
+\t\t\t<ul>
+{items_html}
+\t\t\t</ul>
+
+\t\t\t<hr />
+"""
+
+marker = '<div class="content">'
+idx = text.find(marker)
+if idx == -1:
+    raise SystemExit(f"ERROR: could not find release notes content container in {path}")
+insert_pos = idx + len(marker)
+updated = text[:insert_pos] + "\n" + section + text[insert_pos:].lstrip("\n")
+path.write_text(updated, encoding="utf-8")
+print(f"  Release notes HTML updated: {path}")
+PY
 }
 
 echo "=== SpliceKit Release v${VERSION} ==="
@@ -353,14 +418,11 @@ echo "[13/15] Updating appcast.xml..."
 # Build the new item XML
 NEW_ITEM="    <item>
       <title>SpliceKit v${VERSION}</title>
+      <sparkle:releaseNotesLink>${RELEASE_NOTES_URL}</sparkle:releaseNotesLink>
       <sparkle:version>${VERSION}</sparkle:version>
       <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>${PUB_DATE}</pubDate>
-      <description><![CDATA[
-        <h2>What's New in ${VERSION}</h2>
-        <p>${NOTES}</p>
-      ]]></description>
       <enclosure
         url=\"https://github.com/${RELEASE_REPO}/releases/download/v${VERSION}/${DMG_NAME}\"
         sparkle:edSignature=\"${SPARKLE_SIG}\"
@@ -385,12 +447,15 @@ with open('appcast.xml', 'w') as f:
 print('  Appcast updated')
 "
 
+echo "  Updating ${RELEASE_NOTES_FILE}..."
+update_release_notes_html
+
 # ──────────────────────────────────────────────
 # GIT + GITHUB RELEASE
 # ──────────────────────────────────────────────
 
 echo "[14/15] Committing and pushing..."
-git add appcast.xml "${VERSION_FILE}"
+git add appcast.xml "${VERSION_FILE}" "${RELEASE_NOTES_FILE}"
 git commit -m "Release v${VERSION}: ${NOTES}"
 git push "${PUSH_REMOTE}" "HEAD:${PUSH_BRANCH}"
 
@@ -431,6 +496,7 @@ echo "  - Built via Xcode, signed, notarized, stapled"
 echo "  - DMG: ${DMG_PATH}"
 echo "  - Sentry release: ${SENTRY_RELEASE_NAME}"
 echo "  - Appcast updated with EdDSA signature"
+echo "  - Release notes HTML updated"
 echo "  - Pushed to main, GitHub release created"
 echo "  - Sparkle will auto-notify users"
 echo ""
