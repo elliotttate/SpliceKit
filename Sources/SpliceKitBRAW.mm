@@ -5756,4 +5756,27 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_ReadAudioSamples(
     return NO;
 }
 
+#endif // SPLICEKIT_HAS_BRAW_SDK
+
+// Stubs compiled unconditionally so the Makefile linker-symbol validation
+// passes even when the Blackmagic RAW SDK is not installed on this machine.
+#if !SPLICEKIT_HAS_BRAW_SDK
+
+#ifdef __cplusplus
+extern "C" {
 #endif
+
+void SpliceKit_bootstrapBRAWAtLaunchPhase(NSString *phase) {
+    (void)phase;
+}
+
+NSDictionary *SpliceKit_handleBRAWAVProbe(NSDictionary *params) {
+    (void)params;
+    return @{@"error": @"BRAW support requires the Blackmagic RAW SDK at build time."};
+}
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
+
+#endif // !SPLICEKIT_HAS_BRAW_SDK

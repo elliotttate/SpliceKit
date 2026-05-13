@@ -3046,6 +3046,127 @@ NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
         return allResult ?: @{@"error": @"Failed to add transitions to all clips"};
     }
 
+    // === Select Forward / Backward from Playhead ===
+    // selectForward: select every primary-storyline item whose start time is >= playhead.
+    // selectBackward: select every primary-storyline item whose end time is <= playhead.
+    // Items that span the playhead are excluded from both — the behaviour is intentionally
+    // conservative so that subsequent ripple-delete or copy operations are predictable.
+    if ([action isEqualToString:@"selectForward"] || [action isEqualToString:@"selectBackward"]) {
+        BOOL wantForward = [action isEqualToString:@"selectForward"];
+        __block NSDictionary *sfResult = nil;
+        SpliceKit_executeOnMainThread(^{
+            @try {
+                id timeline = SpliceKit_getActiveTimelineModule();
+                if (!timeline) {
+                    sfResult = @{@"error": @"No active timeline module — is a project open?"};
+                    return;
+                }
+
+                id sequence = nil;
+                if ([timeline respondsToSelector:@selector(sequence)])
+                    sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+                if (!sequence) {
+                    sfResult = @{@"error": @"No sequence in timeline."};
+                    return;
+                }
+
+                // Current playhead position in seconds
+                SpliceKit_CMTime phTime = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
+                    timeline, @selector(playheadTime));
+                double playheadSec = (phTime.timescale > 0)
+                    ? (double)phTime.value / phTime.timescale : 0.0;
+
+                // Primary spine: sequence → primaryObject → containedItems
+                id primaryObj = nil;
+                if ([sequence respondsToSelector:@selector(primaryObject)])
+                    primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject));
+
+                id itemsSource = nil;
+                if (primaryObj && [primaryObj respondsToSelector:@selector(containedItems)])
+                    itemsSource = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
+                if (!itemsSource && [sequence respondsToSelector:@selector(containedItems)])
+                    itemsSource = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(containedItems));
+
+                if (![itemsSource isKindOfClass:[NSArray class]] ||
+                    [(NSArray *)itemsSource count] == 0) {
+                    sfResult = @{@"error": @"Timeline is empty."};
+                    return;
+                }
+
+                NSArray *allItems = (NSArray *)itemsSource;
+
+                SEL erSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+                if (!primaryObj || ![primaryObj respondsToSelector:erSel]) {
+                    sfResult = @{@"error": @"Timeline model does not support positional queries."};
+                    return;
+                }
+
+                // 1 ms epsilon absorbs floating-point imprecision at edit points
+                const double kEps = 0.001;
+                NSMutableArray *toSelect = [NSMutableArray array];
+
+                for (id item in allItems) {
+                    @try {
+                        SpliceKit_CMTimeRange range = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                            primaryObj, erSel, item);
+                        double startSec = (range.start.timescale > 0)
+                            ? (double)range.start.value / range.start.timescale : 0.0;
+                        double durSec = (range.duration.timescale > 0)
+                            ? (double)range.duration.value / range.duration.timescale : 0.0;
+                        double endSec = startSec + durSec;
+
+                        BOOL include = wantForward
+                            ? (startSec >= playheadSec - kEps)   // clip starts at or after playhead
+                            : (endSec   <= playheadSec + kEps);  // clip ends at or before playhead
+                        if (include)
+                            [toSelect addObject:item];
+                    } @catch (NSException *) {}
+                }
+
+                if (toSelect.count == 0) {
+                    sfResult = @{
+                        @"status":           @"ok",
+                        @"selected":         @0,
+                        @"action":           action,
+                        @"playhead_seconds": @(playheadSec),
+                        @"message":          [NSString stringWithFormat:
+                            @"No clips found %@ the playhead (%.3f s).",
+                            wantForward ? @"forward from" : @"backward from", playheadSec]
+                    };
+                    return;
+                }
+
+                SEL setSelSel = NSSelectorFromString(@"setSelectedItems:");
+                if (![timeline respondsToSelector:setSelSel])
+                    setSelSel = NSSelectorFromString(@"_setSelectedItems:");
+                if (![timeline respondsToSelector:setSelSel]) {
+                    sfResult = @{@"error": @"Timeline does not support setSelectedItems:"};
+                    return;
+                }
+                ((void (*)(id, SEL, id))objc_msgSend)(timeline, setSelSel, toSelect);
+
+                SpliceKit_log(@"[Timeline] %@ — selected %lu of %lu items at playhead %.3f s",
+                              action, (unsigned long)toSelect.count,
+                              (unsigned long)allItems.count, playheadSec);
+
+                sfResult = @{
+                    @"status":           @"ok",
+                    @"action":           action,
+                    @"selected":         @(toSelect.count),
+                    @"total":            @(allItems.count),
+                    @"playhead_seconds": @(playheadSec),
+                    @"message":          [NSString stringWithFormat:
+                        @"Selected %lu of %lu clip(s) %@ the playhead (%.3f s).",
+                        (unsigned long)toSelect.count, (unsigned long)allItems.count,
+                        wantForward ? @"forward from" : @"backward from", playheadSec]
+                };
+            } @catch (NSException *e) {
+                sfResult = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+            }
+        });
+        return sfResult ?: @{@"error": @"selectForward/selectBackward failed"};
+    }
+
     if ([action isEqualToString:@"removeAllKeyframesFromClip"]) {
         __block NSDictionary *clearResult = nil;
         SpliceKit_executeOnMainThread(^{
