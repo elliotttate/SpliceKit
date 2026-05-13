@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.select-from-playhead-buttons",
+  "name": "Select From Playhead Buttons",
+  "version": "1.0.0",
+  "description": "Adds two buttons to Final Cut Pro's toolbar: Select Forward (all clips starting at or after the playhead) and Select Backward (all clips ending at or before the playhead).",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}
