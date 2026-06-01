@@ -394,9 +394,11 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) vp9-pro
 		@cd "$(FW_DIR)/Versions" && ln -sfn A Current
 		@cd "$(FW_DIR)" && ln -sfn Versions/Current/SpliceKit SpliceKit
 		@cd "$(FW_DIR)" && ln -sfn Versions/Current/Resources Resources
-	@# Create Info.plist if missing
-	@test -f "$(FW_DIR)/Versions/A/Resources/Info.plist" || \
-		printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string><key>CFBundleName</key><string>SpliceKit</string><key>CFBundleVersion</key><string>1.0.0</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleExecutable</key><string>SpliceKit</string></dict></plist>' \
+	@# Always write Info.plist with the current SPLICEKIT_VERSION so the patcher
+	@# version check (CFBundleShortVersionString comparison) never triggers a
+	@# spurious "update available" prompt after a manual make deploy.
+	@mkdir -p "$(FW_DIR)/Versions/A/Resources"
+	@printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string><key>CFBundleName</key><string>SpliceKit</string><key>CFBundleShortVersionString</key><string>$(SPLICEKIT_VERSION)</string><key>CFBundleVersion</key><string>$(SPLICEKIT_VERSION)</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleExecutable</key><string>SpliceKit</string></dict></plist>' \
 		> "$(FW_DIR)/Versions/A/Resources/Info.plist"
 	@# Add privacy usage descriptions for transcript, LiveCam, and palette voice dictation.
 	@/usr/libexec/PlistBuddy -c "Set :NSSpeechRecognitionUsageDescription 'SpliceKit uses speech recognition for transcript editing and command palette voice dictation inside Final Cut Pro.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'SpliceKit uses speech recognition for transcript editing and command palette voice dictation inside Final Cut Pro.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
