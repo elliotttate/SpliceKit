@@ -451,11 +451,13 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) vp9-pro
 	@mkdir -p "$(MODDED_APP)/Contents/PlugIns/Codecs"
 	@rm -rf "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle"
 	@cp -R "$(VP9_DECODER_BUNDLE)" "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle"
+	@xattr -rc "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle" 2>/dev/null || true
 	@echo "VP9 decoder bundle copied into FCP.app/Contents/PlugIns"
 	@$(MAKE) mkv-prototype
 	@mkdir -p "$(MODDED_APP)/Contents/PlugIns/FormatReaders"
 	@rm -rf "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle"
 	@cp -R "$(MKV_IMPORT_BUNDLE)" "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle"
+	@xattr -rc "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle" 2>/dev/null || true
 	@echo "MKV/WebM format reader copied into FCP.app/Contents/PlugIns"
 	@if [ "$(ENABLE_BRAW_RAW_PROCESSOR)" = "1" ]; then \
 		$(MAKE) braw-raw-processor; \
@@ -464,6 +466,7 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) vp9-pro
 		cp -R "$(BUILD_DIR)/braw-prototype/Extensions/SpliceKitBRAWRAWProcessor.appex" "$(MODDED_APP)/Contents/Extensions/SpliceKitBRAWRAWProcessor.appex"; \
 		echo "Opt-in BRAW RAW processor copied into FCP.app/Contents/Extensions"; \
 	fi
+	@xattr -rc "$(MODDED_APP)/Contents/PlugIns" 2>/dev/null || true
 	@sign_identity=$$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development:/ { print $$2; exit } /"Developer ID Application:/ && developer == "" { developer = $$2 } /[0-9]+\) [0-9A-F]+ "/ && first == "" { first = $$2 } END { if (developer != "") print developer; else if (first != "") print first }'); \
 	if [ -n "$$sign_identity" ]; then \
 		echo "Using signing identity: $$sign_identity"; \
@@ -479,6 +482,9 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) vp9-pro
 	fi; \
 	if [ -d "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle" ]; then \
 		codesign --force --sign "$$sign_identity" "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle"; \
+	fi; \
+	if [ -d "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle" ]; then \
+		codesign --force --sign "$$sign_identity" "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle"; \
 	fi; \
 	if [ -d "$(MODDED_APP)/Contents/Extensions/SpliceKitBRAWRAWProcessor.appex" ]; then \
 		appex_sign_id="$(BRAW_RAWPROC_SIGN_ID)"; \

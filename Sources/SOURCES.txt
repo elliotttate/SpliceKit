@@ -26,6 +26,7 @@ SpliceKitSentry.m
 SpliceKitTranscriptPanel.m
 SpliceKitTranscriptDiagnostics.m
 SpliceKitCaptionPanel.m
+SpliceKitUndoHistoryPanel.m
 SpliceKitCommandPalette.m
 SpliceKitDebugUI.m
 SpliceKitStructureBlocks.m
@@ -36,6 +37,7 @@ SpliceKitLuaPanel.m
 SpliceKitPlugins.m
 SpliceKitMixerPanel.m
 SpliceKitSidebarCoalesce.m
+SpliceKitReplaceAtPlayhead.m
 SpliceKitTimelineInteractionSuspend.m
 SpliceKitTimelinePlayheadOverlay.m
 SpliceKitTimelinePerfMode.m
