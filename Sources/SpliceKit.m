@@ -3483,6 +3483,9 @@ static void SpliceKit_appDidLaunch(void) {
     // to native clipboard format so pasteAnchored: can handle it)
     SpliceKit_installFCPXMLPasteSwizzle();
 
+    // Add "Paste Overwrite" to the Edit menu after the native Paste item
+    SpliceKit_installPasteOverwriteMenuItem();
+
     // Swizzle J/L to use configurable speed ladders
     SpliceKit_installPlaybackSpeedSwizzle();
 

@@ -211,6 +211,7 @@ typedef struct { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch
 typedef struct { SpliceKit_CMTime start; SpliceKit_CMTime duration; } SpliceKit_CMTimeRange;
 
 static SpliceKit_CMTimeRange SpliceKit_clipRangeForItem(id item);
+static BOOL SpliceKit_seekAndMark(id timeline, SpliceKit_CMTime time, NSString *actionSelector);
 static NSDictionary *SpliceKit_prepareBrowserClipSourceForInsertion(id sourceBrowserClip,
                                                                     SpliceKit_CMTimeRange clipRange,
                                                                     BOOL preferAudio);
@@ -3357,6 +3358,252 @@ NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
             }
         });
         return muteResult ?: @{@"error": @"Failed to toggle audio mute"};
+    }
+
+    // === Paste Overwrite ===
+    // Pastes clipboard content at the playhead, overwriting (not inserting) what's there.
+    //
+    // FCP's magnetic timeline only supports ripple-insert paste. To get overwrite behavior:
+    //  1. Ensure native clipboard data (converts FCPXML→native if needed)
+    //  2. Probe paste to measure clipboard duration (paste:, read delta, undo)
+    //  3. Ripple-delete the range [playhead, playhead+D] to clear the destination
+    //  4. Paste again (now inserts into the cleared position)
+    //
+    // Net effect: clipboard content replaces [P, P+D]; timeline duration unchanged.
+    if ([action isEqualToString:@"pasteOverwrite"]) {
+        __block NSDictionary *ovResult = nil;
+        SpliceKit_executeOnMainThread(^{
+            __block BOOL screenFrozen = NO;
+            @try {
+                id timeline = SpliceKit_getActiveTimelineModule();
+                if (!timeline) {
+                    ovResult = @{@"error": @"No active timeline module. Is a project open?"};
+                    return;
+                }
+                // Ensure native clipboard data exists (convert FCPXML→native if needed)
+                Class ffpbClass = objc_getClass("FFPasteboard");
+                BOOL hasNative = NO;
+                if (ffpbClass) {
+                    id ffpb = ((id (*)(id, SEL, id))objc_msgSend)(
+                        ((id (*)(id, SEL))objc_msgSend)((id)ffpbClass, @selector(alloc)),
+                        NSSelectorFromString(@"initWithName:"), NSPasteboardNameGeneral);
+                    hasNative = ((BOOL (*)(id, SEL, BOOL))objc_msgSend)(ffpb,
+                        NSSelectorFromString(@"hasEdits:"), NO);
+                }
+                if (!hasNative) hasNative = SpliceKit_convertFCPXMLToNativeClipboard();
+                if (!hasNative) {
+                    ovResult = @{@"error": @"Nothing to paste — clipboard is empty"};
+                    return;
+                }
+
+                // Save playhead position (overwrite start point)
+                SpliceKit_CMTime phTime = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
+                    timeline, @selector(playheadTime));
+                double phSec = (phTime.timescale > 0) ? (double)phTime.value / phTime.timescale : 0;
+
+                // Freeze screen to hide intermediate probe steps
+                NSDisableScreenUpdates();
+                screenFrozen = YES;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC),
+                    dispatch_get_main_queue(), ^{
+                    if (screenFrozen) { screenFrozen = NO; NSEnableScreenUpdates(); }
+                });
+
+                // Step 1 — Determine clipboard duration from FCPXML on the pasteboard.
+                // Reading the FCPXML avoids a probe paste entirely so there are no
+                // visible intermediate steps on screen.
+                double clipDur = 0;
+                {
+                    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+                    Class IXType = objc_getClass("IXXMLPasteboardType");
+                    if (IXType) {
+                        NSString *currentType = ((id (*)(id, SEL))objc_msgSend)(
+                            (id)IXType, NSSelectorFromString(@"current"));
+                        NSData *xmlData = currentType ? [pb dataForType:currentType] : nil;
+                        if (!xmlData) {
+                            NSString *genericType = ((id (*)(id, SEL))objc_msgSend)(
+                                (id)IXType, NSSelectorFromString(@"generic"));
+                            if (genericType) xmlData = [pb dataForType:genericType];
+                        }
+                        if (xmlData) {
+                            NSString *fcpxml = [[NSString alloc] initWithData:xmlData
+                                                                     encoding:NSUTF8StringEncoding];
+                            // Parse duration="X/Ys" from the first <sequence> element
+                            NSRegularExpression *re = [NSRegularExpression
+                                regularExpressionWithPattern:@"<sequence[^>]+\\bduration=\"([^\"]+)\""
+                                                    options:0 error:nil];
+                            NSTextCheckingResult *m = [re firstMatchInString:fcpxml options:0
+                                range:NSMakeRange(0, fcpxml.length)];
+                            if (m && [m numberOfRanges] > 1) {
+                                NSString *d = [fcpxml substringWithRange:[m rangeAtIndex:1]];
+                                // FCP rational time: "numerator/denominators" or "Xs"
+                                if ([d hasSuffix:@"s"]) d = [d substringToIndex:d.length - 1];
+                                NSRange slash = [d rangeOfString:@"/"];
+                                if (slash.location != NSNotFound) {
+                                    double num = [[d substringToIndex:slash.location] doubleValue];
+                                    double den = [[d substringFromIndex:slash.location + 1] doubleValue];
+                                    if (den > 0) clipDur = num / den;
+                                } else {
+                                    clipDur = [d doubleValue];
+                                }
+                            }
+                        }
+                    }
+                }
+                SpliceKit_log(@"[PasteOverwrite] Clipboard duration from FCPXML: %.4fs", clipDur);
+
+                // Fallback: probe paste to measure duration if FCPXML parse failed.
+                // This is a last resort and will cause a brief flash.
+                if (clipDur < 0.001) {
+                    SpliceKit_log(@"[PasteOverwrite] FCPXML duration unavailable — using probe paste");
+                    ((void (*)(id, SEL, id))objc_msgSend)(timeline, NSSelectorFromString(@"paste:"), nil);
+                    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.25]];
+                    SpliceKit_CMTime phAfter = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
+                        timeline, @selector(playheadTime));
+                    double phAfterSec = (phAfter.timescale > 0) ? (double)phAfter.value / phAfter.timescale : 0;
+                    clipDur = phAfterSec - phSec;
+
+                    if (clipDur < 0.001) {
+                        [[NSApplication sharedApplication] sendAction:@selector(undo:) to:nil from:nil];
+                        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+                        screenFrozen = NO;
+                        NSEnableScreenUpdates();
+                        ovResult = @{@"error": @"Cannot determine clipboard duration — clipboard may be empty"};
+                        return;
+                    }
+                    // Undo the probe paste via responder chain
+                    [[NSApplication sharedApplication] sendAction:@selector(undo:) to:nil from:nil];
+                    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+                }
+
+                // Steps 2–4 — Paste → Blade → Select real clips → deleteSelectionOnly:
+                //
+                // DESIGN: Every prior approach tried to operate on the gap clip left by a
+                // lift (step 2). Gap clips resist selection by selectClipAtPlayhead:, and
+                // _deleteCore:replaceWithGap:NO acts on the current clip SELECTION (the
+                // freshly pasted clips), not the range. Instead, we skip the lift entirely:
+                //
+                //  Step 2: paste: at T → clipboard inserts at [T, T+D];
+                //          original content shifts right to [T+D, ...]
+                //  Step 3: blade: at T+2D → creates a clean cut so [T+D, T+2D] is a
+                //          discrete, selectable segment of REAL (non-gap) original clips
+                //  Step 4: _selectRange:{T+D, D} extendRange:NO selectedItem:nil
+                //          → selects all clips in [T+D, T+2D] (even if spanning multiple)
+                //  Step 5: clearRange:, deleteSelectionOnly: → ripple-deletes only the
+                //          selected clips, closing the [T+D, T+2D] hole
+                //
+                // Net: clipboard at [T, T+D], original content from T+2D onward shifts
+                // left by D, timeline duration unchanged. No gap clips at any point.
+
+                int32_t ts = (phTime.timescale > 0) ? phTime.timescale : 600;
+                SpliceKit_CMTime endTime;          // T + D
+                endTime.value     = (int64_t)((phSec + clipDur) * ts + 0.5);
+                endTime.timescale = ts;
+                endTime.flags     = 1;
+                endTime.epoch     = 0;
+                SpliceKit_CMTime gapEndTime;       // T + 2D
+                gapEndTime.value     = (int64_t)((phSec + 2.0 * clipDur) * ts + 0.5);
+                gapEndTime.timescale = ts;
+                gapEndTime.flags     = 1;
+                gapEndTime.epoch     = 0;
+                SEL setPhSel0 = NSSelectorFromString(@"setPlayheadTime:");
+
+                // Step 2: Paste at T (ripple-inserts clipboard; original content shifts right).
+                id tmPaste = SpliceKit_getActiveTimelineModule() ?: timeline;
+                if ([tmPaste respondsToSelector:setPhSel0])
+                    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(tmPaste, setPhSel0, phTime);
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"selectToolArrow:") to:nil from:nil];
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.03]];
+                ((void (*)(id, SEL, id))objc_msgSend)(tmPaste, NSSelectorFromString(@"paste:"), nil);
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.25]];
+
+                // Step 3: Blade at T+2D — isolates exactly D seconds of original content
+                // in [T+D, T+2D].  The edit point at T+D already exists (paste boundary).
+                id tmBlade = SpliceKit_getActiveTimelineModule() ?: timeline;
+                if ([tmBlade respondsToSelector:setPhSel0])
+                    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(tmBlade, setPhSel0, gapEndTime);
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                ((void (*)(id, SEL, id))objc_msgSend)(tmBlade, NSSelectorFromString(@"blade:"), nil);
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.15]];
+
+                // Step 4: Select all clips in [T+D, T+2D] via _selectRange:extendRange:selectedItem:.
+                // Uses NSInvocation because the CMTimeRange struct argument (48 bytes) is too
+                // large to pass cleanly via objc_msgSend on all ABIs.
+                typedef struct { SpliceKit_CMTime start; SpliceKit_CMTime duration; } SK_CMTimeRange;
+                SpliceKit_CMTime durTime;          // duration = D
+                durTime.value     = endTime.value - phTime.value;
+                durTime.timescale = ts;
+                durTime.flags     = 1;
+                durTime.epoch     = 0;
+                SK_CMTimeRange selRange = { endTime, durTime };
+
+                SEL selectRangeSel = NSSelectorFromString(@"_selectRange:extendRange:selectedItem:");
+                id tmSel = SpliceKit_getActiveTimelineModule() ?: timeline;
+                BOOL selectedWithRange = NO;
+                if ([tmSel respondsToSelector:selectRangeSel]) {
+                    NSMethodSignature *sig = [tmSel methodSignatureForSelector:selectRangeSel];
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    inv.target   = tmSel;
+                    inv.selector = selectRangeSel;
+                    [inv setArgument:&selRange atIndex:2];   // CMTimeRange at arg 2
+                    BOOL extendNo = NO;
+                    [inv setArgument:&extendNo atIndex:3];   // extendRange:NO
+                    id nilItem = nil;
+                    [inv setArgument:&nilItem atIndex:4];    // selectedItem:nil
+                    [inv invoke];
+                    selectedWithRange = YES;
+                    SpliceKit_log(@"[PasteOverwrite] _selectRange:%.3f–%.3fs OK",
+                                  phSec + clipDur, phSec + 2.0 * clipDur);
+                } else {
+                    // Fallback: works when [T+D, T+2D] contains exactly one clip
+                    SpliceKit_log(@"[PasteOverwrite] _selectRange: unavailable, using selectClipAtPlayhead:");
+                    SpliceKit_CMTime midTime;
+                    midTime.value     = endTime.value + 1;
+                    midTime.timescale = ts; midTime.flags = 1; midTime.epoch = 0;
+                    if ([tmSel respondsToSelector:setPhSel0])
+                        ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(tmSel, setPhSel0, midTime);
+                    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                    [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"selectClipAtPlayhead:") to:nil from:nil];
+                    selectedWithRange = YES;
+                }
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+
+                // Step 5: clearRange: so delete: acts on the selection, not a range lift.
+                //         deleteSelectionOnly: ripple-deletes only the selected clips.
+                [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"clearRange:") to:nil from:nil];
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+
+                id tmDel = SpliceKit_getActiveTimelineModule() ?: timeline;
+                SEL delSelOnly = NSSelectorFromString(@"deleteSelectionOnly:");
+                if ([tmDel respondsToSelector:delSelOnly]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(tmDel, delSelOnly, nil);
+                } else {
+                    ((void (*)(id, SEL, id))objc_msgSend)(tmDel, NSSelectorFromString(@"delete:"), nil);
+                }
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.25]];
+
+                // Restore playhead to T.
+                id tm = SpliceKit_getActiveTimelineModule() ?: timeline;
+                if ([tm respondsToSelector:setPhSel0])
+                    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(tm, setPhSel0, phTime);
+
+                screenFrozen = NO;
+                NSEnableScreenUpdates();
+
+                ovResult = @{
+                    @"action":            @"pasteOverwrite",
+                    @"status":            @"ok",
+                    @"clipboardDuration": @(clipDur),
+                    @"overwriteStart":    @(phSec),
+                    @"overwriteEnd":      @(phSec + clipDur)
+                };
+            } @catch (NSException *e) {
+                if (screenFrozen) { screenFrozen = NO; NSEnableScreenUpdates(); }
+                ovResult = @{@"error": [NSString stringWithFormat:@"Exception in pasteOverwrite: %@", e.reason]};
+            }
+        });
+        return ovResult ?: @{@"error": @"pasteOverwrite timed out"};
     }
 
     NSString *selector = actionMap[action];
@@ -12193,6 +12440,105 @@ void SpliceKit_installFCPXMLPasteSwizzle(void) {
             (IMP)SpliceKit_swizzled_paste);
         SpliceKit_log(@"[FCPXMLPaste] Swizzled -[FFAnchoredTimelineModule paste:]");
     }
+}
+
+#pragma mark - Paste Overwrite Edit Menu Item
+
+// Inserts "Paste Overwrite" into FCP's Edit menu immediately after the native "Paste" item.
+// Uses a dedicated action target so we can control validation without touching FCP internals.
+
+@interface SpliceKitPasteOverwriteMenuTarget : NSObject
++ (instancetype)shared;
+- (void)pasteOverwrite:(id)sender;
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem;
+@end
+
+@implementation SpliceKitPasteOverwriteMenuTarget
+
++ (instancetype)shared {
+    static SpliceKitPasteOverwriteMenuTarget *sInstance;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ sInstance = [[self alloc] init]; });
+    return sInstance;
+}
+
+- (void)pasteOverwrite:(id)sender {
+    // Dispatch async so the menu can close before the operation starts
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SpliceKit_handleTimelineAction(@{@"action": @"pasteOverwrite"});
+    });
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+    if ([menuItem action] != @selector(pasteOverwrite:)) return NO;
+    // Enabled when FCP native clipboard data is present OR FCPXML is on the pasteboard
+    Class ffpbClass = objc_getClass("FFPasteboard");
+    if (ffpbClass) {
+        id ffpb = ((id (*)(id, SEL, id))objc_msgSend)(
+            ((id (*)(id, SEL))objc_msgSend)((id)ffpbClass, @selector(alloc)),
+            NSSelectorFromString(@"initWithName:"), NSPasteboardNameGeneral);
+        if (((BOOL (*)(id, SEL, BOOL))objc_msgSend)(ffpb, NSSelectorFromString(@"hasEdits:"), NO))
+            return YES;
+    }
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    SEL containsXMLSel = NSSelectorFromString(@"containsXML");
+    if ([pb respondsToSelector:containsXMLSel] &&
+        ((BOOL (*)(id, SEL))objc_msgSend)(pb, containsXMLSel))
+        return YES;
+    return NO;
+}
+
+@end
+
+static BOOL sPasteOverwriteMenuInstalled = NO;
+
+void SpliceKit_installPasteOverwriteMenuItem(void) {
+    if (sPasteOverwriteMenuInstalled) return;
+
+    dispatch_block_t work = ^{
+        NSMenu *mainMenu = [NSApp mainMenu];
+        if (!mainMenu) return;
+
+        // Find the Edit menu by title
+        NSInteger editIdx = [mainMenu indexOfItemWithTitle:@"Edit"];
+        if (editIdx < 0) return;
+        NSMenu *editMenu = [[mainMenu itemAtIndex:editIdx] submenu];
+        if (!editMenu) return;
+
+        // Guard against double-install
+        if ([editMenu indexOfItemWithTitle:@"Paste Overwrite"] >= 0) {
+            sPasteOverwriteMenuInstalled = YES;
+            return;
+        }
+
+        // Find the "Paste" item (action = paste:)
+        NSInteger pasteIdx = -1;
+        for (NSInteger i = 0; i < [editMenu numberOfItems]; i++) {
+            NSMenuItem *item = [editMenu itemAtIndex:i];
+            if ([[item title] isEqualToString:@"Paste"] &&
+                [item action] == NSSelectorFromString(@"paste:")) {
+                pasteIdx = i;
+                break;
+            }
+        }
+        if (pasteIdx < 0) {
+            SpliceKit_log(@"[PasteOverwrite] Could not find Paste item in Edit menu — skipping");
+            return;
+        }
+
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"Paste Overwrite"
+                                                      action:@selector(pasteOverwrite:)
+                                               keyEquivalent:@""];
+        item.target = [SpliceKitPasteOverwriteMenuTarget shared];
+
+        [editMenu insertItem:item atIndex:pasteIdx + 1];
+        sPasteOverwriteMenuInstalled = YES;
+        SpliceKit_log(@"[PasteOverwrite] Inserted 'Paste Overwrite' into Edit menu at index %ld",
+            (long)(pasteIdx + 1));
+    };
+
+    if ([NSThread isMainThread]) work();
+    else dispatch_sync(dispatch_get_main_queue(), work);
 }
 
 #pragma mark - Effect Browser Favorites (context menu)

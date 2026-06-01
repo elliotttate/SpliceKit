@@ -221,6 +221,7 @@ BOOL SpliceKit_isTimelinePerformanceModeEnabled(void);
 // clipboard format, and then lets the original paste proceed. Includes caching,
 // screen freeze to hide the project switch, and playhead restoration.
 void SpliceKit_installFCPXMLPasteSwizzle(void);
+void SpliceKit_installPasteOverwriteMenuItem(void);
 
 // Shared FCPXML-to-native conversion function. Checks if the pasteboard has
 // FCPXML, converts it to native proFFPasteboardUTI format (using cache if
