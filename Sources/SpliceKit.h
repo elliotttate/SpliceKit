@@ -157,6 +157,10 @@ void SpliceKit_removeViewerPinchZoom(void);
 void SpliceKit_setViewerPinchZoomEnabled(BOOL enabled);
 BOOL SpliceKit_isViewerPinchZoomEnabled(void);
 
+// Clip locking: right-click → "Lock/Unlock Clip", ⌥L shortcut, and RPC methods.
+// Locked clips cannot be moved, trimmed, deleted, or cut.
+void SpliceKit_installClipLock(void);
+
 // Adds a right-click "Favorite" option in the effect browser.
 void SpliceKit_installEffectFavoritesSwizzle(void);
 

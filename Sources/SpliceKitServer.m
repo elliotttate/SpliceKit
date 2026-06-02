@@ -12528,7 +12528,8 @@ void SpliceKit_installPasteOverwriteMenuItem(void) {
 
         NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"Paste Overwrite"
                                                       action:@selector(pasteOverwrite:)
-                                               keyEquivalent:@""];
+                                               keyEquivalent:@"v"];
+        item.keyEquivalentModifierMask = NSEventModifierFlagOption;
         item.target = [SpliceKitPasteOverwriteMenuTarget shared];
 
         [editMenu insertItem:item atIndex:pasteIdx + 1];

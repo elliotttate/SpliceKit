@@ -38,6 +38,7 @@ SpliceKitPlugins.m
 SpliceKitMixerPanel.m
 SpliceKitSidebarCoalesce.m
 SpliceKitReplaceAtPlayhead.m
+SpliceKitClipLock.m
 SpliceKitTimelineInteractionSuspend.m
 SpliceKitTimelinePlayheadOverlay.m
 SpliceKitTimelinePerfMode.m

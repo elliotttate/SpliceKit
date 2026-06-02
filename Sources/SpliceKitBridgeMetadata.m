@@ -140,6 +140,21 @@ static void SpliceKit_initBuiltinMetadata(void) {
 
             // scene.*
             @"scene.detect": meta(@"safe", @"Detect scene changes in timeline."),
+
+            // clips.* (clip locking)
+            @"clips.lock":       meta(@"state_dependent", @"Lock the clip at the playhead (or by handle) to prevent editing."),
+            @"clips.unlock":     meta(@"state_dependent", @"Unlock the clip at the playhead (or by handle)."),
+            @"clips.toggleLock": meta(@"state_dependent", @"Toggle lock state on the clip at the playhead (or by handle)."),
+            @"clips.isLocked":   meta(@"safe",            @"Return whether the clip at the playhead (or by handle) is locked."),
+            @"clips.listLocked": meta(@"safe",            @"Return all locked clips in the current sequence."),
+            @"clips.unlockAll":  meta(@"state_dependent", @"Unlock all locked clips in the current sequence."),
+
+            // history.*
+            @"history.show":        meta(@"safe",            @"Open the Undo History palette."),
+            @"history.hide":        meta(@"safe",            @"Close the Undo History palette."),
+            @"history.get":         meta(@"safe",            @"Return all recorded history entries and the current cursor."),
+            @"history.jumpToIndex": meta(@"state_dependent", @"Undo or redo to a specific history index (-1 = pristine)."),
+            @"history.clear":       meta(@"safe",            @"Clear the SpliceKit history buffer (FCP undo stack is unchanged)."),
         };
     });
 }

@@ -3499,6 +3499,11 @@ static void SpliceKit_appDidLaunch(void) {
         SpliceKit_installStructureBlockContextMenu();
     });
 
+    // Clip locking: ⌥L / right-click → Lock/Unlock Clip, RPC, move/trim/delete blocking
+    SpliceKit_safeInstall("ClipLock", ^{
+        SpliceKit_installClipLock();
+    });
+
     // Inline miniature-timeline overview bar — install if user had it on
     if (SpliceKit_isTimelineOverviewBarEnabled()) {
         SpliceKit_safeInstall("TimelineOverviewBar", ^{

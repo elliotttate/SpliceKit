@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.undo-history-ui",
+  "name": "Undo History UI",
+  "version": "1.0.0",
+  "description": "Adds an Undo History palette that shows every action on FCP's undo stack. Includes a toolbar button and Splices menu item. Survives SpliceKit patcher updates.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

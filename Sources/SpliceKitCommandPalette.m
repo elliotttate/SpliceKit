@@ -1354,6 +1354,7 @@ static NSString * const kSeparatorRowID = @"FCPSeparatorRow";
     add(@"Replace from Start", @"replaceFromStart", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Replace clip from start", @[@"replace edit"]);
     add(@"Replace from End", @"replaceFromEnd", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Replace clip from end", @[@"replace edit backtimed"]);
     add(@"Replace Whole Clip", @"replaceWhole", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Replace entire clip", @[@"swap"]);
+    add(@"Replace at Playhead", @"replaceAtPlayhead", @"timeline", SpliceKitCommandCategoryEditing, @"Edit Modes", nil, @"Replace clip synced to timeline playhead position", @[@"replace sync playhead backtimed"]);
 
     // --- Trim Extras ---
     add(@"Trim Start", @"trimStart", @"timeline", SpliceKitCommandCategoryEditing, @"Trim", @"Opt+[", @"Trim clip start to playhead", @[@"head trim"]);
@@ -5163,7 +5164,7 @@ static NSString *FCPFavoriteKey(NSString *type, NSString *action) {
             @"appendEditAudio", @"appendEditVideo",
             @"overwriteEditAudio", @"overwriteEditVideo",
             @"avEditModeAudio", @"avEditModeVideo", @"avEditModeBoth",
-            @"replaceFromStart", @"replaceFromEnd", @"replaceWhole",
+            @"replaceFromStart", @"replaceFromEnd", @"replaceWhole", @"replaceAtPlayhead",
             // Navigation go-to
             @"goToInspector", @"goToTimeline", @"goToViewer", @"goToColorBoard",
         ]];
