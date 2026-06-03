@@ -29,6 +29,7 @@ SpliceKitCaptionPanel.m
 SpliceKitUndoHistoryPanel.m
 SpliceKitCommandPalette.m
 SpliceKitDebugUI.m
+SpliceKitPreferencesPane.m
 SpliceKitStructureBlocks.m
 SpliceKitSectionsBar.m
 SpliceKitTimelineOverview.m
@@ -41,6 +42,7 @@ SpliceKitReplaceAtPlayhead.m
 SpliceKitClipLock.m
 SpliceKitTimelineInteractionSuspend.m
 SpliceKitTimelinePlayheadOverlay.m
+SpliceKitTimelineTabs.m
 SpliceKitTimelinePerfMode.m
 SpliceKitURLImport.m
 SpliceKitLiveCam.m
