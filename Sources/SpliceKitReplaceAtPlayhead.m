@@ -464,6 +464,10 @@ static void SpliceKit_applyReplaceAtPlayheadCommand(id controller, id commandSet
     }
 }
 
+// Forward declarations for the retain-attributes command (defined below).
+static id sReplaceRetainingAttrCmd;
+static void SpliceKit_applyReplaceRetainingAttributesCommand(id controller);
+
 // Re-register on future _loadCommands calls (e.g. Command Editor reloads).
 static void (*sOrigLoadCommands)(id, SEL);
 
@@ -471,9 +475,11 @@ static void SpliceKit_loadCommands(id self, SEL _cmd) {
     sOrigLoadCommands(self, _cmd);
     SEL activeSetSel = NSSelectorFromString(@"_activeCommandSet");
     id commandSet = ((id (*)(id, SEL))objc_msgSend)(self, activeSetSel);
-    // Reset so applyReplaceAtPlayheadCommand re-registers after the reload.
+    // Reset so both commands re-register after the reload.
     sReplaceAtPlayheadCmd = nil;
     SpliceKit_applyReplaceAtPlayheadCommand(self, commandSet);
+    sReplaceRetainingAttrCmd = nil;
+    SpliceKit_applyReplaceRetainingAttributesCommand(self);
 }
 
 // Re-bind the shortcut whenever a new command set becomes active.
@@ -483,6 +489,124 @@ static void SpliceKit_setActiveCommandSet(id self, SEL _cmd, id commandSet) {
     sOrigSetActiveCommandSet(self, _cmd, commandSet);
     if (commandSet)
         SpliceKit_applyReplaceAtPlayheadCommand(self, commandSet);
+}
+
+// ---------------------------------------------------------------------------
+// 2b. Replace and Retain Attributes command (⌥⇧⌘R)
+// ---------------------------------------------------------------------------
+// Replaces the timeline clip at the playhead with the browser selection while
+// preserving all effects, color corrections, transforms, and audio attributes
+// of the original clip.
+//
+// Strategy:
+//   1. Select clip at playhead → copyAttributes: (writes to FCP effects clipboard)
+//   2. replaceWithSelectedMediaAtPlayhead: (uses a private named pasteboard — no conflict)
+//   3. selectClipAtPlayhead: → pasteEffects: (restores all attributes, no dialog)
+
+static void SpliceKit_applyReplaceRetainingAttributesCommand(id controller) {
+    if (sReplaceRetainingAttrCmd) return;
+
+    Class cmdClass = objc_getClass("LKCommand");
+    if (!cmdClass) return;
+    SEL initSel = NSSelectorFromString(@"initWithCommandIdentifier:action:");
+    if (![cmdClass instancesRespondToSelector:initSel]) return;
+
+    id cmd = ((id (*)(id, SEL, NSString *, SEL))objc_msgSend)(
+        [cmdClass alloc], initSel,
+        @"SKReplaceRetainingAttributes",
+        NSSelectorFromString(@"SKReplaceRetainingAttributesAction:"));
+    if (!cmd) return;
+
+    SEL registerSel = NSSelectorFromString(@"registerCommand:");
+    if ([controller respondsToSelector:registerSel])
+        ((void (*)(id, SEL, id))objc_msgSend)(controller, registerSel, cmd);
+
+    SEL addToGroupSel = NSSelectorFromString(@"addCommandWithIdentifier:toGroupWithIdentifier:");
+    if ([controller respondsToSelector:addToGroupSel])
+        ((void (*)(id, SEL, NSString *, NSString *))objc_msgSend)(
+            controller, addToGroupSel,
+            @"SKReplaceRetainingAttributes", @"Editing");
+
+    // Bind ⌥⇧⌘R
+    SEL bindSel = NSSelectorFromString(@"bindCommandWithIdentifier:toKeyEquivalent:modifiers:");
+    if ([controller respondsToSelector:bindSel]) {
+        @try {
+            ((void (*)(id, SEL, NSString *, NSString *, NSUInteger))objc_msgSend)(
+                controller, bindSel,
+                @"SKReplaceRetainingAttributes",
+                @"r",
+                NSEventModifierFlagOption | NSEventModifierFlagShift | NSEventModifierFlagCommand);
+            SpliceKit_log(@"[ReplaceAtPlayhead] Bound ⌥⇧⌘R → SKReplaceRetainingAttributes");
+        } @catch (NSException *e) {
+            SpliceKit_log(@"[ReplaceAtPlayhead] ⌥⇧⌘R binding failed: %@", e);
+        }
+    }
+
+    sReplaceRetainingAttrCmd = cmd;
+    SpliceKit_log(@"[ReplaceAtPlayhead] Registered SKReplaceRetainingAttributes (⌥⇧⌘R)");
+}
+
+// Adds SKReplaceRetainingAttributesAction: to NSApplication so the LKCommand
+// reaches our handler regardless of which view is first responder.
+static void SpliceKit_installRetainAttributesActionHandler(void) {
+    Class appClass = [NSApplication class];
+    SEL actionSel = NSSelectorFromString(@"SKReplaceRetainingAttributesAction:");
+    if ([appClass instancesRespondToSelector:actionSel]) return;
+
+    IMP impl = imp_implementationWithBlock(^(id __unused appSelf, id sender) {
+        id app = [NSApplication sharedApplication];
+
+        // Get the timeline module directly — the user's focus is on the browser
+        // (they just selected a clip there), so sendAction:to:nil would route copy:
+        // and pasteEffects: to the browser instead of the timeline.
+        id tm = SpliceKit_getActiveTimelineModule();
+        if (!tm) {
+            SpliceKit_log(@"[ReplaceAtPlayhead] RetainAttrs: no timeline module");
+            return;
+        }
+
+        // Step 1: Select the timeline clip at the playhead, then copy it directly
+        // to the timeline module. copy: populates FCP's clip clipboard which
+        // pasteEffects: reads from.
+        SEL selectSel = NSSelectorFromString(@"selectClipAtPlayhead:");
+        if ([tm respondsToSelector:selectSel])
+            ((void(*)(id,SEL,id))objc_msgSend)(tm, selectSel, nil);
+
+        if ([tm respondsToSelector:@selector(copy:)]) {
+            ((void(*)(id,SEL,id))objc_msgSend)(tm, @selector(copy:), nil);
+            SpliceKit_log(@"[ReplaceAtPlayhead] RetainAttrs: copied timeline clip");
+        } else {
+            SpliceKit_log(@"[ReplaceAtPlayhead] RetainAttrs: timeline module has no copy: — aborting");
+            return;
+        }
+
+        // Step 2: Replace clip with browser selection at playhead.
+        // Routes to our SpliceKit_replaceWithSelectedMediaAtPlayhead swizzle,
+        // which writes to a private named pasteboard, leaving copy:'s data intact.
+        [app sendAction:NSSelectorFromString(@"replaceWithSelectedMediaAtPlayhead:") to:nil from:nil];
+
+        // Step 3: Select the new clip and paste all effects (no dialog).
+        // Deferred one runloop cycle so the timeline model fully settles after replace.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            id tm2 = SpliceKit_getActiveTimelineModule();
+            if (!tm2) return;
+            SEL selSel = NSSelectorFromString(@"selectClipAtPlayhead:");
+            if ([tm2 respondsToSelector:selSel])
+                ((void(*)(id,SEL,id))objc_msgSend)(tm2, selSel, nil);
+            // "Paste Effects" (Edit > Paste Effects, ⌘⌥V) fires pasteAllAttributes:,
+            // not pasteEffects: — confirmed via dry_run on the menu item.
+            SEL pasteSel = NSSelectorFromString(@"pasteAllAttributes:");
+            if ([tm2 respondsToSelector:pasteSel]) {
+                ((void(*)(id,SEL,id))objc_msgSend)(tm2, pasteSel, nil);
+                SpliceKit_log(@"[ReplaceAtPlayhead] Replace and Retain Attributes complete");
+            } else {
+                [app sendAction:pasteSel to:nil from:nil];
+                SpliceKit_log(@"[ReplaceAtPlayhead] RetainAttrs: pasteAllAttributes: via sendAction (fallback)");
+            }
+        });
+    });
+    class_addMethod(appClass, actionSel, impl, "v@:@");
+    SpliceKit_log(@"[ReplaceAtPlayhead] Installed SKReplaceRetainingAttributesAction: on NSApplication");
 }
 
 // ---------------------------------------------------------------------------
@@ -954,8 +1078,12 @@ void SpliceKit_installReplaceAtPlayhead(void) {
                     SEL activeSetSel = NSSelectorFromString(@"_activeCommandSet");
                     id commandSet = ((id (*)(id, SEL))objc_msgSend)(controller, activeSetSel);
                     SpliceKit_applyReplaceAtPlayheadCommand(controller, commandSet);
+                    SpliceKit_applyReplaceRetainingAttributesCommand(controller);
                 }
             }
         }
+
+        // Install the action handler for SKReplaceRetainingAttributesAction: on NSApplication.
+        SpliceKit_installRetainAttributesActionHandler();
     });
 }
