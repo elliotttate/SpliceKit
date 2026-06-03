@@ -73,8 +73,8 @@ static NSArray<NSString *> *SKDebug_renderFlags(void) {
 }
 
 static NSArray<NSString *> *SKDebug_fcpBehaviorFlags(void) {
+    // FFDontCoalesceGaps lives in the SpliceKit preferences pane — omit here.
     return @[
-        @"FFDontCoalesceGaps",
         @"FFDisableSnapping",
         @"FFDisableSkimming",
     ];
@@ -469,14 +469,28 @@ static NSBox *SKDebug_makeSeparator(void) {
     return box;
 }
 
-static NSStackView *SKDebug_makeCheckboxGroup(NSArray<NSString *> *keys) {
+// descriptions: key → human-readable explanation (may be nil for a given key).
+static NSStackView *SKDebug_makeCheckboxGroup(NSArray<NSString *> *keys,
+                                              NSDictionary<NSString *, NSString *> *descriptions) {
     NSStackView *stack = [NSStackView stackViewWithViews:@[]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
-    stack.spacing = 4;
+    stack.spacing = 6;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     for (NSString *key in keys) {
-        [stack addArrangedSubview:SKDebug_makeCheckbox(key, SKDebug_humanizeKey(key))];
+        NSString *desc = descriptions[key];
+        if (desc.length > 0) {
+            NSStackView *row = [NSStackView stackViewWithViews:@[]];
+            row.orientation = NSUserInterfaceLayoutOrientationVertical;
+            row.alignment = NSLayoutAttributeLeading;
+            row.spacing = 2;
+            row.translatesAutoresizingMaskIntoConstraints = NO;
+            [row addArrangedSubview:SKDebug_makeCheckbox(key, SKDebug_humanizeKey(key))];
+            [row addArrangedSubview:SKDebug_makeNoteLabel(desc)];
+            [stack addArrangedSubview:row];
+        } else {
+            [stack addArrangedSubview:SKDebug_makeCheckbox(key, SKDebug_humanizeKey(key))];
+        }
     }
     return stack;
 }
@@ -529,22 +543,52 @@ static NSView *SKDebug_buildDebugPrefsView(void) {
 
     // --- Timeline Visual Overlays ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Timeline Visual Overlays")];
-    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_tlkVisualFlags())];
+    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_tlkVisualFlags(), @{
+        @"TLKShowItemLaneIndex":      @"Shows the lane number on each timeline item — useful for understanding connected clip stacking order.",
+        @"TLKShowMisalignedEdges":    @"Highlights item edges that are not pixel-aligned, which can cause sub-pixel rendering artefacts.",
+        @"TLKShowRenderBar":          @"Shows the render status colour bar overlaid on the timeline ruler.",
+        @"TLKShowHiddenGapItems":     @"Reveals gap items that FCP normally hides from view, exposing the true timeline data model.",
+        @"TLKShowHiddenItemHeaders":  @"Reveals item header elements (role labels, etc.) that FCP hides in compact layouts.",
+        @"TLKShowInvalidLayoutRects": @"Highlights rectangles where layout constraints could not be satisfied.",
+        @"TLKShowContainerBounds":    @"Draws the bounding box of each timeline container (primary storyline, connected story lines).",
+        @"TLKShowContentLayers":      @"Draws the boundary of each content layer within an item (video, audio, overlay).",
+        @"TLKShowRulerBounds":        @"Shows the ruler overlay bounding box.",
+        @"TLKShowUsedRegion":         @"Highlights the portion of each container that is actually occupied by items.",
+        @"TLKShowZeroHeightSpineItems": @"Reveals spine items with zero height — normally invisible but present in the data model.",
+        @"TLKDebugColorChangedObjects": @"Tints objects that changed during the last layout pass, making update propagation visible.",
+    })];
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- Timeline Logging ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Timeline Logging")];
-    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_tlkLoggingFlags())];
+    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_tlkLoggingFlags(), @{
+        @"TLKLogVisibleLayerChanges":    @"Logs when visible layers are added, removed, or reordered (high volume during scrubbing).",
+        @"TLKLogParts":                  @"Logs timeline part lifecycle events: load, layout, unload, recycle.",
+        @"TLKLogReloadRequests":         @"Logs every request to reload or refresh timeline content.",
+        @"TLKLogRecyclingLayerChanges":  @"Logs when layers are recycled between items to reduce allocation overhead.",
+        @"TLKLogVisibleRectChanges":     @"Logs changes to the visible rectangle as the user scrolls or zooms.",
+        @"TLKLogSegmentationStatistics": @"Logs statistics about how the timeline is segmented for rendering.",
+    })];
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- Performance & Rendering ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Performance & Rendering")];
-    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_renderFlags())];
+    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_renderFlags(), @{
+        @"TLKPerformanceMonitorEnabled":         @"Enables TLK's built-in overlay showing layout and render timings per frame.",
+        @"TLKDisableItemContents":               @"Disables all item content rendering (video frames, waveforms, thumbnails). Useful for isolating UI performance from media decode.",
+        @"DebugKeyItemVideoFilmstripsDisabled":  @"Disables video filmstrip thumbnail generation only, leaving waveforms and backgrounds intact.",
+        @"DebugKeyItemBackgroundDisabled":       @"Disables the coloured background bar behind each clip.",
+        @"DebugKeyItemAudioWaveformsDisabled":   @"Disables audio waveform drawing — can speed up rendering on large timelines.",
+        @"GPU_LOGGING":                          @"Enables verbose GPU and FxPlug shader pipeline logging in the system log.",
+    })];
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- FCP Behavior Overrides ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"FCP Behavior Overrides")];
-    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_fcpBehaviorFlags())];
+    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_fcpBehaviorFlags(), @{
+        @"FFDisableSnapping":  @"Disables magnetic snapping when moving or trimming clips. Useful when testing free-form positioning.",
+        @"FFDisableSkimming":  @"Disables clip skimming when the pointer hovers over clips in the browser or timeline.",
+    })];
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- ProAppSupport Log ---
@@ -569,6 +613,11 @@ static NSView *SKDebug_buildDebugPrefsView(void) {
         levelPopup.target = [SpliceKitDebugController shared];
         levelPopup.action = @selector(setLogLevel:);
         [row addArrangedSubview:levelPopup];
+        NSTextField *logLevelNote = SKDebug_makeNoteLabel(
+            @"Minimum severity for ProAppSupport-emitted log entries. "
+            @"Trace is most verbose; Failure is errors only.");
+        logLevelNote.preferredMaxLayoutWidth = 200;
+        [row addArrangedSubview:logLevelNote];
         [row addArrangedSubview:SKDebug_makeCheckbox(@"LogUI", @"Show In-App Log Panel")];
         [row addArrangedSubview:SKDebug_makeCheckbox(@"LogThread", @"Include Thread Info")];
         [root addArrangedSubview:row];
@@ -621,11 +670,18 @@ static NSView *SKDebug_buildDebugPrefsView(void) {
         [row addArrangedSubview:p2];
 
         [root addArrangedSubview:row];
+        [root addArrangedSubview:SKDebug_makeNoteLabel(
+            @"Video Decoder Log: verbosity of the NLE video decode pipeline (0 = off, higher = more detail). "
+            @"Frame Drop Log: verbosity of dropped-frame reporting (0 = off). "
+            @"Both write to the system unified log — view with Console.app or `log stream --process \"Final Cut Pro\"`.")];
     }
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- Presets (row of buttons) ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Presets")];
+    [root addArrangedSubview:SKDebug_makeNoteLabel(
+        @"One-click combinations of the flags above. \"All Off\" removes every debug key "
+        @"from NSUserDefaults and CFPreferences, restoring FCP's default behaviour.")];
     {
         NSStackView *row1 = [NSStackView stackViewWithViews:@[
             SKDebug_makePresetButton(@"Timeline Visual", @"timeline_visual"),
@@ -649,6 +705,11 @@ static NSView *SKDebug_buildDebugPrefsView(void) {
 
     // --- Actions ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Actions")];
+    [root addArrangedSubview:SKDebug_makeNoteLabel(
+        @"HMD Framerate Monitor uses FCP's built-in HMDFramerate (ProCore) to log overall fps, "
+        @"average getFrame() time in ms, and min/max frame times every 2 seconds. "
+        @"Output appears in the system unified log — monitor with Console.app. "
+        @"\"Clear User Defaults\" removes all debug flags set on this tab.")];
     {
         NSStackView *row = [NSStackView stackViewWithViews:@[]];
         row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -784,18 +845,9 @@ BOOL SpliceKit_installDebugSettingsPanel(void) {
         [modules addObject:module];
         master[title] = view;
 
-        // Rebuild the toolbar so the Debug tab appears. Private but stable — it's
-        // the same method LKPreferences calls from addPreferenceNamed:owner:.
-        SEL setupToolbar = NSSelectorFromString(@"_setupToolbar");
-        if ([shared respondsToSelector:setupToolbar]) {
-            ((void (*)(id, SEL))objc_msgSend)(shared, setupToolbar);
-        }
-
-        // Also update the panel's size constraint if it's open
-        SEL updateFrame = @selector(updatePanelFrameAnimated:);
-        if ([shared respondsToSelector:updateFrame]) {
-            ((void (*)(id, SEL, BOOL))objc_msgSend)(shared, updateFrame, NO);
-        }
+        // Do NOT call _setupToolbar here — it wipes FCP's owner registry and
+        // breaks native tab switching. Toolbar items are inserted directly
+        // when showPreferencesPanel is called (see SpliceKitPreferencesPane).
 
         sDebugPrefsInstalled = YES;
         success = YES;
