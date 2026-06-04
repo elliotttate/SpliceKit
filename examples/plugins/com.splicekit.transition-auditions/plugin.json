@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.transition-auditions",
+  "name": "Transition Auditions",
+  "version": "1.0.0",
+  "description": "Adds a Transition Auditions button to FCP's timeline bar. Position the playhead near a cut, click the button, choose All Transitions or a custom subset, then cycle through them live with Prev/Next. Keep the one you like or cancel to remove it.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}
