@@ -3509,6 +3509,9 @@ static void SpliceKit_appDidLaunch(void) {
     // Install effect browser favorites context menu (always on)
     SpliceKit_installEffectFavoritesSwizzle();
 
+    // Expand audio waveform to full clip height when video thumbnails are hidden (always on)
+    SpliceKit_installWaveformExpand();
+
     // Debounce FFSidebarModule KVO churn on the Effects sidebar's category
     // list during live scroll (fixes scrolling jerks with many effects).
     if (SpliceKit_isSidebarCoalesceLiveScrollEnabled()) {
