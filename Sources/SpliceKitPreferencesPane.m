@@ -9,6 +9,7 @@
 //
 
 #import "SpliceKitPreferencesPane.h"
+#import "SpliceKitTimecodeBarShortcuts.h"
 #import "SpliceKit.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
@@ -127,6 +128,34 @@ static void SKPrefs_reloadTLK(void) {
     NSString *value = (idx == 1) ? @"fill" : (idx == 2) ? @"none" : @"fit";
     SpliceKit_setDefaultSpatialConformType(value);
     SpliceKit_log(@"Default spatial conform -> %@", value);
+}
+
+- (void)timecodeBarShortcutToggled:(NSButton *)sender {
+    NSString *actionID = sender.identifier;
+    BOOL on = (sender.state == NSControlStateValueOn);
+
+    // Rebuild config: start from existing saved config, add/remove this action
+    NSMutableArray *config = [SpliceKit_getTimecodeBarConfig() mutableCopy];
+    NSArray *catalogue    = SpliceKit_getAvailableTimecodeBarActions();
+
+    if (on) {
+        // Append if not already present; fill in canonical metadata
+        BOOL exists = NO;
+        for (NSDictionary *item in config)
+            if ([item[@"id"] isEqualToString:actionID]) { exists = YES; break; }
+        if (!exists) {
+            for (NSDictionary *meta in catalogue) {
+                if ([meta[@"id"] isEqualToString:actionID]) {
+                    [config addObject:meta];
+                    break;
+                }
+            }
+        }
+    } else {
+        [config filterUsingPredicate:
+            [NSPredicate predicateWithFormat:@"id != %@", actionID]];
+    }
+    SpliceKit_setTimecodeBarConfig(config);
 }
 
 @end
@@ -314,6 +343,101 @@ static NSView *SKPrefs_buildView(void) {
         @"Bundles the 120 Hz playhead overlay, interaction-suspend (freezes "
          @"non-essential redraws during drags), and optimized reload into one toggle.",
         SpliceKit_isTimelinePerformanceModeEnabled(), kNoteWidth)];
+
+    [root addArrangedSubview:SKPrefs_makeSep()];
+
+    // ── Timecode Bar Shortcuts ───────────────────────────────────────────
+    [root addArrangedSubview:SKPrefs_makeHeader(@"Timecode Bar Shortcuts")];
+    [root addArrangedSubview:SKPrefs_makeNote(
+        @"Check the actions you want as quick-access buttons in the timeline toolbar, "
+         @"between the history arrows and the snapping/skimming controls. "
+         @"Changes take effect immediately.",
+        kNoteWidth)];
+
+    {
+        NSArray *catalogue = SpliceKit_getAvailableTimecodeBarActions();
+        NSArray *config    = SpliceKit_getTimecodeBarConfig();
+
+        // Build a set of currently-enabled action IDs for O(1) lookup
+        NSMutableSet *enabledIDs = [NSMutableSet set];
+        for (NSDictionary *item in config) [enabledIDs addObject:item[@"id"]];
+
+        // Group by category, emit a compact label + row of checkboxes per group
+        NSMutableArray *seenCategories = [NSMutableArray array];
+        NSMutableDictionary *byCategory = [NSMutableDictionary dictionary];
+        for (NSDictionary *action in catalogue) {
+            NSString *cat = action[@"category"] ?: @"Other";
+            if (!byCategory[cat]) {
+                byCategory[cat] = [NSMutableArray array];
+                [seenCategories addObject:cat];
+            }
+            [byCategory[cat] addObject:action];
+        }
+
+        for (NSString *category in seenCategories) {
+            NSArray *actions = byCategory[category];
+
+            NSTextField *catLabel = [NSTextField labelWithString:category];
+            catLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+            catLabel.textColor = [NSColor secondaryLabelColor];
+            catLabel.translatesAutoresizingMaskIntoConstraints = NO;
+            [root addArrangedSubview:catLabel];
+
+            // Lay actions out in a flow: up to 4 per row
+            static const NSInteger kPerRow = 4;
+            NSInteger i = 0;
+            while (i < (NSInteger)actions.count) {
+                NSStackView *row = [NSStackView stackViewWithViews:@[]];
+                row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+                row.spacing = 16;
+                row.alignment = NSLayoutAttributeCenterY;
+                row.translatesAutoresizingMaskIntoConstraints = NO;
+                row.edgeInsets = NSEdgeInsetsMake(0, 20, 0, 0);
+
+                for (NSInteger j = 0; j < kPerRow && i < (NSInteger)actions.count; j++, i++) {
+                    NSDictionary *action = actions[i];
+                    NSString *actionID = action[@"id"];
+                    NSString *label    = action[@"tooltip"] ?: actionID;
+                    // Trim key equiv suffix for checkbox label (e.g. "Blade — B" → "Blade")
+                    NSRange dash = [label rangeOfString:@" — "];
+                    if (dash.location != NSNotFound) label = [label substringToIndex:dash.location];
+
+                    NSButton *cb = [NSButton checkboxWithTitle:label
+                                                        target:[SKPrefsController shared]
+                                                        action:@selector(timecodeBarShortcutToggled:)];
+                    cb.identifier = actionID;
+                    cb.state = [enabledIDs containsObject:actionID]
+                               ? NSControlStateValueOn : NSControlStateValueOff;
+                    cb.translatesAutoresizingMaskIntoConstraints = NO;
+                    cb.font = [NSFont systemFontOfSize:12];
+
+                    // Show the SF Symbol as a small image on the checkbox label
+                    NSImage *img = [NSImage imageWithSystemSymbolName:action[@"icon"]
+                                                accessibilityDescription:label];
+                    if (img) {
+                        // We can't directly put an image on a checkbox, so build a
+                        // horizontal stack of image + checkbox
+                        NSImageView *iv = [[NSImageView alloc] initWithFrame:NSMakeRect(0,0,14,14)];
+                        iv.image = img;
+                        iv.imageScaling = NSImageScaleProportionallyUpOrDown;
+                        iv.translatesAutoresizingMaskIntoConstraints = NO;
+                        [iv.widthAnchor constraintEqualToConstant:14].active = YES;
+                        [iv.heightAnchor constraintEqualToConstant:14].active = YES;
+
+                        NSStackView *cell = [NSStackView stackViewWithViews:@[iv, cb]];
+                        cell.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+                        cell.spacing = 4;
+                        cell.alignment = NSLayoutAttributeCenterY;
+                        cell.translatesAutoresizingMaskIntoConstraints = NO;
+                        [row addArrangedSubview:cell];
+                    } else {
+                        [row addArrangedSubview:cb];
+                    }
+                }
+                [root addArrangedSubview:row];
+            }
+        }
+    }
 
     return doc;
 }

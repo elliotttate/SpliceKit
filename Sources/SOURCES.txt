@@ -43,6 +43,7 @@ SpliceKitClipLock.m
 SpliceKitTimelineInteractionSuspend.m
 SpliceKitTimelinePlayheadOverlay.m
 SpliceKitTimelineTabs.m
+SpliceKitTimecodeBarShortcuts.m
 SpliceKitTimelinePerfMode.m
 SpliceKitWaveformExpand.m
 SpliceKitURLImport.m

@@ -20,6 +20,7 @@
 #import "SpliceKitImmersivePreviewPanel.h"
 #import "SpliceKitUndoHistoryPanel.h"
 #import "SpliceKitTimelineTabs.h"
+#import "SpliceKitTimecodeBarShortcuts.h"
 #import <AppKit/AppKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <Security/Security.h>
@@ -3589,6 +3590,11 @@ static void SpliceKit_appDidLaunch(void) {
     // back/forward arrow tap-dance.
     SpliceKit_safeInstall("TimelineTabs", ^{
         SpliceKit_installTimelineTabs();
+    });
+
+    // Customizable shortcut buttons injected into the timeline toolbar's flex gap.
+    SpliceKit_safeInstall("TimecodeBarShortcuts", ^{
+        SpliceKit_installTimecodeBarShortcuts();
     });
 
     // Bridge metadata (bridge.describe / bridge.alive) and async/events
