@@ -138,7 +138,7 @@ static NSImage *SFPB_makeIcon(NSString *symbolName, NSString *description) {
     NSImage *img = [NSImage imageWithSystemSymbolName:symbolName
                              accessibilityDescription:description];
     NSImageSymbolConfiguration *cfg = [NSImageSymbolConfiguration
-        configurationWithPointSize:11 weight:NSFontWeightMedium];
+        configurationWithPointSize:19 weight:NSFontWeightMedium];
     return img ? [img imageWithSymbolConfiguration:cfg] : nil;
 }
 
@@ -326,18 +326,18 @@ static void SFPB_addButtonsToTimelineBar(void) {
 
         // fwdBtn: trailing edge touches segControl leading edge with a 6pt gap.
         // bwdBtn: trailing edge touches fwdBtn leading edge with a 2pt gap.
-        // Both are vertically centred on the segControl.
-        CGFloat w = 26.0, h = 20.0;
+        // Both match the segControl height and are vertically centred on it.
+        CGFloat w = 40.0;
         [NSLayoutConstraint activateConstraints:@[
             [fwdBtn.trailingAnchor constraintEqualToAnchor:segControl.leadingAnchor constant:-6.0],
             [fwdBtn.centerYAnchor  constraintEqualToAnchor:segControl.centerYAnchor],
             [fwdBtn.widthAnchor    constraintEqualToConstant:w],
-            [fwdBtn.heightAnchor   constraintEqualToConstant:h],
+            [fwdBtn.heightAnchor   constraintEqualToAnchor:segControl.heightAnchor],
 
             [bwdBtn.trailingAnchor constraintEqualToAnchor:fwdBtn.leadingAnchor constant:-2.0],
             [bwdBtn.centerYAnchor  constraintEqualToAnchor:segControl.centerYAnchor],
             [bwdBtn.widthAnchor    constraintEqualToConstant:w],
-            [bwdBtn.heightAnchor   constraintEqualToConstant:h],
+            [bwdBtn.heightAnchor   constraintEqualToAnchor:segControl.heightAnchor],
         ]];
 
         if (sSFPBAPI)

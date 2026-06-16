@@ -15,6 +15,16 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+// FCP-default preference functions defined in SpliceKitServer.m
+extern NSString *SpliceKit_getTransitionWarningDefault(void);
+extern void      SpliceKit_setTransitionWarningDefault(NSString *value);
+extern NSInteger SpliceKit_getDefaultClipHeight(void);
+extern void      SpliceKit_setDefaultClipHeight(NSInteger pixelHeight);
+extern NSString *SpliceKit_getDefaultAudioChannelConfig(void);
+extern void      SpliceKit_setDefaultAudioChannelConfig(NSString *value);
+extern NSString *SpliceKit_getDefaultAudioPanMode(void);
+extern void      SpliceKit_setDefaultAudioPanMode(NSString *value);
+
 // ---------------------------------------------------------------------------
 #pragma mark - Module class
 
@@ -67,6 +77,12 @@ static NSString *const kIDColorizeLanes    = @"TLKColorizesLanes";
 static NSString *const kIDDontCoalesceGaps = @"FFDontCoalesceGaps";
 static NSString *const kIDPlayheadOverlay  = @"timelinePlayheadOverlay";
 static NSString *const kIDPerfMode         = @"timelinePerformanceMode";
+// FCP Defaults popup identifiers
+static NSString *const kIDTransitionWarning    = @"transitionWarningDefault";
+static NSString *const kIDDefaultClipHeight    = @"defaultClipHeight";
+static NSString *const kIDDefaultAudioChannel  = @"defaultAudioChannelConfig";
+static NSString *const kIDDefaultAudioPanMode  = @"defaultAudioPanMode";
+static NSString *const kIDSpatialConform       = @"defaultSpatialConformType";
 
 @interface SKPrefsController : NSObject
 + (instancetype)shared;
@@ -125,6 +141,48 @@ static void SKPrefs_reloadTLK(void) {
 
 - (void)conformPopupChanged:(NSPopUpButton *)popup {
     NSInteger idx = popup.indexOfSelectedItem;
+    NSString *value = (idx == 1) ? @"fill" : (idx == 2) ? @"none" : @"fit";
+    SpliceKit_setDefaultSpatialConformType(value);
+    SpliceKit_log(@"Default spatial conform -> %@", value);
+}
+
+- (void)transitionWarningPopupChanged:(NSPopUpButton *)popup {
+    NSInteger idx = popup.indexOfSelectedItem;
+    // 0 = Always Ask, 1 = Use Freeze Frames, 2 = Ripple Trim
+    NSString *value = (idx == 1) ? @"freeze_frames" : (idx == 2) ? @"ripple_trim" : @"ask";
+    SpliceKit_setTransitionWarningDefault(value);
+    SpliceKit_log(@"Transition warning default -> %@", value);
+}
+
+- (void)clipHeightPopupChanged:(NSPopUpButton *)popup {
+    NSInteger idx = popup.indexOfSelectedItem;
+    // 0 = No Override, 1 = Small (35), 2 = Medium (80), 3 = Large (153)
+    NSInteger heights[] = {0, 35, 80, 153};
+    NSInteger height = (idx >= 0 && idx < 4) ? heights[idx] : 0;
+    SpliceKit_setDefaultClipHeight(height);
+    SpliceKit_log(@"Default clip height -> %ld", (long)height);
+}
+
+- (void)audioChannelPopupChanged:(NSPopUpButton *)popup {
+    NSInteger idx = popup.indexOfSelectedItem;
+    // 0 = No Override, 1 = Stereo, 2 = Dual Mono
+    NSString *value = (idx == 1) ? @"stereo" : (idx == 2) ? @"dual_mono" : @"";
+    SpliceKit_setDefaultAudioChannelConfig(value.length ? value : nil);
+    SpliceKit_log(@"Default audio channel config -> %@", value.length ? value : @"(none)");
+}
+
+- (void)audioPanModePopupChanged:(NSPopUpButton *)popup {
+    NSInteger idx = popup.indexOfSelectedItem;
+    // 0 = No Override, 1 = None, 2 = Stereo Left+Right, 3 = Mono
+    NSString *vals[] = {@"", @"none", @"stereo", @"mono"};
+    NSString *value = (idx >= 0 && idx < 4) ? vals[idx] : @"";
+    SpliceKit_setDefaultAudioPanMode(value.length ? value : nil);
+    SpliceKit_log(@"Default audio pan mode -> %@", value.length ? value : @"(none)");
+}
+
+- (void)spatialConformPopupChangedInFCPDefaults:(NSPopUpButton *)popup {
+    NSInteger idx = popup.indexOfSelectedItem;
+    // 0 = Fit (Default), 1 = Fill, 2 = None
     NSString *value = (idx == 1) ? @"fill" : (idx == 2) ? @"none" : @"fit";
     SpliceKit_setDefaultSpatialConformType(value);
     SpliceKit_log(@"Default spatial conform -> %@", value);
@@ -269,15 +327,191 @@ static NSView *SKPrefs_buildView(void) {
          @"camera, memory card, or external drive is connected.",
         SpliceKit_isSuppressAutoImportEnabled(), kNoteWidth)];
 
-    // Default Spatial Conform — popup row
+    [root addArrangedSubview:SKPrefs_makeSep()];
+
+    // ── FCP Defaults ─────────────────────────────────────────────────────
+    [root addArrangedSubview:SKPrefs_makeHeader(@"FCP Defaults")];
+    [root addArrangedSubview:SKPrefs_makeNote(
+        @"Save your preferred answer for common FCP dialogs. "
+         @"These apply automatically so the dialog never interrupts your workflow.",
+        kNoteWidth)];
+
+    // ── Transition Warning popup ─────────────────────────────────────────
     {
+        NSStackView *col = [NSStackView stackViewWithViews:@[]];
+        col.orientation = NSUserInterfaceLayoutOrientationVertical;
+        col.alignment = NSLayoutAttributeLeading;
+        col.spacing = 2;
+        col.translatesAutoresizingMaskIntoConstraints = NO;
+
         NSStackView *row = [NSStackView stackViewWithViews:@[]];
         row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
         row.alignment = NSLayoutAttributeCenterY;
         row.spacing = 8;
         row.translatesAutoresizingMaskIntoConstraints = NO;
 
-        NSTextField *lbl = [NSTextField labelWithString:@"Default New Clip Conform:"];
+        NSTextField *lbl = [NSTextField labelWithString:@"Not Enough Media (Transition):"];
+        lbl.translatesAutoresizingMaskIntoConstraints = NO;
+        [row addArrangedSubview:lbl];
+
+        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        [popup addItemWithTitle:@"Always Ask"];
+        [popup addItemWithTitle:@"Use Freeze Frames"];
+        [popup addItemWithTitle:@"Ripple Trim"];
+        NSString *twPref = SpliceKit_getTransitionWarningDefault();
+        if ([twPref isEqualToString:@"freeze_frames"])    [popup selectItemAtIndex:1];
+        else if ([twPref isEqualToString:@"ripple_trim"]) [popup selectItemAtIndex:2];
+        else                                               [popup selectItemAtIndex:0];
+        popup.identifier = kIDTransitionWarning;
+        popup.target = [SKPrefsController shared];
+        popup.action = @selector(transitionWarningPopupChanged:);
+        popup.translatesAutoresizingMaskIntoConstraints = NO;
+        [row addArrangedSubview:popup];
+        [col addArrangedSubview:row];
+        [col addArrangedSubview:SKPrefs_makeNote(
+            @"When applying a transition without enough media handles: ask every time, "
+             @"automatically extend clip edges with frozen frames, or let FCP ripple-trim the clips.",
+            kNoteWidth)];
+        [root addArrangedSubview:col];
+    }
+
+    // ── Default Clip Height popup ─────────────────────────────────────────
+    {
+        NSStackView *col = [NSStackView stackViewWithViews:@[]];
+        col.orientation = NSUserInterfaceLayoutOrientationVertical;
+        col.alignment = NSLayoutAttributeLeading;
+        col.spacing = 2;
+        col.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *row = [NSStackView stackViewWithViews:@[]];
+        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        row.alignment = NSLayoutAttributeCenterY;
+        row.spacing = 8;
+        row.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *lbl = [NSTextField labelWithString:@"Default Clip Height:"];
+        lbl.translatesAutoresizingMaskIntoConstraints = NO;
+        [row addArrangedSubview:lbl];
+
+        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        [popup addItemWithTitle:@"No Override"];
+        [popup addItemWithTitle:@"Small"];
+        [popup addItemWithTitle:@"Medium"];
+        [popup addItemWithTitle:@"Large"];
+        NSInteger clipH = SpliceKit_getDefaultClipHeight();
+        if (clipH == 35)       [popup selectItemAtIndex:1];
+        else if (clipH == 80)  [popup selectItemAtIndex:2];
+        else if (clipH == 153) [popup selectItemAtIndex:3];
+        else                   [popup selectItemAtIndex:0];
+        popup.identifier = kIDDefaultClipHeight;
+        popup.target = [SKPrefsController shared];
+        popup.action = @selector(clipHeightPopupChanged:);
+        popup.translatesAutoresizingMaskIntoConstraints = NO;
+        [row addArrangedSubview:popup];
+        [col addArrangedSubview:row];
+        [col addArrangedSubview:SKPrefs_makeNote(
+            @"Sets FFOrganizedTimelineClipHeight in FCP's global preferences, which controls "
+             @"the default clip row height for new timelines.",
+            kNoteWidth)];
+        [root addArrangedSubview:col];
+    }
+
+    // ── Default Audio Channel Config popup ────────────────────────────────
+    {
+        NSStackView *col = [NSStackView stackViewWithViews:@[]];
+        col.orientation = NSUserInterfaceLayoutOrientationVertical;
+        col.alignment = NSLayoutAttributeLeading;
+        col.spacing = 2;
+        col.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *row = [NSStackView stackViewWithViews:@[]];
+        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        row.alignment = NSLayoutAttributeCenterY;
+        row.spacing = 8;
+        row.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *lbl = [NSTextField labelWithString:@"Default Audio Channels:"];
+        lbl.translatesAutoresizingMaskIntoConstraints = NO;
+        [row addArrangedSubview:lbl];
+
+        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        [popup addItemWithTitle:@"No Override"];
+        [popup addItemWithTitle:@"Stereo"];
+        [popup addItemWithTitle:@"Dual Mono"];
+        NSString *audioCfg = SpliceKit_getDefaultAudioChannelConfig();
+        if ([audioCfg isEqualToString:@"stereo"])    [popup selectItemAtIndex:1];
+        else if ([audioCfg isEqualToString:@"dual_mono"]) [popup selectItemAtIndex:2];
+        else                                          [popup selectItemAtIndex:0];
+        popup.identifier = kIDDefaultAudioChannel;
+        popup.target = [SKPrefsController shared];
+        popup.action = @selector(audioChannelPopupChanged:);
+        popup.translatesAutoresizingMaskIntoConstraints = NO;
+        [row addArrangedSubview:popup];
+        [col addArrangedSubview:row];
+        [col addArrangedSubview:SKPrefs_makeNote(
+            @"Saves your preferred channel interpretation for two-channel audio clips "
+             @"(stereo L+R mix vs. dual mono independent channels). "
+             @"Apply to selected clips via the bridge set_bridge_option_value tool.",
+            kNoteWidth)];
+        [root addArrangedSubview:col];
+    }
+
+    // ── Default Audio Pan Mode popup ─────────────────────────────────────
+    {
+        NSStackView *col = [NSStackView stackViewWithViews:@[]];
+        col.orientation = NSUserInterfaceLayoutOrientationVertical;
+        col.alignment = NSLayoutAttributeLeading;
+        col.spacing = 2;
+        col.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *row = [NSStackView stackViewWithViews:@[]];
+        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        row.alignment = NSLayoutAttributeCenterY;
+        row.spacing = 8;
+        row.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *lbl = [NSTextField labelWithString:@"Default Audio Pan Mode:"];
+        lbl.translatesAutoresizingMaskIntoConstraints = NO;
+        [row addArrangedSubview:lbl];
+
+        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        [popup addItemWithTitle:@"No Override"];
+        [popup addItemWithTitle:@"None (Stereo Passthrough)"];
+        [popup addItemWithTitle:@"Stereo Left+Right"];
+        [popup addItemWithTitle:@"Mono"];
+        NSString *panMode = SpliceKit_getDefaultAudioPanMode();
+        if ([panMode isEqualToString:@"none"])        [popup selectItemAtIndex:1];
+        else if ([panMode isEqualToString:@"stereo"]) [popup selectItemAtIndex:2];
+        else if ([panMode isEqualToString:@"mono"])   [popup selectItemAtIndex:3];
+        else                                          [popup selectItemAtIndex:0];
+        popup.identifier = kIDDefaultAudioPanMode;
+        popup.target = [SKPrefsController shared];
+        popup.action = @selector(audioPanModePopupChanged:);
+        popup.translatesAutoresizingMaskIntoConstraints = NO;
+        [row addArrangedSubview:popup];
+        [col addArrangedSubview:row];
+        [col addArrangedSubview:SKPrefs_makeNote(
+            @"Panning mode applied to audio clips: None = stereo passthrough (no panner AU), "
+             @"Stereo Left+Right = stereo panning, Mono = mono downmix panner.",
+            kNoteWidth)];
+        [root addArrangedSubview:col];
+    }
+
+    // ── Default Spatial Conform popup ─────────────────────────────────────
+    {
+        NSStackView *col = [NSStackView stackViewWithViews:@[]];
+        col.orientation = NSUserInterfaceLayoutOrientationVertical;
+        col.alignment = NSLayoutAttributeLeading;
+        col.spacing = 2;
+        col.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *row = [NSStackView stackViewWithViews:@[]];
+        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        row.alignment = NSLayoutAttributeCenterY;
+        row.spacing = 8;
+        row.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *lbl = [NSTextField labelWithString:@"Default Spatial Conform:"];
         lbl.translatesAutoresizingMaskIntoConstraints = NO;
         [row addArrangedSubview:lbl];
 
@@ -285,28 +519,21 @@ static NSView *SKPrefs_buildView(void) {
         [popup addItemWithTitle:@"Fit (Default)"];
         [popup addItemWithTitle:@"Fill"];
         [popup addItemWithTitle:@"None"];
-
-        NSString *current = SpliceKit_getDefaultSpatialConformType();
-        if ([current isEqualToString:@"fill"])      [popup selectItemAtIndex:1];
-        else if ([current isEqualToString:@"none"]) [popup selectItemAtIndex:2];
+        NSString *conform = SpliceKit_getDefaultSpatialConformType();
+        if ([conform isEqualToString:@"fill"])      [popup selectItemAtIndex:1];
+        else if ([conform isEqualToString:@"none"]) [popup selectItemAtIndex:2];
         else                                         [popup selectItemAtIndex:0];
-
+        popup.identifier = kIDSpatialConform;
         popup.target = [SKPrefsController shared];
-        popup.action = @selector(conformPopupChanged:);
+        popup.action = @selector(spatialConformPopupChangedInFCPDefaults:);
         popup.translatesAutoresizingMaskIntoConstraints = NO;
         [row addArrangedSubview:popup];
-
-        NSStackView *conformCol = [NSStackView stackViewWithViews:@[]];
-        conformCol.orientation = NSUserInterfaceLayoutOrientationVertical;
-        conformCol.alignment = NSLayoutAttributeLeading;
-        conformCol.spacing = 2;
-        conformCol.translatesAutoresizingMaskIntoConstraints = NO;
-        [conformCol addArrangedSubview:row];
-        [conformCol addArrangedSubview:SKPrefs_makeNote(
+        [col addArrangedSubview:row];
+        [col addArrangedSubview:SKPrefs_makeNote(
             @"Spatial conform applied to new clips dropped onto the timeline: "
-             @"Fit (letterbox), Fill (crop to frame), or None (native resolution).",
+             @"Fit (letterbox/pillarbox), Fill (crop to fill frame), or None (native resolution).",
             kNoteWidth)];
-        [root addArrangedSubview:conformCol];
+        [root addArrangedSubview:col];
     }
 
     [root addArrangedSubview:SKPrefs_makeSep()];

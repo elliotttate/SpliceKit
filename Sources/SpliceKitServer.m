@@ -9680,6 +9680,16 @@ static NSDictionary *SpliceKit_handleBackgroundRenderControl(NSDictionary *param
     return result ?: @{@"error": @"Unable to control background render state"};
 }
 
+// Forward declarations for FCP-default preference functions defined later in this file
+NSString *SpliceKit_getTransitionWarningDefault(void);
+void      SpliceKit_setTransitionWarningDefault(NSString *value);
+NSInteger SpliceKit_getDefaultClipHeight(void);
+void      SpliceKit_setDefaultClipHeight(NSInteger pixelHeight);
+NSString *SpliceKit_getDefaultAudioChannelConfig(void);
+void      SpliceKit_setDefaultAudioChannelConfig(NSString *value);
+NSString *SpliceKit_getDefaultAudioPanMode(void);
+void      SpliceKit_setDefaultAudioPanMode(NSString *value);
+
 static NSDictionary *SpliceKit_handleOptionsGet(NSDictionary *params) {
     return @{
         @"effectDragAsAdjustmentClip": @(SpliceKit_isEffectDragAsAdjustmentClipEnabled()),
@@ -9690,6 +9700,10 @@ static NSDictionary *SpliceKit_handleOptionsGet(NSDictionary *params) {
         @"lLadder": SpliceKit_getLLadder(),
         @"jLadder": SpliceKit_getJLadder(),
         @"defaultSpatialConformType": SpliceKit_getDefaultSpatialConformType(),
+        @"transitionWarningDefault": SpliceKit_getTransitionWarningDefault(),
+        @"defaultClipHeight": @(SpliceKit_getDefaultClipHeight()),
+        @"defaultAudioChannelConfig": SpliceKit_getDefaultAudioChannelConfig() ?: @"",
+        @"defaultAudioPanMode": SpliceKit_getDefaultAudioPanMode() ?: @"",
         @"aiEngine": @([SpliceKitCommandPalette sharedPalette].aiEngine),
         @"gemmaModel": [SpliceKitCommandPalette sharedPalette].gemmaModel ?: @"unsloth/gemma-4-E4B-it-UD-MLX-4bit",
         @"sidebarCoalesceLiveScroll": @(SpliceKit_isSidebarCoalesceLiveScrollEnabled()),
@@ -9815,6 +9829,44 @@ static NSDictionary *SpliceKit_handleOptionsSet(NSDictionary *params) {
         SpliceKit_setTLKOptimizedReloadEnabled([enabled boolValue]);
         return @{@"status": @"ok",
                  @"tlkOptimizedReload": @(SpliceKit_isTLKOptimizedReloadEnabled())};
+    } else if ([option isEqualToString:@"transitionWarningDefault"]) {
+        NSString *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' required (\"ask\", \"freeze_frames\", \"ripple_trim\")"};
+        value = [value lowercaseString];
+        if (!([value isEqualToString:@"ask"] ||
+              [value isEqualToString:@"freeze_frames"] ||
+              [value isEqualToString:@"ripple_trim"])) {
+            return @{@"error": @"Invalid value — must be \"ask\", \"freeze_frames\", or \"ripple_trim\""};
+        }
+        SpliceKit_setTransitionWarningDefault(value);
+        return @{@"status": @"ok", @"transitionWarningDefault": SpliceKit_getTransitionWarningDefault()};
+    } else if ([option isEqualToString:@"defaultClipHeight"]) {
+        NSNumber *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' required (0=off, 35=small, 80=medium, 153=large)"};
+        SpliceKit_setDefaultClipHeight([value integerValue]);
+        return @{@"status": @"ok", @"defaultClipHeight": @(SpliceKit_getDefaultClipHeight())};
+    } else if ([option isEqualToString:@"defaultAudioChannelConfig"]) {
+        NSString *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' required (\"\" to disable, \"stereo\", \"dual_mono\")"};
+        value = [value lowercaseString];
+        if (![value isEqualToString:@""] &&
+            ![value isEqualToString:@"stereo"] &&
+            ![value isEqualToString:@"dual_mono"]) {
+            return @{@"error": @"Invalid value — must be \"\", \"stereo\", or \"dual_mono\""};
+        }
+        SpliceKit_setDefaultAudioChannelConfig(value.length ? value : nil);
+        return @{@"status": @"ok",
+                 @"defaultAudioChannelConfig": SpliceKit_getDefaultAudioChannelConfig() ?: @""};
+    } else if ([option isEqualToString:@"defaultAudioPanMode"]) {
+        NSString *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' required (\"\" to disable, \"none\", \"stereo\", \"mono\", \"surround\")"};
+        value = [value lowercaseString];
+        NSArray *valid = @[@"", @"none", @"stereo", @"mono", @"surround"];
+        if (![valid containsObject:value])
+            return @{@"error": @"Invalid value — must be \"\", \"none\", \"stereo\", \"mono\", or \"surround\""};
+        SpliceKit_setDefaultAudioPanMode(value.length ? value : nil);
+        return @{@"status": @"ok",
+                 @"defaultAudioPanMode": SpliceKit_getDefaultAudioPanMode() ?: @""};
     }
 
     return @{@"error": [NSString stringWithFormat:@"Unknown option: %@", option]};
@@ -9864,10 +9916,16 @@ static int sFreezeExtendOperationReportErrors = 0;
 static BOOL sFreezeExtendHasOperationReplay = NO;
 
 // Swizzled -[FFAnchoredSequence defaultTransitionOverlapType]
-// Original returns 1 (needs handles). We return 2 (overlap/use edge frames) when forced.
+// Original returns 1 (needs handles). We return 2 (overlap/use edge frames) when forced,
+// or when the global "freeze_frames" preference is set.
 static int SpliceKit_swizzled_defaultTransitionOverlapType(id self, SEL _cmd) {
     if (sForceOverlap) {
         SpliceKit_log(@"[FreezeExtend] defaultTransitionOverlapType -> 2 (freeze-frame overlap)");
+        return 2;
+    }
+    NSString *pref = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitTransitionWarningDefault"];
+    if ([pref isEqualToString:@"freeze_frames"]) {
         return 2;
     }
     return ((int (*)(id, SEL))sOrigDefaultOverlapType)(self, _cmd);
@@ -10905,19 +10963,22 @@ static void SpliceKit_scheduleFreezeExtendRepair(void) {
 }
 
 static int SpliceKit_effectiveTransitionOverlapType(int overlapType, NSString *source) {
-    if (!SpliceKit_shouldForceFreezeOverlap()) {
-        return overlapType;
-    }
-
-    if (overlapType != 2) {
-        SpliceKit_log(@"[FreezeExtend] Forcing transitionOverlapType -> 2");
-        if (source.length > 0) {
-            SpliceKit_log(@"%@", [NSString stringWithFormat:
-                @"[FreezeExtend] Source=%@ original transitionOverlapType=%d",
-                source, overlapType]);
+    // Per-transition force (API freeze_extend or dialog "Use Freeze Frames")
+    if (SpliceKit_shouldForceFreezeOverlap()) {
+        if (overlapType != 2) {
+            SpliceKit_log(@"[FreezeExtend] Forcing transitionOverlapType -> 2");
+            if (source.length > 0)
+                SpliceKit_log(@"[FreezeExtend] Source=%@ original=%d", source, overlapType);
         }
+        return 2;
     }
-    return 2;
+    // Global preference: always use edge frames (no dialog, no ripple trim)
+    NSString *pref = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitTransitionWarningDefault"];
+    if ([pref isEqualToString:@"freeze_frames"]) {
+        return 2;
+    }
+    return overlapType;
 }
 
 static NSModalResponse SpliceKit_swizzled_NSAlert_runModal(id self, SEL _cmd) {
@@ -11220,14 +11281,69 @@ static NSString *sFreezeExtendPendingEffectID = nil;
 static BOOL sFreezeExtendAsyncPending = NO;
 
 // Replacement for -[FFAnchoredSequence displayTransitionAvailableMediaAlertDialog:]
-// Instead of showing the "not enough extra media" dialog, cancel the current
-// transition attempt, schedule hold-frame extensions on the short clips, then
-// retry the transition on the next run-loop iteration.
+// Handles three modes set via SpliceKitTransitionWarningDefault preference:
+//   "ripple_trim"  - auto-accept without showing the dialog (FCP ripple-trims)
+//   "freeze_frames"- never reached (effectiveTransitionOverlapType already returns 2)
+//   "ask" (default)- show our custom dialog with "Use Freeze Frames" added
 static char SpliceKit_swizzled_displayTransitionAlert(id self, SEL _cmd, char *result) {
-    // Freeze-extend auto-hold is disabled pending further development.
-    // Pass through to FCP's original dialog.
+    NSString *pref = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitTransitionWarningDefault"];
+
+    // Auto-ripple: create anyway, no dialog shown
+    if ([pref isEqualToString:@"ripple_trim"] && !sFreezeExtendPendingAutoAccept) {
+        SpliceKit_log(@"[TransitionDefault] Auto-ripple trim (preference)");
+        if (result) *result = 1;
+        return 1;
+    }
+
+    // Freeze frames: effectiveTransitionOverlapType should have returned 2 already
+    // so the dialog shouldn't be reached. Fallback: set flags and accept.
+    if ([pref isEqualToString:@"freeze_frames"] && !sFreezeExtendPendingAutoAccept) {
+        SpliceKit_log(@"[TransitionDefault] Auto-freeze frames fallback");
+        sForceOverlap = YES;
+        sFreezeExtendUseFreezeFramesForCurrentAlert = YES;
+        if (result) *result = 1;
+        return 1;
+    }
+
+    // API-triggered freeze extend auto-accept: existing complex retry path
     if (!sFreezeExtendPendingAutoAccept) {
-        return ((char (*)(id, SEL, char *))sOrigDisplayTransitionAlert)(self, _cmd, result);
+        // "ask" mode: replace FCP's 2-button dialog with our 3-button version
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:@"There is not enough extra media beyond clip edges to create the transition."];
+        [alert setInformativeText:
+            @"You can create the transition anyway (ripple trim), extend the clip edges with "
+            @"freeze frames, or cancel."];
+        [alert addButtonWithTitle:@"Create Anyway"];
+        [alert addButtonWithTitle:@"Use Freeze Frames"];
+        [alert addButtonWithTitle:@"Cancel"];
+
+        NSModalResponse resp = [alert runModal];
+
+        if (resp == NSAlertThirdButtonReturn) {
+            // Cancel
+            SpliceKit_log(@"[TransitionDialog] Cancelled");
+            if (result) *result = 0;
+            return 0;
+        }
+        if (resp == NSAlertSecondButtonReturn) {
+            // Use Freeze Frames: set flags then accept; FCP will call
+            // defaultTransitionOverlapType again and get 2
+            SpliceKit_log(@"[TransitionDialog] Chose 'Use Freeze Frames'");
+            sForceOverlap = YES;
+            sFreezeExtendUseFreezeFramesForCurrentAlert = YES;
+            if (result) *result = 1;
+            // Reset after this run-loop turn so sForceOverlap doesn't persist
+            dispatch_async(dispatch_get_main_queue(), ^{
+                sForceOverlap = NO;
+                sFreezeExtendUseFreezeFramesForCurrentAlert = NO;
+            });
+            return 1;
+        }
+        // Create Anyway (ripple trim)
+        SpliceKit_log(@"[TransitionDialog] Chose 'Create Anyway'");
+        if (result) *result = 1;
+        return 1;
     }
 
     SpliceKit_log(@"[FreezeExtend] Intercepted 'not enough media' dialog");
@@ -13284,6 +13400,118 @@ void SpliceKit_installDefaultSpatialConformType(void) {
     sDefaultConformInstalled = YES;
     SpliceKit_log(@"[DefaultConform] Swizzled -[FFHeConformEffect createChannelsInFolder:] (current: %@)",
                   SpliceKit_getDefaultSpatialConformType());
+}
+
+#pragma mark - Transition Warning Default
+
+// "SpliceKitTransitionWarningDefault": "ask" (default), "freeze_frames", "ripple_trim"
+// - "ask"          : show our 3-button dialog (Create Anyway / Use Freeze Frames / Cancel)
+// - "freeze_frames": pass overlapType=2 to FCP — no dialog, uses edge frames
+// - "ripple_trim"  : auto-accept FCP's dialog with result=1 — no dialog, FCP ripple-trims
+
+NSString *SpliceKit_getTransitionWarningDefault(void) {
+    NSString *val = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitTransitionWarningDefault"];
+    if ([val isEqualToString:@"freeze_frames"] || [val isEqualToString:@"ripple_trim"])
+        return val;
+    return @"ask";
+}
+
+void SpliceKit_setTransitionWarningDefault(NSString *value) {
+    if (!value || [value isEqualToString:@"ask"]) {
+        [[NSUserDefaults standardUserDefaults]
+            removeObjectForKey:@"SpliceKitTransitionWarningDefault"];
+    } else {
+        [[NSUserDefaults standardUserDefaults]
+            setObject:value forKey:@"SpliceKitTransitionWarningDefault"];
+    }
+    SpliceKit_log(@"[TransitionDefault] Set to '%@'", value ?: @"ask");
+}
+
+#pragma mark - Default Clip Height
+
+// "SpliceKitDefaultClipHeight": 0 (no override), 35 (small), 80 (medium), 153 (large)
+// Writes to FFOrganizedTimelineClipHeight which FCP reads as the global clip height
+// preference. TLKUserDefaults is reloaded so the change takes effect immediately.
+
+NSInteger SpliceKit_getDefaultClipHeight(void) {
+    NSNumber *val = [[NSUserDefaults standardUserDefaults]
+                        objectForKey:@"SpliceKitDefaultClipHeight"];
+    return val ? [val integerValue] : 0;
+}
+
+void SpliceKit_setDefaultClipHeight(NSInteger pixelHeight) {
+    if (pixelHeight <= 0) {
+        [[NSUserDefaults standardUserDefaults]
+            removeObjectForKey:@"SpliceKitDefaultClipHeight"];
+        SpliceKit_log(@"[DefaultClipHeight] Cleared (no override)");
+        return;
+    }
+    [[NSUserDefaults standardUserDefaults]
+        setInteger:pixelHeight forKey:@"SpliceKitDefaultClipHeight"];
+    // Also write to FCP's own key so new projects pick it up
+    [[NSUserDefaults standardUserDefaults]
+        setInteger:pixelHeight forKey:@"FFOrganizedTimelineClipHeight"];
+    // Reload TLK so the change is visible immediately
+    Class tlk = NSClassFromString(@"TLKUserDefaults");
+    if (tlk) {
+        SEL load = NSSelectorFromString(@"_loadUserDefaults");
+        if ([tlk respondsToSelector:load])
+            ((void (*)(id, SEL))objc_msgSend)((id)tlk, load);
+    }
+    SpliceKit_log(@"[DefaultClipHeight] Set to %ld px", (long)pixelHeight);
+}
+
+#pragma mark - Default Audio Channel Config
+
+// "SpliceKitDefaultAudioChannelConfig": nil/empty (no override), "stereo", "dual_mono"
+// Stored as a preference; applied to new clips via the audio component source API.
+
+NSString *SpliceKit_getDefaultAudioChannelConfig(void) {
+    NSString *val = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitDefaultAudioChannelConfig"];
+    if ([val isEqualToString:@"dual_mono"] || [val isEqualToString:@"stereo"])
+        return val;
+    return @""; // no override
+}
+
+void SpliceKit_setDefaultAudioChannelConfig(NSString *value) {
+    if (!value || value.length == 0) {
+        [[NSUserDefaults standardUserDefaults]
+            removeObjectForKey:@"SpliceKitDefaultAudioChannelConfig"];
+        SpliceKit_log(@"[DefaultAudioChannel] Cleared (no override)");
+    } else {
+        [[NSUserDefaults standardUserDefaults]
+            setObject:value forKey:@"SpliceKitDefaultAudioChannelConfig"];
+        SpliceKit_log(@"[DefaultAudioChannel] Set to '%@'", value);
+    }
+}
+
+#pragma mark - Default Audio Pan Mode
+
+// "SpliceKitDefaultAudioPanMode": nil/empty (no override), "none", "stereo", "mono"
+// "stereo" adds a Stereo Left+Right panner AU; "mono" adds a Mono panner; "none" = no panner.
+// Applied to clips via FFEffectStack(Audio) addSurroundPannerEffectWithPanMode: on clip addition.
+
+NSString *SpliceKit_getDefaultAudioPanMode(void) {
+    NSString *val = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitDefaultAudioPanMode"];
+    if ([val isEqualToString:@"none"] || [val isEqualToString:@"stereo"] ||
+        [val isEqualToString:@"mono"] || [val isEqualToString:@"surround"])
+        return val;
+    return @""; // no override
+}
+
+void SpliceKit_setDefaultAudioPanMode(NSString *value) {
+    if (!value || value.length == 0) {
+        [[NSUserDefaults standardUserDefaults]
+            removeObjectForKey:@"SpliceKitDefaultAudioPanMode"];
+        SpliceKit_log(@"[DefaultAudioPanMode] Cleared (no override)");
+    } else {
+        [[NSUserDefaults standardUserDefaults]
+            setObject:value forKey:@"SpliceKitDefaultAudioPanMode"];
+        SpliceKit_log(@"[DefaultAudioPanMode] Set to '%@'", value);
+    }
 }
 
 #pragma mark - Transition Handlers
