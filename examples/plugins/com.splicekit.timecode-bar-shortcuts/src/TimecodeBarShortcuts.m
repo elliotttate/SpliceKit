@@ -1,6 +1,13 @@
 //
-//  SpliceKitTimecodeBarShortcuts.m
-//  SpliceKit — Customizable shortcut buttons in FCP's timeline toolbar
+//  TimecodeBarShortcuts.m
+//  com.splicekit.timecode-bar-shortcuts
+//
+//  Customizable shortcut buttons in FCP's timeline toolbar.
+//  Survives SpliceKit patcher updates — the entire feature lives here.
+//
+//  Injects compact NSButtons into the flex gap between the timeline history
+//  forward button and the snapping/skimming control cluster.  Configuration
+//  is stored as JSON in ~/Library/Application Support/SpliceKit/.
 //
 //  View hierarchy path to the injection point:
 //    NSApp.mainWindow → contentView → LKContainerView → PEMainContainerModule →
@@ -15,12 +22,29 @@
 //    histFwd.trailing -(>=6)- [SpliceKitShortcutsBar] -(>=6)- snappingCtrl.leading
 //  so the bar compresses naturally if the window is narrow.
 //
+//  The "SpliceKit" Settings tab (com.splicekit.preferences-pane plugin) writes
+//  the same JSON config file directly (native plugins are dlopen(RTLD_LOCAL),
+//  so its own copy of the catalogue/config functions is self-contained rather
+//  than calling into this plugin) and then calls the "timecodeBarShortcuts.reload"
+//  RPC method registered below so button changes take effect immediately.
+//
 
-#import "SpliceKitTimecodeBarShortcuts.h"
-#import "SpliceKit.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+
+#import "SpliceKitPluginAPI.h"
+
+static SpliceKitPluginAPI  sAPIStorage;
+static SpliceKitPluginAPI *sAPI = NULL;
+
+#define SpliceKit_log(...) (sAPI ? sAPI->log(__VA_ARGS__) : (void)0)
+#define SpliceKit_executeOnMainThread(block) (sAPI ? sAPI->executeOnMainThread(block) : (void)0)
+
+// Provided by the host binary — shared, non-migrated utilities that stay in
+// the core dylib. Resolved at load time via -undefined dynamic_lookup.
+extern id SpliceKit_getActiveTimelineModule(void);
+extern NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params);
 
 // ──────────────────────────────────────────────────────────────────────────────
 #pragma mark - Layout constants
@@ -134,8 +158,6 @@ static NSDictionary *SCB_actionForID(NSString *actionID) {
 // ──────────────────────────────────────────────────────────────────────────────
 #pragma mark - Action dispatch
 // ──────────────────────────────────────────────────────────────────────────────
-
-extern NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params);
 
 static void SCB_fireAction(NSString *actionID, NSString *type) {
     if (!actionID) return;
@@ -478,31 +500,41 @@ static BOOL SCB_findFlexConstraint(NSView *toolbar,
 #pragma mark - Public C API
 // ──────────────────────────────────────────────────────────────────────────────
 
-void SpliceKit_installTimecodeBarShortcuts(void) {
+static void SpliceKit_installTimecodeBarShortcuts(void) {
     [[SpliceKitTimecodeBarShortcutsManager shared] install];
 }
 
-void SpliceKit_reloadTimecodeBarShortcuts(void) {
+static void SpliceKit_reloadTimecodeBarShortcuts(void) {
     [[SpliceKitTimecodeBarShortcutsManager shared] reload];
 }
 
-NSArray<NSDictionary *> *SpliceKit_getTimecodeBarConfig(void) {
-    return SCB_loadConfig();
-}
+// ──────────────────────────────────────────────────────────────────────────────
+#pragma mark - Plugin entry point
+// ──────────────────────────────────────────────────────────────────────────────
 
-void SpliceKit_setTimecodeBarConfig(NSArray<NSDictionary *> *config) {
-    // Ensure only the storable keys are written (strip any ephemeral state)
-    NSMutableArray *clean = [NSMutableArray arrayWithCapacity:config.count];
-    for (NSDictionary *item in config) {
-        if (!item[@"id"]) continue;
-        NSDictionary *meta = SCB_actionForID(item[@"id"]);
-        [clean addObject:@{
-            @"id":      item[@"id"],
-            @"type":    item[@"type"]    ?: meta[@"type"]    ?: @"timeline",
-            @"icon":    item[@"icon"]    ?: meta[@"icon"]    ?: @"questionmark.circle",
-            @"tooltip": item[@"tooltip"] ?: meta[@"tooltip"] ?: item[@"id"],
-        }];
-    }
-    SCB_saveConfig(clean);
-    SpliceKit_reloadTimecodeBarShortcuts();
+__attribute__((visibility("default")))
+void SpliceKitPlugin_init(SpliceKitPluginAPI *api) {
+    sAPIStorage = *api;
+    sAPI = &sAPIStorage;
+
+    sAPI->log(@"[TimecodeBarShortcuts] Loading.");
+
+    // Lets other plugins (e.g. com.splicekit.preferences-pane, which writes the
+    // same JSON config file directly since native plugins can't call each
+    // other's C functions across dlopen(RTLD_LOCAL) boundaries) trigger a live
+    // reload after the user toggles a checkbox, without needing a restart.
+    api->registerMethod(@"timecodeBarShortcuts.reload",
+        ^NSDictionary *(NSDictionary *params) {
+            (void)params;
+            SpliceKit_reloadTimecodeBarShortcuts();
+            return @{@"status": @"ok"};
+        },
+        @{@"description": @"Reload the timeline toolbar's shortcut buttons from the saved config.",
+          @"readOnly": @NO});
+
+    api->executeOnMainThreadAsync(^{
+        SpliceKit_installTimecodeBarShortcuts();
+    });
+
+    sAPI->log(@"[TimecodeBarShortcuts] Loaded.");
 }

@@ -1,7 +1,9 @@
-// SpliceKitClipLock.m
+// ClipLock.m
+// com.splicekit.clip-lock
 //
 // Adds clip, compound-clip, and connected-clip locking to FCP.
 // A locked clip cannot be moved, trimmed, deleted, cut, or have effects dropped onto it.
+// Survives SpliceKit patcher updates — the entire feature lives here.
 //
 // LOCK STORAGE
 //   Locked clip identifiers are stored in NSUserDefaults under "SpliceKitLockedClipIds"
@@ -30,10 +32,27 @@
 //   clips.listLocked    — list all currently locked clip IDs
 //   clips.unlockAll     — clear all locks
 
-#import "SpliceKit.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+
+#import "SpliceKitPluginAPI.h"
+
+static SpliceKitPluginAPI  sAPIStorage;
+static SpliceKitPluginAPI *sAPI = NULL;
+
+#define SpliceKit_log(...) (sAPI ? sAPI->log(__VA_ARGS__) : (void)0)
+#define SpliceKit_swizzleMethod(cls, sel, imp) (sAPI ? sAPI->swizzleMethod(cls, sel, imp) : NULL)
+// Variadic (not fixed-arity): the block/dictionary-literal arguments below
+// contain top-level commas inside {}, which the preprocessor would otherwise
+// split into extra macro arguments.
+#define SpliceKit_executeOnMainThread(...) (sAPI ? sAPI->executeOnMainThread(__VA_ARGS__) : (void)0)
+#define SpliceKit_registerPluginMethod(...) (sAPI ? sAPI->registerMethod(__VA_ARGS__) : (void)0)
+#define SpliceKit_resolveHandle(h) (sAPI ? sAPI->resolveHandle(h) : nil)
+
+// Provided by the host binary — a shared, non-migrated utility that stays in
+// the core dylib. Resolved at load time via -undefined dynamic_lookup.
+extern id SpliceKit_getActiveTimelineModule(void);
 
 // ---------------------------------------------------------------------------
 // CMTime (inline, no CoreMedia link needed)
@@ -1517,7 +1536,7 @@ static void CL_swizzled_setActiveCommandSet(id self, SEL _cmd, id set) {
 // Public install entry point
 // ---------------------------------------------------------------------------
 
-void SpliceKit_installClipLock(void) {
+static void SpliceKit_installClipLock(void) {
     CL_ensureState();
     SpliceKit_log(@"[ClipLock] Installing (metadata-based persistence)");
 
@@ -1825,4 +1844,22 @@ void SpliceKit_installClipLock(void) {
     });
 
     SpliceKit_log(@"[ClipLock] Installed successfully");
+}
+
+// ---------------------------------------------------------------------------
+#pragma mark - Plugin entry point
+// ---------------------------------------------------------------------------
+
+__attribute__((visibility("default")))
+void SpliceKitPlugin_init(SpliceKitPluginAPI *api) {
+    sAPIStorage = *api;
+    sAPI = &sAPIStorage;
+
+    sAPI->log(@"[ClipLock] Loading.");
+
+    api->executeOnMainThreadAsync(^{
+        SpliceKit_installClipLock();
+    });
+
+    sAPI->log(@"[ClipLock] Loaded.");
 }

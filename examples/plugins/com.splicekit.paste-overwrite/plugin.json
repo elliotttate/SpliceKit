@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.paste-overwrite",
+  "name": "Paste Overwrite",
+  "version": "1.0.0",
+  "description": "Adds a 'Paste Overwrite' item to the Edit menu (⌥V) that pastes the clipboard clip over the timeline at the playhead without rippling. Survives SpliceKit patcher updates.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

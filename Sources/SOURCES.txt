@@ -28,8 +28,6 @@ SpliceKitTranscriptDiagnostics.m
 SpliceKitCaptionPanel.m
 SpliceKitUndoHistoryPanel.m
 SpliceKitCommandPalette.m
-SpliceKitDebugUI.m
-SpliceKitPreferencesPane.m
 SpliceKitStructureBlocks.m
 SpliceKitSectionsBar.m
 SpliceKitTimelineOverview.m
@@ -38,12 +36,8 @@ SpliceKitLuaPanel.m
 SpliceKitPlugins.m
 SpliceKitMixerPanel.m
 SpliceKitSidebarCoalesce.m
-SpliceKitReplaceAtPlayhead.m
-SpliceKitClipLock.m
 SpliceKitTimelineInteractionSuspend.m
 SpliceKitTimelinePlayheadOverlay.m
-SpliceKitTimelineTabs.m
-SpliceKitTimecodeBarShortcuts.m
 SpliceKitTimelinePerfMode.m
 SpliceKitWaveformExpand.m
 SpliceKitURLImport.m

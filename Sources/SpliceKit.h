@@ -157,10 +157,6 @@ void SpliceKit_removeViewerPinchZoom(void);
 void SpliceKit_setViewerPinchZoomEnabled(BOOL enabled);
 BOOL SpliceKit_isViewerPinchZoomEnabled(void);
 
-// Clip locking: right-click → "Lock/Unlock Clip", ⌥L shortcut, and RPC methods.
-// Locked clips cannot be moved, trimmed, deleted, or cut.
-void SpliceKit_installClipLock(void);
-
 // Adds a right-click "Favorite" option in the effect browser.
 void SpliceKit_installEffectFavoritesSwizzle(void);
 
@@ -228,7 +224,6 @@ void SpliceKit_installWaveformExpand(void);
 // clipboard format, and then lets the original paste proceed. Includes caching,
 // screen freeze to hide the project switch, and playhead restoration.
 void SpliceKit_installFCPXMLPasteSwizzle(void);
-void SpliceKit_installPasteOverwriteMenuItem(void);
 
 // Shared FCPXML-to-native conversion function. Checks if the pasteboard has
 // FCPXML, converts it to native proFFPasteboardUTI format (using cache if

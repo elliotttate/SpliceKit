@@ -12,15 +12,11 @@
 #import "SpliceKitLua.h"
 #import "SpliceKitPlugins.h"
 #import "SpliceKitCommandPalette.h"
-#import "SpliceKitDebugUI.h"
-#import "SpliceKitPreferencesPane.h"
 #import "SpliceKitSentry.h"
 #import "SpliceKitLiveCam.h"
 #import "SpliceKitURLImport.h"
 #import "SpliceKitImmersivePreviewPanel.h"
 #import "SpliceKitUndoHistoryPanel.h"
-#import "SpliceKitTimelineTabs.h"
-#import "SpliceKitTimecodeBarShortcuts.h"
 #import <AppKit/AppKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <Security/Security.h>
@@ -38,7 +34,6 @@ extern NSDictionary *SpliceKit_handleFCPXMLExport(NSDictionary *params);
 extern NSDictionary *SpliceKit_handleFCPXMLImport(NSDictionary *params);
 extern NSDictionary *SpliceKit_handleProjectOpen(NSDictionary *params);
 extern void SpliceKit_installMixerSkimHooks(void);
-extern void SpliceKit_installReplaceAtPlayhead(void);
 extern void SpliceKit_installBRAWProviderShim(void);
 extern void SpliceKit_bootstrapBRAWAtLaunchPhase(NSString *phase);
 extern BOOL SpliceKit_installBRAWRAWSettingsHooks(void);
@@ -465,7 +460,6 @@ static void SpliceKit_checkCompatibility(void) {
 - (void)updateLiveCamToolbarButtonState:(BOOL)active;
 - (void)toggleVisionProPanel:(id)sender;
 - (void)toggleUndoHistoryPanel:(id)sender;
-- (void)closeOtherLibraries:(id)sender;
 @property (nonatomic, weak) NSButton *toolbarButton;
 @property (nonatomic, weak) NSButton *paletteToolbarButton;
 @property (nonatomic, weak) NSButton *liveCamToolbarButton;
@@ -521,40 +515,6 @@ static void SpliceKit_checkCompatibility(void) {
         [panel hidePanel];
     } else {
         [panel showPanel];
-    }
-}
-
-- (void)closeOtherLibraries:(id)sender {
-    // Get the currently active/focused library via PEAppController._targetLibrary
-    id app = ((id (*)(id, SEL))objc_msgSend)(
-        objc_getClass("NSApplication"), @selector(sharedApplication));
-    id delegate = ((id (*)(id, SEL))objc_msgSend)(app, @selector(delegate));
-
-    id activeLib = nil;
-    SEL targetLibSel = NSSelectorFromString(@"_targetLibrary");
-    if ([delegate respondsToSelector:targetLibSel]) {
-        activeLib = ((id (*)(id, SEL))objc_msgSend)(delegate, targetLibSel);
-    }
-
-    // Enumerate all open libraries
-    Class libDocClass = objc_getClass("FFLibraryDocument");
-    if (!libDocClass) return;
-    id allLibs = ((id (*)(id, SEL))objc_msgSend)(
-        libDocClass, NSSelectorFromString(@"copyActiveLibraries"));
-    if (![allLibs isKindOfClass:[NSArray class]]) return;
-
-    NSArray *libs = (NSArray *)allLibs;
-    if (libs.count <= 1) return;
-
-    for (id lib in libs) {
-        if (activeLib && lib == activeLib) continue;
-        // Close via the library's NSDocument (triggers FCP's close flow including save prompt)
-        SEL libDocSel = NSSelectorFromString(@"libraryDocument");
-        id doc = [lib respondsToSelector:libDocSel]
-            ? ((id (*)(id, SEL))objc_msgSend)(lib, libDocSel) : nil;
-        if (doc && [doc respondsToSelector:@selector(close)]) {
-            ((void (*)(id, SEL))objc_msgSend)(doc, @selector(close));
-        }
     }
 }
 
@@ -2078,14 +2038,6 @@ NSString *SpliceKit_otioToFCPXML(NSString *otioPath) {
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
-    if (menuItem.action == @selector(closeOtherLibraries:)) {
-        Class libDocClass = objc_getClass("FFLibraryDocument");
-        if (!libDocClass) return NO;
-        id allLibs = ((id (*)(id, SEL))objc_msgSend)(
-            libDocClass, NSSelectorFromString(@"copyActiveLibraries"));
-        NSInteger count = [allLibs isKindOfClass:[NSArray class]] ? [(NSArray *)allLibs count] : 0;
-        return count > 1;
-    }
     if (menuItem.action == @selector(toggleSections:)) {
         NSDictionary *state = SpliceKit_handleSectionsGet(@{});
         menuItem.state = [state[@"installed"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
@@ -2878,28 +2830,6 @@ static void SpliceKit_installMenu(void) {
         }
 
         SpliceKit_log(@"OTIO import/export added to File menu");
-
-        // Find "Close Library" and insert "Close Other Libraries" after it
-        NSMenuItem *closeOtherLibrariesItem = [[NSMenuItem alloc]
-            initWithTitle:@"Close Other Libraries"
-                   action:@selector(closeOtherLibraries:)
-            keyEquivalent:@"W"];
-        closeOtherLibrariesItem.keyEquivalentModifierMask = NSEventModifierFlagShift;
-        closeOtherLibrariesItem.target = [SpliceKitMenuController shared];
-        BOOL insertedCloseOther = NO;
-        for (NSInteger i = 0; i < fileMenu.numberOfItems; i++) {
-            NSString *title = [fileMenu itemAtIndex:i].title;
-            if ([title isEqualToString:@"Close Library"]) {
-                [fileMenu insertItem:closeOtherLibrariesItem atIndex:i + 1];
-                insertedCloseOther = YES;
-                break;
-            }
-        }
-        if (!insertedCloseOther) {
-            // Fallback: insert near top of File menu if "Close Library" not found
-            [fileMenu insertItem:closeOtherLibrariesItem atIndex:1];
-        }
-        SpliceKit_log(@"Close Other Libraries added to File menu");
     }
 
     SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T Transcript, Ctrl+Option+C Captions, Cmd+Shift+P Palette, Ctrl+Option+L Lua REPL)");
@@ -3533,11 +3463,6 @@ static void SpliceKit_appDidLaunch(void) {
     // meter live skims even when isToolSkimming stays false.
     SpliceKit_installMixerSkimHooks();
 
-    // Restore Replace at Playhead edit mode removed from FCP 12.2's UI.
-    SpliceKit_safeInstall("ReplaceAtPlayhead", ^{
-        SpliceKit_installReplaceAtPlayhead();
-    });
-
     // Restore persisted social caption text after relaunch once a real sequence is
     // active. Automatic repair is intentionally limited to the Motion effect text
     // field API so relaunch does not wake the heavier channel/document machinery.
@@ -3554,29 +3479,12 @@ static void SpliceKit_appDidLaunch(void) {
     // to native clipboard format so pasteAnchored: can handle it)
     SpliceKit_installFCPXMLPasteSwizzle();
 
-    // Add "Paste Overwrite" to the Edit menu after the native Paste item
-    SpliceKit_installPasteOverwriteMenuItem();
-
     // Swizzle J/L to use configurable speed ladders
     SpliceKit_installPlaybackSpeedSwizzle();
-
-    // Rebuild FCP's hidden Debug pane + Debug menu bar (Apple strips the NIB
-    // and leaves the menu unassigned in release builds; we reconstruct both).
-    // SpliceKit pane first: inserts data into _preferenceTitles/_preferenceModules
-    // WITHOUT calling _setupToolbar. Then Debug installs and calls _setupToolbar
-    // once, picking up both tabs in a single rebuild.
-    SpliceKit_installSpliceKitPreferencesPane();
-    SpliceKit_installDebugSettingsPanel();
-    // SpliceKit_installDebugMenuBar();  // disabled — don't add the Debug menu to the bar
 
     // Install right-click context menu for structure block color changes
     SpliceKit_safeInstall("StructureBlockContextMenu", ^{
         SpliceKit_installStructureBlockContextMenu();
-    });
-
-    // Clip locking: ⌥L / right-click → Lock/Unlock Clip, RPC, move/trim/delete blocking
-    SpliceKit_safeInstall("ClipLock", ^{
-        SpliceKit_installClipLock();
     });
 
     // Inline miniature-timeline overview bar — install if user had it on
@@ -3586,16 +3494,6 @@ static void SpliceKit_appDidLaunch(void) {
         });
     }
 
-    // Named project tabs — persistent row above the timeline replacing the
-    // back/forward arrow tap-dance.
-    SpliceKit_safeInstall("TimelineTabs", ^{
-        SpliceKit_installTimelineTabs();
-    });
-
-    // Customizable shortcut buttons injected into the timeline toolbar's flex gap.
-    SpliceKit_safeInstall("TimecodeBarShortcuts", ^{
-        SpliceKit_installTimecodeBarShortcuts();
-    });
 
     // Bridge metadata (bridge.describe / bridge.alive) and async/events
     // infrastructure must be registered before the control server starts

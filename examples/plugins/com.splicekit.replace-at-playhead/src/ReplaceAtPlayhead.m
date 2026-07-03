@@ -1,12 +1,14 @@
-// SpliceKitReplaceAtPlayhead.m
+// ReplaceAtPlayhead.m
+// com.splicekit.replace-at-playhead
 //
-// Restores the "Replace at Playhead" edit mode that Apple removed from FCP 12.2's UI.
+// Restores the "Replace at Playhead" edit mode that Apple removed from FCP's UI.
 // The underlying ObjC methods still exist — Apple only removed all UI entry points.
+// Survives SpliceKit patcher updates — the entire feature lives here.
 //
 // This module re-wires it in two places:
 //
 //   1. The drag-drop menu shown when hovering a clip over the timeline.
-//      In FCP 12.2 the Replace overlay is a plain NSMenu (LKMenu) stored as
+//      In FCP the Replace overlay is a plain NSMenu (LKMenu) stored as
 //      FFAnchoredTimelineModule.dropMenu — not OZDropMenuWindow.
 //      Swizzles FFAnchoredTimelineModule.init and _startListeningToSequence: to
 //      append "Replace at Playhead" (→ actionDropMenuReplaceAtPlayhead:) after
@@ -21,11 +23,33 @@
 //      swizzle is installed, so we can't rely on the swizzle for initial setup).
 //      _loadCommands and _setActiveCommandSet: swizzles re-apply on future reloads
 //      and command-set switches.
+//
+// This file also owns "Replace and Retain Attributes" (⌥⇧⌘R), which replaces the
+// clip at the playhead with the browser selection while preserving the original
+// clip's effects/color/transform/audio attributes.
 
-#import "SpliceKit.h"
+#import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <dlfcn.h>
+
+#import "SpliceKitPluginAPI.h"
+
+// ---------------------------------------------------------------------------
+// Plugin API storage — SpliceKit_log / SpliceKit_swizzleMethod are macro'd
+// onto the host API so the body below is unchanged from the core-dylib version.
+// ---------------------------------------------------------------------------
+static SpliceKitPluginAPI  sAPIStorage;
+static SpliceKitPluginAPI *sAPI = NULL;
+
+#define SpliceKit_log(...) (sAPI ? sAPI->log(__VA_ARGS__) : (void)0)
+#define SpliceKit_swizzleMethod(cls, sel, imp) (sAPI ? sAPI->swizzleMethod(cls, sel, imp) : NULL)
+
+// Provided by the host binary — still a shared, non-migrated utility there.
+// Resolves at load time via -undefined dynamic_lookup (same pattern already
+// used by SpliceKitCaptionPanel.m and others in the core dylib).
+extern id SpliceKit_getActiveTimelineModule(void);
 
 // CMTime struct (matches CoreMedia layout without linking the framework).
 typedef struct { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch; } SK_CMTime;
@@ -64,7 +88,7 @@ static inline double   SK_CMTimeGetSeconds(SK_CMTime t) {
 // It's populated during -init and reused for every drag. We inject our item
 // once per instance.
 //
-// actionDropMenuReplaceAtPlayhead: exists but is broken in FCP 12.2: it does a
+// actionDropMenuReplaceAtPlayhead: exists but is broken: it does a
 // full replace that changes the target clip's duration to the full source length
 // (same as plain "Replace"), instead of trimming the source to fit the target.
 // We swizzle it to:
@@ -615,7 +639,7 @@ static void SpliceKit_installRetainAttributesActionHandler(void) {
 // ⌥⇧R → LKCommand "ReplaceWithSelectedMediaAtPlayhead" → responder chain →
 // FFEditActionMgr.replaceWithSelectedMediaAtPlayhead: → our swizzle.
 //
-// FCP 12.2 broke the original (effectively deletes the clip). Fix strategy:
+// The original effectively deletes the clip. Fix strategy:
 //
 //   1. Read browserTime (source-media offset) and orgClipStart from selection:
 //        activeEditSourceForToolBar → FFOrganizerFilmstripModule
@@ -981,7 +1005,7 @@ static void SpliceKit_replaceWithSelectedMediaAtPlayhead(id self, SEL _cmd, id s
 // Install
 // ---------------------------------------------------------------------------
 
-void SpliceKit_installReplaceAtPlayhead(void) {
+static void SpliceKit_installReplaceAtPlayhead(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         // --- Drag-drop menu injection ---
@@ -1086,4 +1110,22 @@ void SpliceKit_installReplaceAtPlayhead(void) {
         // Install the action handler for SKReplaceRetainingAttributesAction: on NSApplication.
         SpliceKit_installRetainAttributesActionHandler();
     });
+}
+
+// ---------------------------------------------------------------------------
+// Plugin entry point
+// ---------------------------------------------------------------------------
+
+__attribute__((visibility("default")))
+void SpliceKitPlugin_init(SpliceKitPluginAPI *api) {
+    sAPIStorage = *api;
+    sAPI = &sAPIStorage;
+
+    sAPI->log(@"[ReplaceAtPlayhead] Loading.");
+
+    api->executeOnMainThreadAsync(^{
+        SpliceKit_installReplaceAtPlayhead();
+    });
+
+    sAPI->log(@"[ReplaceAtPlayhead] Loaded.");
 }

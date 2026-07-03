@@ -1,6 +1,9 @@
 //
-//  SpliceKitDebugUI.m
-//  Rebuilds FCP's hidden Debug preferences pane + Debug menu bar programmatically.
+//  DebugUI.m
+//  com.splicekit.preferences-pane
+//
+//  Rebuilds FCP's hidden Debug preferences pane programmatically.
+//  Survives SpliceKit patcher updates — the entire feature lives here.
 //
 //  The Debug preferences module (PEAppDebugPreferencesModule) is still compiled
 //  into FCP, but Apple strips PEAppDebugPreferencesModule.nib from the bundle
@@ -14,19 +17,26 @@
 //    3. Mutating LKPreferences' internal arrays/dictionary directly to add the
 //       Debug pane to _preferenceTitles, _preferenceModules, and
 //       _masterPreferenceViews.
-//    4. Calling _setupToolbar so the Settings-window toolbar picks up the new
-//       tab without a relaunch.
 //
-//  The Debug menu bar is simpler: build an NSMenu tree, wire each item's
-//  target/action to our controller, and insert the top-level item before Help.
+//  (The Debug top-level menu bar reconstruction that used to live alongside
+//  this — SpliceKit_installDebugMenuBar — is intentionally not ported here:
+//  it was already disabled at every launch in the core dylib and unused.)
 //
 
-#import "SpliceKitDebugUI.h"
-#import "SpliceKit.h"
-#import "SpliceKitLogPanel.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+
+#import "SKPluginShared.h"
+
+// Minimal forward declaration — the real SpliceKitLogPanel class lives in the
+// core dylib. Only the two methods used below need to be declared for the
+// compiler; resolution happens at load time via -undefined dynamic_lookup.
+@interface SpliceKitLogPanel : NSObject
++ (instancetype)sharedPanel;
+- (void)showPanel;
+- (void)hidePanel;
+@end
 
 #pragma mark - Shared Helpers
 
@@ -307,7 +317,7 @@ static NSInteger SKDebug_vamlMenuItemState(NSString *getterName, NSString *defau
 #pragma mark FCP-native debug actions
 
 - (void)toggleCGContextDraw:(id)sender {
-    // FCP 12.0 ships this selector as an empty stub in release builds, so keep
+    // FCP ships this selector as an empty stub in release builds, so keep
     // the behavior explicit instead of surfacing a dead-looking action.
     (void)sender;
     SpliceKit_log(@"PEAppController.toggleDebugCGContextDraw: is a no-op in this FCP build");
@@ -847,7 +857,7 @@ BOOL SpliceKit_installDebugSettingsPanel(void) {
 
         // Do NOT call _setupToolbar here — it wipes FCP's owner registry and
         // breaks native tab switching. Toolbar items are inserted directly
-        // when showPreferencesPanel is called (see SpliceKitPreferencesPane).
+        // when showPreferencesPanel is called (see PreferencesPane.m).
 
         sDebugPrefsInstalled = YES;
         success = YES;
@@ -901,238 +911,4 @@ BOOL SpliceKit_uninstallDebugSettingsPanel(void) {
 
 BOOL SpliceKit_isDebugSettingsPanelInstalled(void) {
     return sDebugPrefsInstalled;
-}
-
-#pragma mark - Debug Menu Bar
-
-// Build a submenu of checkbox items bound to BOOL defaults.
-static NSMenu *SKDebug_buildCheckboxSubmenu(NSString *title, NSArray<NSString *> *keys) {
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:title];
-    menu.autoenablesItems = YES;
-    menu.delegate = [SpliceKitDebugController shared];
-    SpliceKitDebugController *ctl = [SpliceKitDebugController shared];
-    for (NSString *key in keys) {
-        NSMenuItem *item = [[NSMenuItem alloc]
-            initWithTitle:SKDebug_humanizeKey(key)
-                   action:@selector(toggleBoolDefault:)
-            keyEquivalent:@""];
-        item.representedObject = key;
-        item.target = ctl;
-        item.state = [[NSUserDefaults standardUserDefaults] boolForKey:key]
-                     ? NSControlStateValueOn : NSControlStateValueOff;
-        [menu addItem:item];
-    }
-    return menu;
-}
-
-static NSMenuItem *SKDebug_buildDebugMenuItem(void) {
-    SpliceKitDebugController *ctl = [SpliceKitDebugController shared];
-
-    NSMenu *root = [[NSMenu alloc] initWithTitle:@"Debug"];
-    root.autoenablesItems = YES;
-
-    // Timeline Overlays submenu
-    NSMenuItem *overlays = [[NSMenuItem alloc] initWithTitle:@"Timeline Overlays"
-                                                      action:nil keyEquivalent:@""];
-    overlays.submenu = SKDebug_buildCheckboxSubmenu(@"Timeline Overlays", SKDebug_tlkVisualFlags());
-    [root addItem:overlays];
-
-    // Timeline Logging submenu
-    NSMenuItem *logging = [[NSMenuItem alloc] initWithTitle:@"Timeline Logging"
-                                                     action:nil keyEquivalent:@""];
-    logging.submenu = SKDebug_buildCheckboxSubmenu(@"Timeline Logging", SKDebug_tlkLoggingFlags());
-    [root addItem:logging];
-
-    // Rendering / Performance submenu
-    NSMenuItem *render = [[NSMenuItem alloc] initWithTitle:@"Rendering & Performance"
-                                                    action:nil keyEquivalent:@""];
-    render.submenu = SKDebug_buildCheckboxSubmenu(@"Rendering & Performance", SKDebug_renderFlags());
-    [root addItem:render];
-
-    // FCP Behavior submenu
-    NSMenuItem *fcp = [[NSMenuItem alloc] initWithTitle:@"FCP Behavior"
-                                                 action:nil keyEquivalent:@""];
-    fcp.submenu = SKDebug_buildCheckboxSubmenu(@"FCP Behavior", SKDebug_fcpBehaviorFlags());
-    [root addItem:fcp];
-
-    [root addItem:[NSMenuItem separatorItem]];
-
-    // Log Level submenu (radio-style — current level always has a checkmark)
-    NSMenu *logLevelMenu = [[NSMenu alloc] initWithTitle:@"Log Level"];
-    logLevelMenu.autoenablesItems = YES;
-    logLevelMenu.delegate = [SpliceKitDebugController shared];
-    NSArray *levels = SKDebug_logLevelNames();
-    for (NSInteger i = 0; i < (NSInteger)levels.count; i++) {
-        NSMenuItem *item = [[NSMenuItem alloc]
-            initWithTitle:[levels[i] capitalizedString]
-                   action:@selector(setLogLevel:)
-            keyEquivalent:@""];
-        item.tag = i;
-        item.target = ctl;
-        [logLevelMenu addItem:item];
-    }
-    NSMenuItem *logLevelHeader = [[NSMenuItem alloc] initWithTitle:@"Log Level" action:nil keyEquivalent:@""];
-    logLevelHeader.submenu = logLevelMenu;
-    [root addItem:logLevelHeader];
-
-    // LogUI / LogThread toggles
-    NSMenuItem *logUI = [[NSMenuItem alloc]
-        initWithTitle:@"Show In-App Log Panel"
-               action:@selector(toggleBoolDefault:)
-        keyEquivalent:@""];
-    logUI.representedObject = @"LogUI";
-    logUI.target = ctl;
-    logUI.state = [[NSUserDefaults standardUserDefaults] boolForKey:@"LogUI"]
-                  ? NSControlStateValueOn : NSControlStateValueOff;
-    [root addItem:logUI];
-
-    NSMenuItem *logThread = [[NSMenuItem alloc]
-        initWithTitle:@"Include Thread Info in Log"
-               action:@selector(toggleBoolDefault:)
-        keyEquivalent:@""];
-    logThread.representedObject = @"LogThread";
-    logThread.target = ctl;
-    logThread.state = [[NSUserDefaults standardUserDefaults] boolForKey:@"LogThread"]
-                      ? NSControlStateValueOn : NSControlStateValueOff;
-    [root addItem:logThread];
-
-    [root addItem:[NSMenuItem separatorItem]];
-
-    // Presets
-    struct { NSString *title; NSString *key; } presets[] = {
-        {@"Enable Timeline Visual Overlays", @"timeline_visual"},
-        {@"Enable Timeline Logging",         @"timeline_logging"},
-        {@"Enable Performance Monitoring",   @"performance"},
-        {@"Enable Render Debug",             @"render_debug"},
-        {@"Enable Verbose Logging",          @"verbose_logging"},
-        {@"Reset All Debug Flags",           @"all_off"},
-    };
-    NSMenu *presetMenu = [[NSMenu alloc] initWithTitle:@"Presets"];
-    for (size_t i = 0; i < sizeof(presets) / sizeof(presets[0]); i++) {
-        NSMenuItem *item = [[NSMenuItem alloc]
-            initWithTitle:presets[i].title
-                   action:@selector(applyPreset:)
-            keyEquivalent:@""];
-        item.representedObject = presets[i].key;
-        item.target = ctl;
-        [presetMenu addItem:item];
-    }
-    NSMenuItem *presetHeader = [[NSMenuItem alloc] initWithTitle:@"Presets" action:nil keyEquivalent:@""];
-    presetHeader.submenu = presetMenu;
-    [root addItem:presetHeader];
-
-    [root addItem:[NSMenuItem separatorItem]];
-
-    // FCP-native developer actions
-    NSMenu *fcpDevMenu = [[NSMenu alloc] initWithTitle:@"FCP Developer Tools"];
-    fcpDevMenu.autoenablesItems = YES;
-    fcpDevMenu.delegate = [SpliceKitDebugController shared];
-    {
-        NSMenuItem *cg = [[NSMenuItem alloc]
-            initWithTitle:@"Toggle CG Context Draw"
-                   action:@selector(toggleCGContextDraw:)
-            keyEquivalent:@""];
-        cg.target = ctl;
-        cg.enabled = NO;
-        [fcpDevMenu addItem:cg];
-
-        NSMenuItem *saveSearch = [[NSMenuItem alloc]
-            initWithTitle:@"Toggle Save Search Results (VAML)"
-                   action:@selector(toggleSaveSearchResults:)
-            keyEquivalent:@""];
-        saveSearch.target = ctl;
-        [fcpDevMenu addItem:saveSearch];
-
-        NSMenuItem *saveTrans = [[NSMenuItem alloc]
-            initWithTitle:@"Toggle Save Transcription (VAML)"
-                   action:@selector(toggleSaveTranscription:)
-            keyEquivalent:@""];
-        saveTrans.target = ctl;
-        [fcpDevMenu addItem:saveTrans];
-    }
-    NSMenuItem *fcpDevHeader = [[NSMenuItem alloc] initWithTitle:@"FCP Developer Tools" action:nil keyEquivalent:@""];
-    fcpDevHeader.submenu = fcpDevMenu;
-    [root addItem:fcpDevHeader];
-
-    [root addItem:[NSMenuItem separatorItem]];
-
-    // Framerate monitor controls
-    NSMenuItem *startFps = [[NSMenuItem alloc]
-        initWithTitle:@"Start HMD Framerate Monitor"
-               action:@selector(startFramerateMonitor:)
-        keyEquivalent:@""];
-    startFps.target = ctl;
-    [root addItem:startFps];
-
-    NSMenuItem *stopFps = [[NSMenuItem alloc]
-        initWithTitle:@"Stop HMD Framerate Monitor"
-               action:@selector(stopFramerateMonitor:)
-        keyEquivalent:@""];
-    stopFps.target = ctl;
-    [root addItem:stopFps];
-
-    // Top-level container
-    NSMenuItem *topLevel = [[NSMenuItem alloc] initWithTitle:@"Debug" action:nil keyEquivalent:@""];
-    topLevel.submenu = root;
-    return topLevel;
-}
-
-static BOOL sDebugMenuInstalled = NO;
-
-BOOL SpliceKit_installDebugMenuBar(void) {
-    if (sDebugMenuInstalled) return YES;
-
-    __block BOOL success = NO;
-    dispatch_block_t work = ^{
-        NSMenu *mainMenu = [NSApp mainMenu];
-        if (!mainMenu) return;
-        if ([mainMenu indexOfItemWithTitle:@"Debug"] >= 0) {
-            sDebugMenuInstalled = YES;
-            success = YES;
-            if ([[NSUserDefaults standardUserDefaults] boolForKey:@"LogUI"]) {
-                [[SpliceKitLogPanel sharedPanel] showPanel];
-            }
-            return;
-        }
-        NSMenuItem *debugItem = SKDebug_buildDebugMenuItem();
-        [SpliceKitDebugController shared].debugMenuItem = debugItem;
-
-        // Insert before "Splices" (if present) or "Help".
-        NSInteger insertIdx = [mainMenu indexOfItemWithTitle:@"Splices"];
-        if (insertIdx < 0) insertIdx = [mainMenu indexOfItemWithTitle:@"Help"];
-        if (insertIdx < 0) {
-            [mainMenu addItem:debugItem];
-        } else {
-            [mainMenu insertItem:debugItem atIndex:insertIdx];
-        }
-        sDebugMenuInstalled = YES;
-        success = YES;
-        SpliceKit_log(@"Debug menu bar installed");
-        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"LogUI"]) {
-            [[SpliceKitLogPanel sharedPanel] showPanel];
-        }
-    };
-
-    if ([NSThread isMainThread]) work(); else dispatch_sync(dispatch_get_main_queue(), work);
-    return success;
-}
-
-BOOL SpliceKit_uninstallDebugMenuBar(void) {
-    if (!sDebugMenuInstalled) return YES;
-    __block BOOL success = NO;
-    dispatch_block_t work = ^{
-        NSMenu *mainMenu = [NSApp mainMenu];
-        NSInteger idx = [mainMenu indexOfItemWithTitle:@"Debug"];
-        if (idx >= 0) [mainMenu removeItemAtIndex:idx];
-        [[SpliceKitLogPanel sharedPanel] hidePanel];
-        [SpliceKitDebugController shared].debugMenuItem = nil;
-        sDebugMenuInstalled = NO;
-        success = YES;
-    };
-    if ([NSThread isMainThread]) work(); else dispatch_sync(dispatch_get_main_queue(), work);
-    return success;
-}
-
-BOOL SpliceKit_isDebugMenuBarInstalled(void) {
-    return sDebugMenuInstalled;
 }

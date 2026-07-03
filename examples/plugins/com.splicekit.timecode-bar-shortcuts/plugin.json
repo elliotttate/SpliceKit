@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.timecode-bar-shortcuts",
+  "name": "Timecode Bar Shortcuts",
+  "version": "1.0.0",
+  "description": "Injects customizable one-click shortcut buttons into the timeline toolbar's flex gap (between the history-forward arrow and the snapping/skimming controls). Which actions appear is configured from the SpliceKit Settings tab or via JSON at ~/Library/Application Support/SpliceKit/timecode_bar_shortcuts.json. Survives SpliceKit patcher updates.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": ["timecodeBarShortcuts.reload"],
+  "dependencies": []
+}

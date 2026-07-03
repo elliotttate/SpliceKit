@@ -18,7 +18,6 @@
 #import "SpliceKitTranscriptPanel.h"
 #import "SpliceKitCaptionPanel.h"
 #import "SpliceKitCommandPalette.h"
-#import "SpliceKitDebugUI.h"
 #import "SpliceKitLua.h"
 #import "SpliceKitURLImport.h"
 #import "SpliceKitBRAWExports.h"
@@ -12556,106 +12555,6 @@ void SpliceKit_installFCPXMLPasteSwizzle(void) {
             (IMP)SpliceKit_swizzled_paste);
         SpliceKit_log(@"[FCPXMLPaste] Swizzled -[FFAnchoredTimelineModule paste:]");
     }
-}
-
-#pragma mark - Paste Overwrite Edit Menu Item
-
-// Inserts "Paste Overwrite" into FCP's Edit menu immediately after the native "Paste" item.
-// Uses a dedicated action target so we can control validation without touching FCP internals.
-
-@interface SpliceKitPasteOverwriteMenuTarget : NSObject
-+ (instancetype)shared;
-- (void)pasteOverwrite:(id)sender;
-- (BOOL)validateMenuItem:(NSMenuItem *)menuItem;
-@end
-
-@implementation SpliceKitPasteOverwriteMenuTarget
-
-+ (instancetype)shared {
-    static SpliceKitPasteOverwriteMenuTarget *sInstance;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ sInstance = [[self alloc] init]; });
-    return sInstance;
-}
-
-- (void)pasteOverwrite:(id)sender {
-    // Dispatch async so the menu can close before the operation starts
-    dispatch_async(dispatch_get_main_queue(), ^{
-        SpliceKit_handleTimelineAction(@{@"action": @"pasteOverwrite"});
-    });
-}
-
-- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
-    if ([menuItem action] != @selector(pasteOverwrite:)) return NO;
-    // Enabled when FCP native clipboard data is present OR FCPXML is on the pasteboard
-    Class ffpbClass = objc_getClass("FFPasteboard");
-    if (ffpbClass) {
-        id ffpb = ((id (*)(id, SEL, id))objc_msgSend)(
-            ((id (*)(id, SEL))objc_msgSend)((id)ffpbClass, @selector(alloc)),
-            NSSelectorFromString(@"initWithName:"), NSPasteboardNameGeneral);
-        if (((BOOL (*)(id, SEL, BOOL))objc_msgSend)(ffpb, NSSelectorFromString(@"hasEdits:"), NO))
-            return YES;
-    }
-    NSPasteboard *pb = [NSPasteboard generalPasteboard];
-    SEL containsXMLSel = NSSelectorFromString(@"containsXML");
-    if ([pb respondsToSelector:containsXMLSel] &&
-        ((BOOL (*)(id, SEL))objc_msgSend)(pb, containsXMLSel))
-        return YES;
-    return NO;
-}
-
-@end
-
-static BOOL sPasteOverwriteMenuInstalled = NO;
-
-void SpliceKit_installPasteOverwriteMenuItem(void) {
-    if (sPasteOverwriteMenuInstalled) return;
-
-    dispatch_block_t work = ^{
-        NSMenu *mainMenu = [NSApp mainMenu];
-        if (!mainMenu) return;
-
-        // Find the Edit menu by title
-        NSInteger editIdx = [mainMenu indexOfItemWithTitle:@"Edit"];
-        if (editIdx < 0) return;
-        NSMenu *editMenu = [[mainMenu itemAtIndex:editIdx] submenu];
-        if (!editMenu) return;
-
-        // Guard against double-install
-        if ([editMenu indexOfItemWithTitle:@"Paste Overwrite"] >= 0) {
-            sPasteOverwriteMenuInstalled = YES;
-            return;
-        }
-
-        // Find the "Paste" item (action = paste:)
-        NSInteger pasteIdx = -1;
-        for (NSInteger i = 0; i < [editMenu numberOfItems]; i++) {
-            NSMenuItem *item = [editMenu itemAtIndex:i];
-            if ([[item title] isEqualToString:@"Paste"] &&
-                [item action] == NSSelectorFromString(@"paste:")) {
-                pasteIdx = i;
-                break;
-            }
-        }
-        if (pasteIdx < 0) {
-            SpliceKit_log(@"[PasteOverwrite] Could not find Paste item in Edit menu — skipping");
-            return;
-        }
-
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"Paste Overwrite"
-                                                      action:@selector(pasteOverwrite:)
-                                               keyEquivalent:@"v"];
-        item.keyEquivalentModifierMask = NSEventModifierFlagOption;
-        item.target = [SpliceKitPasteOverwriteMenuTarget shared];
-
-        [editMenu insertItem:item atIndex:pasteIdx + 1];
-        sPasteOverwriteMenuInstalled = YES;
-        SpliceKit_log(@"[PasteOverwrite] Inserted 'Paste Overwrite' into Edit menu at index %ld",
-            (long)(pasteIdx + 1));
-    };
-
-    if ([NSThread isMainThread]) work();
-    else dispatch_sync(dispatch_get_main_queue(), work);
 }
 
 #pragma mark - Effect Browser Favorites (context menu)
@@ -27798,47 +27697,36 @@ static NSDictionary *SpliceKit_handleDebugObserveNotification(NSDictionary *para
     return @{@"status": @"ok", @"observing": name};
 }
 
-#pragma mark - Debug: Hidden UI (Settings Panel + Menu Bar)
+#pragma mark - Debug: Hidden UI (Settings Panel)
 
-// debug.showSettingsPanel — rebuilds FCP's missing Debug preferences pane
-// and injects it into the Settings window. Implementation lives in
-// SpliceKitDebugUI.m (ObjC-heavy view construction + LKPreferences ivar patching).
+// debug.showSettingsPanel — reports/controls the "SpliceKit" and "Debug" tabs
+// in FCP's Settings window. Installation itself is owned by the
+// com.splicekit.preferences-pane plugin (~/Library/Application Support/SpliceKit/plugins),
+// which installs both tabs automatically at every launch — this handler only
+// introspects/mutates LKPreferences' live state directly.
 static NSDictionary *SpliceKit_handleDebugShowSettingsPanel(NSDictionary *params) {
-    NSString *act = params[@"action"] ?: @"install";
-    if ([act isEqualToString:@"status"]) {
-        return @{@"installed": @(SpliceKit_isDebugSettingsPanelInstalled())};
-    }
-    if ([act isEqualToString:@"uninstall"] || [act isEqualToString:@"remove"]) {
-        BOOL ok = SpliceKit_uninstallDebugSettingsPanel();
-        return @{@"status": ok ? @"ok" : @"error",
-                 @"installed": @(SpliceKit_isDebugSettingsPanelInstalled())};
-    }
-    BOOL ok = SpliceKit_installDebugSettingsPanel();
-    if (!ok) {
-        return @{@"error": @"Failed to install Debug settings panel — see SpliceKit log"};
-    }
-    return @{@"status": @"ok",
-             @"installed": @(SpliceKit_isDebugSettingsPanelInstalled()),
-             @"note": @"Open Final Cut Pro → Settings to see the Debug tab."};
-}
+    NSString *act = params[@"action"] ?: @"status";
 
-// debug.installMenuBar — adds the "Debug" top-level menu back to the menu bar.
-static NSDictionary *SpliceKit_handleDebugInstallMenuBar(NSDictionary *params) {
-    NSString *act = params[@"action"] ?: @"install";
-    if ([act isEqualToString:@"status"]) {
-        return @{@"installed": @(SpliceKit_isDebugMenuBarInstalled())};
-    }
+    Class prefsClass = objc_getClass("LKPreferences");
+    id shared = (prefsClass && [prefsClass respondsToSelector:@selector(sharedPreferences)])
+        ? ((id (*)(id, SEL))objc_msgSend)((id)prefsClass, @selector(sharedPreferences)) : nil;
+    Ivar titlesIvar = shared ? class_getInstanceVariable(object_getClass(shared), "_preferenceTitles") : NULL;
+    NSArray *titles = titlesIvar ? object_getIvar(shared, titlesIvar) : nil;
+    BOOL installed = [titles isKindOfClass:[NSArray class]] &&
+                      [titles containsObject:@"SpliceKit"] && [titles containsObject:@"Debug"];
+
     if ([act isEqualToString:@"uninstall"] || [act isEqualToString:@"remove"]) {
-        BOOL ok = SpliceKit_uninstallDebugMenuBar();
-        return @{@"status": ok ? @"ok" : @"error",
-                 @"installed": @(SpliceKit_isDebugMenuBarInstalled())};
-    }
-    BOOL ok = SpliceKit_installDebugMenuBar();
-    if (!ok) {
-        return @{@"error": @"Failed to install Debug menu bar — see SpliceKit log"};
+        return @{@"status": @"error",
+                 @"installed": @(installed),
+                 @"note": @"Uninstalling now happens by disabling the com.splicekit.preferences-pane "
+                          @"plugin (set SpliceKitPlugin.com.splicekit.preferences-pane.disabled) and restarting FCP."};
     }
     return @{@"status": @"ok",
-             @"installed": @(SpliceKit_isDebugMenuBarInstalled())};
+             @"installed": @(installed),
+             @"note": installed
+                 ? @"Open Final Cut Pro → Settings to see the SpliceKit and Debug tabs."
+                 : @"Not installed — check that the com.splicekit.preferences-pane plugin loaded "
+                   @"(see ~/Library/Logs/SpliceKit/splicekit.log)."};
 }
 
 #pragma mark - Debug: Breakpoints
@@ -28875,8 +28763,6 @@ NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleDebugObserveNotification(params);
     } else if ([method isEqualToString:@"debug.showSettingsPanel"]) {
         result = SpliceKit_handleDebugShowSettingsPanel(params);
-    } else if ([method isEqualToString:@"debug.installMenuBar"]) {
-        result = SpliceKit_handleDebugInstallMenuBar(params);
     } else if ([method isEqualToString:@"debug.breakpoint"]) {
         result = SpliceKit_handleDebugBreakpoint(params);
     }

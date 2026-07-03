@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.replace-at-playhead",
+  "name": "Replace at Playhead",
+  "version": "1.0.0",
+  "description": "Restores the 'Replace at Playhead' edit mode (drag-drop menu + ⌥⇧R Command Editor shortcut) that Apple removed from FCP's UI, and adds 'Replace and Retain Attributes' (⌥⇧⌘R) which replaces the timeline clip at the playhead while preserving its effects/color/transform attributes. Survives SpliceKit patcher updates.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

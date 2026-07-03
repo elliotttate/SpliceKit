@@ -1,6 +1,9 @@
 //
-//  SpliceKitTimelineTabs.m
-//  SpliceKit – Named project tabs for Final Cut Pro's timeline navigation
+//  TimelineTabs.m
+//  com.splicekit.timeline-tabs
+//
+//  Named project tabs for Final Cut Pro's timeline navigation.
+//  Survives SpliceKit patcher updates — the entire feature lives here.
 //
 //  Creates a dedicated 28 px row between the viewer/browser section
 //  (PEUpperDeckContainer) and the timeline section (PELowerDeckContainer) by
@@ -14,10 +17,21 @@
 //  reduction immediately, keeping the dedicated row intact.
 //
 
-#import "SpliceKit.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+
+#import "SpliceKitPluginAPI.h"
+
+static SpliceKitPluginAPI  sAPIStorage;
+static SpliceKitPluginAPI *sAPI = NULL;
+
+#define SpliceKit_log(...) (sAPI ? sAPI->log(__VA_ARGS__) : (void)0)
+#define SpliceKit_executeOnMainThread(block) (sAPI ? sAPI->executeOnMainThread(block) : (void)0)
+
+// Provided by the host binary — a shared, non-migrated utility that stays in
+// the core dylib. Resolved at load time via -undefined dynamic_lookup.
+extern id SpliceKit_getActiveTimelineModule(void);
 
 // ---------------------------------------------------------------------------
 // Layout constants
@@ -742,18 +756,26 @@ static SpliceKitTimelineTabs *sTabsManager = nil;
 
 static BOOL sTabsInstalled = NO;
 
-void SpliceKit_installTimelineTabs(void) {
+static void SpliceKit_installTimelineTabs(void) {
     if (sTabsInstalled) return;
     sTabsInstalled = YES;
     [[SpliceKitTimelineTabs shared] install];
 }
 
-void SpliceKit_uninstallTimelineTabs(void) {
-    if (!sTabsInstalled) return;
-    sTabsInstalled = NO;
-    [[SpliceKitTimelineTabs shared] uninstall];
-}
+// ---------------------------------------------------------------------------
+#pragma mark - Plugin entry point
+// ---------------------------------------------------------------------------
 
-BOOL SpliceKit_isTimelineTabsInstalled(void) {
-    return sTabsInstalled;
+__attribute__((visibility("default")))
+void SpliceKitPlugin_init(SpliceKitPluginAPI *api) {
+    sAPIStorage = *api;
+    sAPI = &sAPIStorage;
+
+    sAPI->log(@"[TimelineTabs] Loading.");
+
+    api->executeOnMainThreadAsync(^{
+        SpliceKit_installTimelineTabs();
+    });
+
+    sAPI->log(@"[TimelineTabs] Loaded.");
 }

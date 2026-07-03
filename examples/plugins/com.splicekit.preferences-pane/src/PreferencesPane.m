@@ -1,21 +1,30 @@
 //
-//  SpliceKitPreferencesPane.m
-//  Adds a "SpliceKit" tab to FCP's Preferences / Settings window.
+//  PreferencesPane.m
+//  com.splicekit.preferences-pane
 //
-//  Installation follows the same pattern as SpliceKitDebugUI:
+//  Adds a "SpliceKit" tab to FCP's Preferences / Settings window.
+//  Survives SpliceKit patcher updates — the entire feature lives here.
+//
+//  Installation:
 //    1. Build the view programmatically (no NIB needed).
 //    2. Mutate LKPreferences' internal arrays / dictionary directly.
-//    3. Call _setupToolbar so the toolbar picks up the new tab.
+//    3. Toolbar items are inserted from the showPreferencesPanel swizzle below
+//       (never call _setupToolbar directly — it wipes FCP's internal owner
+//       registry and breaks native tab switching).
 //
 
-#import "SpliceKitPreferencesPane.h"
-#import "SpliceKitTimecodeBarShortcuts.h"
-#import "SpliceKit.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-// FCP-default preference functions defined in SpliceKitServer.m
+#import "SKPluginShared.h"
+
+SpliceKitPluginAPI  sAPIStorageInternal;
+SpliceKitPluginAPI *sAPI = NULL;
+
+// FCP-default preference functions defined in SpliceKitServer.m (core dylib —
+// these are consumed elsewhere too, e.g. when new clips are added, so they
+// stay in the core and are resolved here via -undefined dynamic_lookup).
 extern NSString *SpliceKit_getTransitionWarningDefault(void);
 extern void      SpliceKit_setTransitionWarningDefault(NSString *value);
 extern NSInteger SpliceKit_getDefaultClipHeight(void);
@@ -24,6 +33,124 @@ extern NSString *SpliceKit_getDefaultAudioChannelConfig(void);
 extern void      SpliceKit_setDefaultAudioChannelConfig(NSString *value);
 extern NSString *SpliceKit_getDefaultAudioPanMode(void);
 extern void      SpliceKit_setDefaultAudioPanMode(NSString *value);
+
+// Bridge option toggles defined in the core dylib (shared with the "Splices"
+// top-level menu's Options submenu, which stays in the core).
+extern BOOL SpliceKit_isEffectDragAsAdjustmentClipEnabled(void);
+extern void SpliceKit_setEffectDragAsAdjustmentClipEnabled(BOOL enabled);
+extern BOOL SpliceKit_isViewerPinchZoomEnabled(void);
+extern void SpliceKit_setViewerPinchZoomEnabled(BOOL enabled);
+extern BOOL SpliceKit_isVideoOnlyKeepsAudioDisabledEnabled(void);
+extern void SpliceKit_setVideoOnlyKeepsAudioDisabledEnabled(BOOL enabled);
+extern BOOL SpliceKit_isSuppressAutoImportEnabled(void);
+extern void SpliceKit_setSuppressAutoImportEnabled(BOOL enabled);
+extern BOOL SpliceKit_isTimelinePlayheadOverlayEnabled(void);
+extern void SpliceKit_setTimelinePlayheadOverlayEnabled(BOOL enabled);
+extern BOOL SpliceKit_isTimelinePerformanceModeEnabled(void);
+extern void SpliceKit_setTimelinePerformanceModeEnabled(BOOL enabled);
+extern NSString *SpliceKit_getDefaultSpatialConformType(void);
+extern void SpliceKit_setDefaultSpatialConformType(NSString *value);
+
+// Installer for the Debug tab, defined in DebugUI.m (same plugin.dylib —
+// ordinary intra-image linking, no dynamic_lookup needed).
+extern BOOL SpliceKit_installDebugSettingsPanel(void);
+
+// ---------------------------------------------------------------------------
+#pragma mark - Timecode Bar Shortcuts catalogue + config (duplicated)
+// ---------------------------------------------------------------------------
+// The actual Timecode Bar Shortcuts feature lives in its own plugin
+// (com.splicekit.timecode-bar-shortcuts) and reads/writes the same JSON config
+// file. Native plugins are loaded with dlopen(RTLD_LOCAL), so C functions in
+// one plugin are not visible to another — the catalogue + config persistence
+// are duplicated here (self-contained) rather than shared via symbol lookup.
+// Both plugins agree on the on-disk format, so this stays interoperable.
+
+static NSURL *SKPrefs_tcbConfigURL(void) {
+    NSURL *appSupport = [[[NSFileManager defaultManager]
+        URLsForDirectory:NSApplicationSupportDirectory
+               inDomains:NSUserDomainMask] firstObject];
+    NSURL *dir = [appSupport URLByAppendingPathComponent:@"SpliceKit"];
+    [[NSFileManager defaultManager] createDirectoryAtURL:dir
+                             withIntermediateDirectories:YES attributes:nil error:nil];
+    return [dir URLByAppendingPathComponent:@"timecode_bar_shortcuts.json"];
+}
+
+static NSArray<NSDictionary *> *SpliceKit_getTimecodeBarConfig(void) {
+    NSData *data = [NSData dataWithContentsOfURL:SKPrefs_tcbConfigURL()];
+    if (!data) return @[];
+    NSArray *arr = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [arr isKindOfClass:[NSArray class]] ? arr : @[];
+}
+
+static void SpliceKit_setTimecodeBarConfig(NSArray<NSDictionary *> *config) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:config
+                                                    options:NSJSONWritingPrettyPrinted
+                                                      error:nil];
+    if (data) [data writeToURL:SKPrefs_tcbConfigURL() atomically:YES];
+}
+
+static NSArray<NSDictionary *> *SpliceKit_getAvailableTimecodeBarActions(void) {
+    static NSArray *sActions = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        sActions = @[
+            // ── Edit ─────────────────────────────────────────────────────────
+            @{@"id":@"blade",              @"type":@"timeline", @"category":@"Edit",       @"icon":@"scissors",                           @"tooltip":@"Blade — B"},
+            @{@"id":@"bladeAll",           @"type":@"timeline", @"category":@"Edit",       @"icon":@"scissors.circle.fill",               @"tooltip":@"Blade All — Shift-B"},
+            @{@"id":@"undo",               @"type":@"timeline", @"category":@"Edit",       @"icon":@"arrow.uturn.backward",               @"tooltip":@"Undo — ⌘Z"},
+            @{@"id":@"redo",               @"type":@"timeline", @"category":@"Edit",       @"icon":@"arrow.uturn.forward",                @"tooltip":@"Redo — ⇧⌘Z"},
+            @{@"id":@"selectAll",          @"type":@"timeline", @"category":@"Edit",       @"icon":@"checkmark.rectangle.fill",           @"tooltip":@"Select All — ⌘A"},
+            @{@"id":@"delete",             @"type":@"timeline", @"category":@"Edit",       @"icon":@"trash",                              @"tooltip":@"Delete"},
+            @{@"id":@"cut",                @"type":@"timeline", @"category":@"Edit",       @"icon":@"scissors.badge.ellipsis",            @"tooltip":@"Cut — ⌘X"},
+            @{@"id":@"copy",               @"type":@"timeline", @"category":@"Edit",       @"icon":@"doc.on.doc",                         @"tooltip":@"Copy — ⌘C"},
+            @{@"id":@"paste",              @"type":@"timeline", @"category":@"Edit",       @"icon":@"doc.on.clipboard",                   @"tooltip":@"Paste — ⌘V"},
+            @{@"id":@"joinClips",          @"type":@"timeline", @"category":@"Edit",       @"icon":@"link",                               @"tooltip":@"Join Clips"},
+            // ── Markers ──────────────────────────────────────────────────────
+            @{@"id":@"addMarker",          @"type":@"timeline", @"category":@"Markers",    @"icon":@"bookmark.fill",                      @"tooltip":@"Add Marker — M"},
+            @{@"id":@"addChapterMarker",   @"type":@"timeline", @"category":@"Markers",    @"icon":@"star.fill",                          @"tooltip":@"Add Chapter Marker"},
+            @{@"id":@"addTodoMarker",      @"type":@"timeline", @"category":@"Markers",    @"icon":@"checkmark.seal.fill",                @"tooltip":@"Add To-Do Marker"},
+            @{@"id":@"deleteMarker",       @"type":@"timeline", @"category":@"Markers",    @"icon":@"bookmark.slash.fill",                @"tooltip":@"Delete Marker"},
+            @{@"id":@"nextMarker",         @"type":@"timeline", @"category":@"Markers",    @"icon":@"chevron.right",                      @"tooltip":@"Next Marker"},
+            @{@"id":@"previousMarker",     @"type":@"timeline", @"category":@"Markers",    @"icon":@"chevron.left",                       @"tooltip":@"Previous Marker"},
+            // ── Navigation ───────────────────────────────────────────────────
+            @{@"id":@"goToStart",          @"type":@"playback", @"category":@"Navigation", @"icon":@"backward.end.fill",                  @"tooltip":@"Go to Start — Home"},
+            @{@"id":@"goToEnd",            @"type":@"playback", @"category":@"Navigation", @"icon":@"forward.end.fill",                   @"tooltip":@"Go to End — End"},
+            @{@"id":@"nextEdit",           @"type":@"timeline", @"category":@"Navigation", @"icon":@"forward.frame.fill",                 @"tooltip":@"Next Edit — ;"},
+            @{@"id":@"previousEdit",       @"type":@"timeline", @"category":@"Navigation", @"icon":@"backward.frame.fill",                @"tooltip":@"Previous Edit — :"},
+            @{@"id":@"selectClipAtPlayhead",@"type":@"timeline",@"category":@"Navigation", @"icon":@"cursorarrow.click",                  @"tooltip":@"Select Clip at Playhead — X"},
+            // ── Color ────────────────────────────────────────────────────────
+            @{@"id":@"addColorBoard",      @"type":@"timeline", @"category":@"Color",      @"icon":@"paintpalette",                       @"tooltip":@"Add Color Board"},
+            @{@"id":@"addColorWheels",     @"type":@"timeline", @"category":@"Color",      @"icon":@"circle.hexagongrid",                 @"tooltip":@"Add Color Wheels"},
+            @{@"id":@"addColorCurves",     @"type":@"timeline", @"category":@"Color",      @"icon":@"chart.line.uptrend.xyaxis",          @"tooltip":@"Add Color Curves"},
+            @{@"id":@"balanceColor",       @"type":@"timeline", @"category":@"Color",      @"icon":@"wand.and.stars",                     @"tooltip":@"Balance Color — ⌥⌘B"},
+            @{@"id":@"matchColor",         @"type":@"timeline", @"category":@"Color",      @"icon":@"eyedropper.halffull",                @"tooltip":@"Match Color"},
+            @{@"id":@"addColorAdjustment", @"type":@"timeline", @"category":@"Color",      @"icon":@"slider.horizontal.3",               @"tooltip":@"Add Color Adjustment"},
+            // ── Rating ───────────────────────────────────────────────────────
+            @{@"id":@"favorite",           @"type":@"timeline", @"category":@"Rating",     @"icon":@"hand.thumbsup.fill",                 @"tooltip":@"Favorite — F"},
+            @{@"id":@"reject",             @"type":@"timeline", @"category":@"Rating",     @"icon":@"hand.thumbsdown.fill",               @"tooltip":@"Reject — Delete"},
+            @{@"id":@"unrate",             @"type":@"timeline", @"category":@"Rating",     @"icon":@"minus.circle",                       @"tooltip":@"Unrate — U"},
+            // ── Speed ────────────────────────────────────────────────────────
+            @{@"id":@"retimeSlow50",       @"type":@"timeline", @"category":@"Speed",      @"icon":@"tortoise.fill",                      @"tooltip":@"50% Slow Motion"},
+            @{@"id":@"retimeFast2x",       @"type":@"timeline", @"category":@"Speed",      @"icon":@"hare.fill",                          @"tooltip":@"2× Fast Motion"},
+            @{@"id":@"retimeNormal",       @"type":@"timeline", @"category":@"Speed",      @"icon":@"speedometer",                        @"tooltip":@"Normal Speed — ⌥⌘R"},
+            @{@"id":@"retimeReverse",      @"type":@"timeline", @"category":@"Speed",      @"icon":@"arrow.counterclockwise",             @"tooltip":@"Reverse"},
+            @{@"id":@"freezeFrame",        @"type":@"timeline", @"category":@"Speed",      @"icon":@"pause.circle.fill",                  @"tooltip":@"Freeze Frame — F"},
+            // ── Trim ─────────────────────────────────────────────────────────
+            @{@"id":@"trimToPlayhead",     @"type":@"timeline", @"category":@"Trim",       @"icon":@"crop",                               @"tooltip":@"Trim to Playhead"},
+            @{@"id":@"extendEditToPlayhead",@"type":@"timeline",@"category":@"Trim",       @"icon":@"arrow.left.and.right.circle",        @"tooltip":@"Extend Edit to Playhead — ⇧X"},
+            @{@"id":@"nudgeLeft",          @"type":@"timeline", @"category":@"Trim",       @"icon":@"arrow.left",                         @"tooltip":@"Nudge Left — ,"},
+            @{@"id":@"nudgeRight",         @"type":@"timeline", @"category":@"Trim",       @"icon":@"arrow.right",                        @"tooltip":@"Nudge Right — ."},
+            // ── View ─────────────────────────────────────────────────────────
+            @{@"id":@"zoomToFit",          @"type":@"timeline", @"category":@"View",       @"icon":@"arrow.up.left.and.arrow.down.right", @"tooltip":@"Zoom to Fit — ⇧Z"},
+            @{@"id":@"zoomIn",             @"type":@"timeline", @"category":@"View",       @"icon":@"plus.magnifyingglass",               @"tooltip":@"Zoom In — ⌘="},
+            @{@"id":@"zoomOut",            @"type":@"timeline", @"category":@"View",       @"icon":@"minus.magnifyingglass",              @"tooltip":@"Zoom Out — ⌘-"},
+            @{@"id":@"toggleInspector",    @"type":@"timeline", @"category":@"View",       @"icon":@"sidebar.right",                      @"tooltip":@"Toggle Inspector — ⌘4"},
+            @{@"id":@"toggleSnapping",     @"type":@"timeline", @"category":@"View",       @"icon":@"magnet",                             @"tooltip":@"Toggle Snapping — N"},
+            @{@"id":@"toggleSkimming",     @"type":@"timeline", @"category":@"View",       @"icon":@"eye",                                @"tooltip":@"Toggle Skimming — S"},
+        ];
+    });
+    return sActions;
+}
 
 // ---------------------------------------------------------------------------
 #pragma mark - Module class
@@ -214,6 +341,13 @@ static void SKPrefs_reloadTLK(void) {
             [NSPredicate predicateWithFormat:@"id != %@", actionID]];
     }
     SpliceKit_setTimecodeBarConfig(config);
+
+    // Ask the com.splicekit.timecode-bar-shortcuts plugin (a separate
+    // dlopen(RTLD_LOCAL) image) to reload its buttons immediately, via the
+    // shared RPC dispatch table rather than a direct symbol call.
+    if (sAPI) {
+        sAPI->callMethod(@{@"method": @"timecodeBarShortcuts.reload"});
+    }
 }
 
 @end
@@ -961,4 +1095,26 @@ static void SKPrefs_swizzleShowPanel(void) {
     swizzle(@selector(_selectModuleOwner:),
             @selector(spliceKit_selectModuleOwner:),
             @"_selectModuleOwner:");
+}
+
+// ---------------------------------------------------------------------------
+#pragma mark - Plugin entry point
+// ---------------------------------------------------------------------------
+
+__attribute__((visibility("default")))
+void SpliceKitPlugin_init(SpliceKitPluginAPI *api) {
+    sAPIStorageInternal = *api;
+    sAPI = &sAPIStorageInternal;
+
+    sAPI->log(@"[PreferencesPane] Loading.");
+
+    api->executeOnMainThreadAsync(^{
+        // SpliceKit pane first: inserts data into _preferenceTitles/_preferenceModules
+        // WITHOUT calling _setupToolbar. Then Debug installs, so both tabs are present
+        // in the underlying arrays before the showPreferencesPanel swizzle runs.
+        SpliceKit_installSpliceKitPreferencesPane();
+        SpliceKit_installDebugSettingsPanel();
+    });
+
+    sAPI->log(@"[PreferencesPane] Loaded.");
 }

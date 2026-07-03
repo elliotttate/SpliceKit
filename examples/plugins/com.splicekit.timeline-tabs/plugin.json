@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.timeline-tabs",
+  "name": "Timeline Tabs",
+  "version": "1.0.0",
+  "description": "Named project tabs in a dedicated 28px row above the timeline, replacing FCP's back/forward arrow navigation. Click a tab to jump to that sequence; drag to reorder; the × button closes a tab. Survives SpliceKit patcher updates.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}
