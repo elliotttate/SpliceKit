@@ -6,10 +6,10 @@
 #   make clean     — remove build artefacts
 
 PLUGIN_ID   = com.splicekit.undo-history-ui
-PLUGIN_ROOT = $(shell pwd)
-REPO_ROOT   = $(PLUGIN_ROOT)/../../..
-SRC         = src/UndoHistoryUI.m
-DYLIB       = build/plugin.dylib
+PLUGIN_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+REPO_ROOT   := $(abspath $(PLUGIN_ROOT)/../../..)
+SRC         = $(PLUGIN_ROOT)/src/UndoHistoryUI.m
+DYLIB       = $(PLUGIN_ROOT)/build/plugin.dylib
 INSTALL_DIR = $(HOME)/Library/Application Support/SpliceKit/plugins/$(PLUGIN_ID)
 
 CC       = clang
@@ -27,16 +27,16 @@ LDFLAGS  = -dynamiclib -undefined dynamic_lookup \
 all: $(DYLIB)
 
 $(DYLIB): $(SRC) $(REPO_ROOT)/Sources/SpliceKitPluginAPI.h
-	@mkdir -p build
+	@mkdir -p "$(PLUGIN_ROOT)/build"
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 	@echo "Built $(DYLIB)"
 
 install: $(DYLIB)
 	@mkdir -p "$(INSTALL_DIR)"
 	cp -f $(DYLIB)    "$(INSTALL_DIR)/plugin.dylib"
-	cp -f plugin.json "$(INSTALL_DIR)/plugin.json"
+	cp -f "$(PLUGIN_ROOT)/plugin.json" "$(INSTALL_DIR)/plugin.json"
 	@echo "Installed $(PLUGIN_ID) → $(INSTALL_DIR)"
 	@echo "Restart FCP to activate."
 
 clean:
-	rm -rf build
+	rm -rf "$(PLUGIN_ROOT)/build"

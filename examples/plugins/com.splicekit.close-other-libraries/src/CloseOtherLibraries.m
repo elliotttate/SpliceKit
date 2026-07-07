@@ -53,8 +53,9 @@ static SpliceKitPluginAPI *sAPI = NULL;
     // Enumerate all open libraries.
     Class libDocClass = objc_getClass("FFLibraryDocument");
     if (!libDocClass) return;
-    id allLibs = ((id (*)(id, SEL))objc_msgSend)(
-        libDocClass, NSSelectorFromString(@"copyActiveLibraries"));
+    SEL copyActiveLibsSel = NSSelectorFromString(@"copyActiveLibraries");
+    if (![libDocClass respondsToSelector:copyActiveLibsSel]) return;
+    id allLibs = ((id (*)(id, SEL))objc_msgSend)((id)libDocClass, copyActiveLibsSel);
     if (![allLibs isKindOfClass:[NSArray class]]) return;
 
     NSArray *libs = (NSArray *)allLibs;
@@ -78,8 +79,9 @@ static SpliceKitPluginAPI *sAPI = NULL;
     if (menuItem.action != @selector(closeOtherLibraries:)) return YES;
     Class libDocClass = objc_getClass("FFLibraryDocument");
     if (!libDocClass) return NO;
-    id allLibs = ((id (*)(id, SEL))objc_msgSend)(
-        libDocClass, NSSelectorFromString(@"copyActiveLibraries"));
+    SEL copyActiveLibsSel = NSSelectorFromString(@"copyActiveLibraries");
+    if (![libDocClass respondsToSelector:copyActiveLibsSel]) return NO;
+    id allLibs = ((id (*)(id, SEL))objc_msgSend)((id)libDocClass, copyActiveLibsSel);
     NSInteger count = [allLibs isKindOfClass:[NSArray class]] ? [(NSArray *)allLibs count] : 0;
     return count > 1;
 }
@@ -95,17 +97,27 @@ static void COL_addMenuItemIfNeeded(void) {
         NSMenu *mainMenu = [NSApp mainMenu];
         if (!mainMenu) return;
 
+        // Locate the File menu by content (an item with action closeLibrary:) rather
+        // than by localized title, so this works on non-English FCP builds too.
         NSMenu *fileMenu = nil;
+        NSInteger closeLibIdx = -1;
+        SEL closeLibSel = NSSelectorFromString(@"closeLibrary:");
         for (NSMenuItem *topItem in mainMenu.itemArray) {
-            if ([topItem.title isEqualToString:@"File"] && topItem.submenu) {
-                fileMenu = topItem.submenu;
-                break;
+            NSMenu *submenu = topItem.submenu;
+            if (!submenu) continue;
+            for (NSInteger i = 0; i < submenu.numberOfItems; i++) {
+                if ([submenu itemAtIndex:i].action == closeLibSel) {
+                    fileMenu = submenu;
+                    closeLibIdx = i;
+                    break;
+                }
             }
+            if (fileMenu) break;
         }
         if (!fileMenu) return;
 
         for (NSMenuItem *item in fileMenu.itemArray) {
-            if ([item.title isEqualToString:@"Close Other Libraries"]) return;
+            if (item.action == @selector(closeOtherLibraries:)) return;
         }
 
         NSMenuItem *item = [[NSMenuItem alloc]
@@ -115,15 +127,9 @@ static void COL_addMenuItemIfNeeded(void) {
         item.keyEquivalentModifierMask = NSEventModifierFlagShift;
         item.target = [COLPlugin_Controller shared];
 
-        BOOL inserted = NO;
-        for (NSInteger i = 0; i < fileMenu.numberOfItems; i++) {
-            if ([[fileMenu itemAtIndex:i].title isEqualToString:@"Close Library"]) {
-                [fileMenu insertItem:item atIndex:i + 1];
-                inserted = YES;
-                break;
-            }
-        }
-        if (!inserted) {
+        if (closeLibIdx >= 0) {
+            [fileMenu insertItem:item atIndex:closeLibIdx + 1];
+        } else {
             [fileMenu insertItem:item atIndex:1];
         }
 

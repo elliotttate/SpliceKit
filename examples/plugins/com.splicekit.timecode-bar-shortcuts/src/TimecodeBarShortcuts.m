@@ -377,7 +377,7 @@ static BOOL SCB_findFlexConstraint(NSView *toolbar,
 @property (nonatomic, assign) NSInteger              installRetries;
 + (instancetype)shared;
 - (void)install;
-- (void)reload;
+- (NSString *)reload; // "ok" (installed/reloaded synchronously) or "pending" (still retrying — see log)
 @end
 
 @implementation SpliceKitTimecodeBarShortcutsManager
@@ -401,9 +401,12 @@ static BOOL SCB_findFlexConstraint(NSView *toolbar,
     SpliceKit_executeOnMainThread(^{ [self _installOnMainThread]; });
 }
 
-- (void)_installOnMainThread {
+// Returns YES if the bar is installed (or already was) by the time this call
+// returns; NO if a retry was scheduled (or retries were exhausted) and the
+// caller should not treat this as a confirmed success.
+- (BOOL)_installOnMainThread {
     // If the bar is already in a toolbar, nothing to do.
-    if (_shortcutsBar.superview) return;
+    if (_shortcutsBar.superview) return YES;
 
     NSView *toolbar = SCB_findToolbarView();
     if (!toolbar) {
@@ -413,7 +416,7 @@ static BOOL SCB_findFlexConstraint(NSView *toolbar,
         } else {
             SpliceKit_log(@"[TimecodeBarShortcuts] Toolbar not found after 20 retries — giving up");
         }
-        return;
+        return NO;
     }
     _installRetries = 0;
 
@@ -427,7 +430,7 @@ static BOOL SCB_findFlexConstraint(NSView *toolbar,
         } else {
             SpliceKit_log(@"[TimecodeBarShortcuts] Flex constraint not found after 20 retries — giving up");
         }
-        return;
+        return NO;
     }
 
     // Keep strong refs to the anchors so reload never needs to search again.
@@ -474,11 +477,16 @@ static BOOL SCB_findFlexConstraint(NSView *toolbar,
     _injectedConstraints = @[c1, c2, c3, c4];
 
     SpliceKit_log(@"[TimecodeBarShortcuts] Installed — %lu shortcuts", (unsigned long)config.count);
+    return YES;
 }
 
 // ── Reload ───────────────────────────────────────────────────────────────────
 
-- (void)reload {
+// Returns "ok" once the bar reflects the current config, or "pending" if
+// install is still retrying in the background (check the log for the
+// eventual "giving up" message if it never resolves).
+- (NSString *)reload {
+    __block NSString *status = @"pending";
     SpliceKit_executeOnMainThread(^{
         if (_shortcutsBar.superview) {
             // Fast path: bar is already placed — just swap the buttons in place.
@@ -486,12 +494,14 @@ static BOOL SCB_findFlexConstraint(NSView *toolbar,
             [_shortcutsBar reloadFromConfig:config];
             [_shortcutsBar.superview layoutSubtreeIfNeeded];
             SpliceKit_log(@"[TimecodeBarShortcuts] Reloaded — %lu shortcuts", (unsigned long)config.count);
+            status = @"ok";
         } else {
             // Bar not installed yet (or was removed by FCP) — full install.
             _installRetries = 0;
-            [self _installOnMainThread];
+            status = [self _installOnMainThread] ? @"ok" : @"pending";
         }
     });
+    return status;
 }
 
 @end
@@ -504,8 +514,8 @@ static void SpliceKit_installTimecodeBarShortcuts(void) {
     [[SpliceKitTimecodeBarShortcutsManager shared] install];
 }
 
-static void SpliceKit_reloadTimecodeBarShortcuts(void) {
-    [[SpliceKitTimecodeBarShortcutsManager shared] reload];
+static NSString *SpliceKit_reloadTimecodeBarShortcuts(void) {
+    return [[SpliceKitTimecodeBarShortcutsManager shared] reload];
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -526,11 +536,22 @@ void SpliceKitPlugin_init(SpliceKitPluginAPI *api) {
     api->registerMethod(@"timecodeBarShortcuts.reload",
         ^NSDictionary *(NSDictionary *params) {
             (void)params;
-            SpliceKit_reloadTimecodeBarShortcuts();
-            return @{@"status": @"ok"};
+            NSString *status = SpliceKit_reloadTimecodeBarShortcuts();
+            return @{@"status": status};
         },
         @{@"description": @"Reload the timeline toolbar's shortcut buttons from the saved config.",
           @"readOnly": @NO});
+
+    // Single source of truth for the action catalogue — other plugins (e.g.
+    // com.splicekit.preferences-pane) fetch it through this RPC method rather
+    // than keeping their own copy, so the two plugins can't drift apart.
+    api->registerMethod(@"timecodeBarShortcuts.getCatalogue",
+        ^NSDictionary *(NSDictionary *params) {
+            (void)params;
+            return @{@"actions": SpliceKit_getAvailableTimecodeBarActions()};
+        },
+        @{@"description": @"Return the canonical list of actions available for timeline toolbar shortcuts.",
+          @"readOnly": @YES});
 
     api->executeOnMainThreadAsync(^{
         SpliceKit_installTimecodeBarShortcuts();

@@ -82,26 +82,32 @@ static void PO_addMenuItemIfNeeded(void) {
         NSMenu *mainMenu = [NSApp mainMenu];
         if (!mainMenu) return;
 
-        NSInteger editIdx = [mainMenu indexOfItemWithTitle:@"Edit"];
-        if (editIdx < 0) return;
-        NSMenu *editMenu = [[mainMenu itemAtIndex:editIdx] submenu];
-        if (!editMenu) return;
-
-        if ([editMenu indexOfItemWithTitle:@"Paste Overwrite"] >= 0) return;
-
-        // Find the native "Paste" item (action = paste:).
+        // Locate the Edit menu by content (an item with action paste:) rather than
+        // by localized title, so this works on non-English FCP builds too.
+        NSMenu *editMenu = nil;
         NSInteger pasteIdx = -1;
-        for (NSInteger i = 0; i < editMenu.numberOfItems; i++) {
-            NSMenuItem *item = [editMenu itemAtIndex:i];
-            if ([item.title isEqualToString:@"Paste"] &&
-                item.action == NSSelectorFromString(@"paste:")) {
-                pasteIdx = i;
-                break;
+        SEL pasteSel = NSSelectorFromString(@"paste:");
+        for (NSMenuItem *topItem in mainMenu.itemArray) {
+            NSMenu *submenu = topItem.submenu;
+            if (!submenu) continue;
+            for (NSInteger i = 0; i < submenu.numberOfItems; i++) {
+                NSMenuItem *item = [submenu itemAtIndex:i];
+                if (item.action == pasteSel) {
+                    editMenu = submenu;
+                    pasteIdx = i;
+                    break;
+                }
             }
+            if (editMenu) break;
         }
-        if (pasteIdx < 0) {
-            if (sAPI) sAPI->log(@"[PasteOverwrite] Could not find Paste item in Edit menu — skipping");
+        if (!editMenu || pasteIdx < 0) {
+            if (sAPI) sAPI->log(@"[PasteOverwrite] Could not find Paste item — skipping");
             return;
+        }
+
+        // Duplicate check by action selector, not localized title.
+        for (NSInteger i = 0; i < editMenu.numberOfItems; i++) {
+            if ([editMenu itemAtIndex:i].action == @selector(pasteOverwrite:)) return;
         }
 
         NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"Paste Overwrite"

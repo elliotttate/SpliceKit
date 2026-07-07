@@ -16,6 +16,7 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <dlfcn.h>
 
 #import "SKPluginShared.h"
 
@@ -56,14 +57,27 @@ extern void SpliceKit_setDefaultSpatialConformType(NSString *value);
 extern BOOL SpliceKit_installDebugSettingsPanel(void);
 
 // ---------------------------------------------------------------------------
-#pragma mark - Timecode Bar Shortcuts catalogue + config (duplicated)
+// Capability probe for -undefined dynamic_lookup symbols
+// ---------------------------------------------------------------------------
+// This plugin is built to survive core dylib updates independently, so it may
+// load against a core that predates one of the extern symbols above. Calling
+// an unresolved dynamic_lookup symbol crashes, so each UI section that reads
+// one of these newer symbols checks dlsym() first and skips building that
+// row (with a one-time log) rather than crashing the Preferences window.
+static BOOL SKPrefs_hasSymbol(const char *name) {
+    return dlsym(RTLD_DEFAULT, name) != NULL;
+}
+
+// ---------------------------------------------------------------------------
+#pragma mark - Timecode Bar Shortcuts catalogue + config
 // ---------------------------------------------------------------------------
 // The actual Timecode Bar Shortcuts feature lives in its own plugin
 // (com.splicekit.timecode-bar-shortcuts) and reads/writes the same JSON config
 // file. Native plugins are loaded with dlopen(RTLD_LOCAL), so C functions in
-// one plugin are not visible to another — the catalogue + config persistence
-// are duplicated here (self-contained) rather than shared via symbol lookup.
-// Both plugins agree on the on-disk format, so this stays interoperable.
+// one plugin are not visible to another — config persistence (the on-disk
+// JSON format both plugins agree on) is duplicated here, but the action
+// catalogue itself is fetched live via the "timecodeBarShortcuts.getCatalogue"
+// RPC method so the two plugins can never drift apart on available actions.
 
 static NSURL *SKPrefs_tcbConfigURL(void) {
     NSURL *appSupport = [[[NSFileManager defaultManager]
@@ -89,65 +103,23 @@ static void SpliceKit_setTimecodeBarConfig(NSArray<NSDictionary *> *config) {
     if (data) [data writeToURL:SKPrefs_tcbConfigURL() atomically:YES];
 }
 
+// Fetched live from com.splicekit.timecode-bar-shortcuts via RPC (see
+// "timecodeBarShortcuts.getCatalogue") rather than duplicated here, so the two
+// plugins can't silently drift apart on which action IDs are valid.
 static NSArray<NSDictionary *> *SpliceKit_getAvailableTimecodeBarActions(void) {
     static NSArray *sActions = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        sActions = @[
-            // ── Edit ─────────────────────────────────────────────────────────
-            @{@"id":@"blade",              @"type":@"timeline", @"category":@"Edit",       @"icon":@"scissors",                           @"tooltip":@"Blade — B"},
-            @{@"id":@"bladeAll",           @"type":@"timeline", @"category":@"Edit",       @"icon":@"scissors.circle.fill",               @"tooltip":@"Blade All — Shift-B"},
-            @{@"id":@"undo",               @"type":@"timeline", @"category":@"Edit",       @"icon":@"arrow.uturn.backward",               @"tooltip":@"Undo — ⌘Z"},
-            @{@"id":@"redo",               @"type":@"timeline", @"category":@"Edit",       @"icon":@"arrow.uturn.forward",                @"tooltip":@"Redo — ⇧⌘Z"},
-            @{@"id":@"selectAll",          @"type":@"timeline", @"category":@"Edit",       @"icon":@"checkmark.rectangle.fill",           @"tooltip":@"Select All — ⌘A"},
-            @{@"id":@"delete",             @"type":@"timeline", @"category":@"Edit",       @"icon":@"trash",                              @"tooltip":@"Delete"},
-            @{@"id":@"cut",                @"type":@"timeline", @"category":@"Edit",       @"icon":@"scissors.badge.ellipsis",            @"tooltip":@"Cut — ⌘X"},
-            @{@"id":@"copy",               @"type":@"timeline", @"category":@"Edit",       @"icon":@"doc.on.doc",                         @"tooltip":@"Copy — ⌘C"},
-            @{@"id":@"paste",              @"type":@"timeline", @"category":@"Edit",       @"icon":@"doc.on.clipboard",                   @"tooltip":@"Paste — ⌘V"},
-            @{@"id":@"joinClips",          @"type":@"timeline", @"category":@"Edit",       @"icon":@"link",                               @"tooltip":@"Join Clips"},
-            // ── Markers ──────────────────────────────────────────────────────
-            @{@"id":@"addMarker",          @"type":@"timeline", @"category":@"Markers",    @"icon":@"bookmark.fill",                      @"tooltip":@"Add Marker — M"},
-            @{@"id":@"addChapterMarker",   @"type":@"timeline", @"category":@"Markers",    @"icon":@"star.fill",                          @"tooltip":@"Add Chapter Marker"},
-            @{@"id":@"addTodoMarker",      @"type":@"timeline", @"category":@"Markers",    @"icon":@"checkmark.seal.fill",                @"tooltip":@"Add To-Do Marker"},
-            @{@"id":@"deleteMarker",       @"type":@"timeline", @"category":@"Markers",    @"icon":@"bookmark.slash.fill",                @"tooltip":@"Delete Marker"},
-            @{@"id":@"nextMarker",         @"type":@"timeline", @"category":@"Markers",    @"icon":@"chevron.right",                      @"tooltip":@"Next Marker"},
-            @{@"id":@"previousMarker",     @"type":@"timeline", @"category":@"Markers",    @"icon":@"chevron.left",                       @"tooltip":@"Previous Marker"},
-            // ── Navigation ───────────────────────────────────────────────────
-            @{@"id":@"goToStart",          @"type":@"playback", @"category":@"Navigation", @"icon":@"backward.end.fill",                  @"tooltip":@"Go to Start — Home"},
-            @{@"id":@"goToEnd",            @"type":@"playback", @"category":@"Navigation", @"icon":@"forward.end.fill",                   @"tooltip":@"Go to End — End"},
-            @{@"id":@"nextEdit",           @"type":@"timeline", @"category":@"Navigation", @"icon":@"forward.frame.fill",                 @"tooltip":@"Next Edit — ;"},
-            @{@"id":@"previousEdit",       @"type":@"timeline", @"category":@"Navigation", @"icon":@"backward.frame.fill",                @"tooltip":@"Previous Edit — :"},
-            @{@"id":@"selectClipAtPlayhead",@"type":@"timeline",@"category":@"Navigation", @"icon":@"cursorarrow.click",                  @"tooltip":@"Select Clip at Playhead — X"},
-            // ── Color ────────────────────────────────────────────────────────
-            @{@"id":@"addColorBoard",      @"type":@"timeline", @"category":@"Color",      @"icon":@"paintpalette",                       @"tooltip":@"Add Color Board"},
-            @{@"id":@"addColorWheels",     @"type":@"timeline", @"category":@"Color",      @"icon":@"circle.hexagongrid",                 @"tooltip":@"Add Color Wheels"},
-            @{@"id":@"addColorCurves",     @"type":@"timeline", @"category":@"Color",      @"icon":@"chart.line.uptrend.xyaxis",          @"tooltip":@"Add Color Curves"},
-            @{@"id":@"balanceColor",       @"type":@"timeline", @"category":@"Color",      @"icon":@"wand.and.stars",                     @"tooltip":@"Balance Color — ⌥⌘B"},
-            @{@"id":@"matchColor",         @"type":@"timeline", @"category":@"Color",      @"icon":@"eyedropper.halffull",                @"tooltip":@"Match Color"},
-            @{@"id":@"addColorAdjustment", @"type":@"timeline", @"category":@"Color",      @"icon":@"slider.horizontal.3",               @"tooltip":@"Add Color Adjustment"},
-            // ── Rating ───────────────────────────────────────────────────────
-            @{@"id":@"favorite",           @"type":@"timeline", @"category":@"Rating",     @"icon":@"hand.thumbsup.fill",                 @"tooltip":@"Favorite — F"},
-            @{@"id":@"reject",             @"type":@"timeline", @"category":@"Rating",     @"icon":@"hand.thumbsdown.fill",               @"tooltip":@"Reject — Delete"},
-            @{@"id":@"unrate",             @"type":@"timeline", @"category":@"Rating",     @"icon":@"minus.circle",                       @"tooltip":@"Unrate — U"},
-            // ── Speed ────────────────────────────────────────────────────────
-            @{@"id":@"retimeSlow50",       @"type":@"timeline", @"category":@"Speed",      @"icon":@"tortoise.fill",                      @"tooltip":@"50% Slow Motion"},
-            @{@"id":@"retimeFast2x",       @"type":@"timeline", @"category":@"Speed",      @"icon":@"hare.fill",                          @"tooltip":@"2× Fast Motion"},
-            @{@"id":@"retimeNormal",       @"type":@"timeline", @"category":@"Speed",      @"icon":@"speedometer",                        @"tooltip":@"Normal Speed — ⌥⌘R"},
-            @{@"id":@"retimeReverse",      @"type":@"timeline", @"category":@"Speed",      @"icon":@"arrow.counterclockwise",             @"tooltip":@"Reverse"},
-            @{@"id":@"freezeFrame",        @"type":@"timeline", @"category":@"Speed",      @"icon":@"pause.circle.fill",                  @"tooltip":@"Freeze Frame — F"},
-            // ── Trim ─────────────────────────────────────────────────────────
-            @{@"id":@"trimToPlayhead",     @"type":@"timeline", @"category":@"Trim",       @"icon":@"crop",                               @"tooltip":@"Trim to Playhead"},
-            @{@"id":@"extendEditToPlayhead",@"type":@"timeline",@"category":@"Trim",       @"icon":@"arrow.left.and.right.circle",        @"tooltip":@"Extend Edit to Playhead — ⇧X"},
-            @{@"id":@"nudgeLeft",          @"type":@"timeline", @"category":@"Trim",       @"icon":@"arrow.left",                         @"tooltip":@"Nudge Left — ,"},
-            @{@"id":@"nudgeRight",         @"type":@"timeline", @"category":@"Trim",       @"icon":@"arrow.right",                        @"tooltip":@"Nudge Right — ."},
-            // ── View ─────────────────────────────────────────────────────────
-            @{@"id":@"zoomToFit",          @"type":@"timeline", @"category":@"View",       @"icon":@"arrow.up.left.and.arrow.down.right", @"tooltip":@"Zoom to Fit — ⇧Z"},
-            @{@"id":@"zoomIn",             @"type":@"timeline", @"category":@"View",       @"icon":@"plus.magnifyingglass",               @"tooltip":@"Zoom In — ⌘="},
-            @{@"id":@"zoomOut",            @"type":@"timeline", @"category":@"View",       @"icon":@"minus.magnifyingglass",              @"tooltip":@"Zoom Out — ⌘-"},
-            @{@"id":@"toggleInspector",    @"type":@"timeline", @"category":@"View",       @"icon":@"sidebar.right",                      @"tooltip":@"Toggle Inspector — ⌘4"},
-            @{@"id":@"toggleSnapping",     @"type":@"timeline", @"category":@"View",       @"icon":@"magnet",                             @"tooltip":@"Toggle Snapping — N"},
-            @{@"id":@"toggleSkimming",     @"type":@"timeline", @"category":@"View",       @"icon":@"eye",                                @"tooltip":@"Toggle Skimming — S"},
-        ];
+        NSDictionary *response = sAPI
+            ? sAPI->callMethod(@{@"method": @"timecodeBarShortcuts.getCatalogue"})
+            : nil;
+        NSArray *actions = response[@"result"][@"actions"];
+        if (![actions isKindOfClass:[NSArray class]]) {
+            if (sAPI) sAPI->log(@"[PreferencesPane] Could not fetch timecode bar action "
+                                  @"catalogue — is com.splicekit.timecode-bar-shortcuts installed?");
+            actions = @[];
+        }
+        sActions = actions;
     });
     return sActions;
 }
@@ -471,7 +443,7 @@ static NSView *SKPrefs_buildView(void) {
         kNoteWidth)];
 
     // ── Transition Warning popup ─────────────────────────────────────────
-    {
+    if (SKPrefs_hasSymbol("SpliceKit_getTransitionWarningDefault")) {
         NSStackView *col = [NSStackView stackViewWithViews:@[]];
         col.orientation = NSUserInterfaceLayoutOrientationVertical;
         col.alignment = NSLayoutAttributeLeading;
@@ -507,10 +479,13 @@ static NSView *SKPrefs_buildView(void) {
              @"automatically extend clip edges with frozen frames, or let FCP ripple-trim the clips.",
             kNoteWidth)];
         [root addArrangedSubview:col];
+    } else {
+        SpliceKit_log(@"[PreferencesPane] SpliceKit_getTransitionWarningDefault unavailable in "
+                       @"core dylib — skipping Transition Warning row.");
     }
 
     // ── Default Clip Height popup ─────────────────────────────────────────
-    {
+    if (SKPrefs_hasSymbol("SpliceKit_getDefaultClipHeight")) {
         NSStackView *col = [NSStackView stackViewWithViews:@[]];
         col.orientation = NSUserInterfaceLayoutOrientationVertical;
         col.alignment = NSLayoutAttributeLeading;
@@ -548,10 +523,13 @@ static NSView *SKPrefs_buildView(void) {
              @"the default clip row height for new timelines.",
             kNoteWidth)];
         [root addArrangedSubview:col];
+    } else {
+        SpliceKit_log(@"[PreferencesPane] SpliceKit_getDefaultClipHeight unavailable in "
+                       @"core dylib — skipping Default Clip Height row.");
     }
 
     // ── Default Audio Channel Config popup ────────────────────────────────
-    {
+    if (SKPrefs_hasSymbol("SpliceKit_getDefaultAudioChannelConfig")) {
         NSStackView *col = [NSStackView stackViewWithViews:@[]];
         col.orientation = NSUserInterfaceLayoutOrientationVertical;
         col.alignment = NSLayoutAttributeLeading;
@@ -588,10 +566,13 @@ static NSView *SKPrefs_buildView(void) {
              @"Apply to selected clips via the bridge set_bridge_option_value tool.",
             kNoteWidth)];
         [root addArrangedSubview:col];
+    } else {
+        SpliceKit_log(@"[PreferencesPane] SpliceKit_getDefaultAudioChannelConfig unavailable in "
+                       @"core dylib — skipping Default Audio Channels row.");
     }
 
     // ── Default Audio Pan Mode popup ─────────────────────────────────────
-    {
+    if (SKPrefs_hasSymbol("SpliceKit_getDefaultAudioPanMode")) {
         NSStackView *col = [NSStackView stackViewWithViews:@[]];
         col.orientation = NSUserInterfaceLayoutOrientationVertical;
         col.alignment = NSLayoutAttributeLeading;
@@ -629,10 +610,13 @@ static NSView *SKPrefs_buildView(void) {
              @"Stereo Left+Right = stereo panning, Mono = mono downmix panner.",
             kNoteWidth)];
         [root addArrangedSubview:col];
+    } else {
+        SpliceKit_log(@"[PreferencesPane] SpliceKit_getDefaultAudioPanMode unavailable in "
+                       @"core dylib — skipping Default Audio Pan Mode row.");
     }
 
     // ── Default Spatial Conform popup ─────────────────────────────────────
-    {
+    if (SKPrefs_hasSymbol("SpliceKit_getDefaultSpatialConformType")) {
         NSStackView *col = [NSStackView stackViewWithViews:@[]];
         col.orientation = NSUserInterfaceLayoutOrientationVertical;
         col.alignment = NSLayoutAttributeLeading;
@@ -668,6 +652,9 @@ static NSView *SKPrefs_buildView(void) {
              @"Fit (letterbox/pillarbox), Fill (crop to fill frame), or None (native resolution).",
             kNoteWidth)];
         [root addArrangedSubview:col];
+    } else {
+        SpliceKit_log(@"[PreferencesPane] SpliceKit_getDefaultSpatialConformType unavailable in "
+                       @"core dylib — skipping Default Spatial Conform row.");
     }
 
     [root addArrangedSubview:SKPrefs_makeSep()];
