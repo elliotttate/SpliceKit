@@ -301,7 +301,11 @@ Task {
                 reportProgress(pct, "Transcribing \(index+1)/\(Int(totalFiles)): \(fileURL.lastPathComponent)...")
             }
             do {
-                let result = try await manager.transcribe(fileURL, source: .system)
+                // FluidAudio 0.13+ replaced transcribe(_:source:) with a decoder-state
+                // API. Each batch entry is an independent clip, so use a fresh decoder
+                // state per file (no cross-file streaming context).
+                var decoderState = try TdtDecoderState()
+                let result = try await manager.transcribe(fileURL, decoderState: &decoderState)
                 asrResults.append((index: index, file: entry.file, result: result))
             } catch {
                 // A single undecodable input (a still image, PDF, or a clip with no
