@@ -9,6 +9,34 @@
 		<div class="head-title-fixed"><strong>SpliceKit</strong> - Final Cut Pro, unlocked.<span></span></div>
 		<div class="head-title"><strong>SpliceKit</strong> - Final Cut Pro, unlocked.<span></span></div>
 		<div class="content">
+			<h1>SpliceKit 3.3.9</h1>
+
+			<h2>🎉 Released</h2>
+
+			<ul>
+				<li>29th August 2026</li>
+			</ul>
+
+			<h2>✨ New</h2>
+			<ul>
+				<li>LiveCam now includes a responsive dBFS audio meter below the microphone picker, with peak hold, headroom scale, and clipping indication.</li>
+				<li>Adds optional Logitech MX Master 4 haptic feedback through the included Logi Options+ plugin source, covering native FCP haptics plus clip and playhead snapping.</li>
+			</ul>
+
+			<h2>🔨 Improvements</h2>
+			<ul>
+				<li>LiveCam green-screen sessions now keep memory usage bounded with pooled mask buffers, adaptive inference timing, and reliable enforcement of the selected camera resolution.</li>
+				<li>Smooth Scroll now animates FCP&rsquo;s native playhead at display refresh, with cleaner startup and safer recovery after timeline interactions.</li>
+			</ul>
+
+			<h2>🐞 Bug Fixes</h2>
+			<ul>
+				<li>Fixes crackling with mono USB microphones such as the Shure MVX2U by preserving the microphone&rsquo;s native format and using AVFoundation&rsquo;s session-aware writer settings.</li>
+				<li>Fixes the LiveCam audio meter remaining frozen by decoding the exact buffer layout supplied by Core Media on every update.</li>
+				<li>Fixes Smooth Scroll state recovery after duplicate playback notifications, timeline interaction, feature disablement, and timeline teardown.</li>
+			</ul>
+
+			<hr />
 			<h1>SpliceKit 3.3.8</h1>
 
 			<h2>🎉 Released</h2>

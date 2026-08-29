@@ -45,3 +45,5 @@ SpliceKitVisionPro.m
 SpliceKitVisionProPanel.m
 SpliceKitImmersivePreviewPanel.mm
 SpliceKitImmersivePreviewRPC.m
+SpliceKitHapticBridge.m
+SpliceKitHapticSnapEmitters.m

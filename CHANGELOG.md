@@ -6,6 +6,44 @@ notarization ticket, and Sparkle signature live on the
 Sparkle users are notified automatically; manual download is available from the
 same page or via `appcast.xml`.
 
+## [3.3.9] — 2026-08-29
+
+### Added
+- **LiveCam now shows a live dBFS audio monitor directly below the microphone
+  selector.** The larger color-coded meter includes a numerical peak readout,
+  peak-hold marker, headroom scale, and a held clipping warning.
+- **Optional Logitech MX Master 4 haptic feedback is now supported through the
+  included Logi Options+ plugin source.** SpliceKit emits typed events for FCP's
+  native haptics as well as clip and playhead snapping, with editable waveform
+  mappings for the mouse.
+
+### Changed
+- **LiveCam's green-screen pipeline now remains bounded during long sessions.**
+  Mask history uses materialized pooled buffers, adaptive inference timing, and
+  the selected capture resolution instead of accumulating lazy image graphs or
+  silently falling back to a larger camera format.
+- **Smooth Scroll now animates FCP's native playhead at display refresh.** It
+  reuses one display link, hands the first frame off cleanly, and safely restores
+  FCP's scrolling behavior after interactions or when the feature is disabled.
+
+### Fixed
+- **LiveCam recordings no longer force mono USB microphones through a fixed
+  stereo writer format.** Audio encoding now follows AVFoundation's
+  session-aware recommendation, preserves the microphone's native capture
+  format, and runs callbacks on an audio-priority queue. This removes the
+  Shure MVX2U's unnecessary real-time mono-to-stereo conversion and protects
+  capture from 4K video pressure. LiveCam status and logs now also report the
+  source sample rate, channel count, and any source-timestamp discontinuities
+  separately from writer back-pressure drops.
+- **The LiveCam audio monitor now decodes each Core Media buffer using its live
+  channel layout and buffer count.** This fixes the meter appearing correctly
+  but remaining frozen with microphones that supply a variable-sized
+  `AudioBufferList`.
+- **Smooth Scroll now handles duplicate playback notifications and FCP 12.3's
+  anchored timeline state correctly.** Native scrolling is reliably restored
+  when playback ends, a user interacts with the timeline, or the timeline is
+  torn down.
+
 ## [3.3.2] — 2026-04-21
 
 ### Changed

@@ -110,6 +110,28 @@ NSDictionary *SpliceKit_getPluginMetadataSnapshot(void);
 void SpliceKit_installBridgeMetadata(void);
 NSDictionary *SpliceKit_builtinMetadataForMethod(NSString *method);
 
+// Mirror every haptic FCP fires onto the JSON-RPC event channel so external
+// accessories (e.g. Logitech MX Master 4 mouse via the LogiPluginService
+// plugin) can play matching tactile feedback. Swizzles the AppKit
+// NSHapticFeedbackPerformer protocol implementation, broadcasts
+// `{"type":"haptic","name":"viewer_snap"|"title_drop_snap"|"trim_limit"|
+//   "jkl_pressure"|"unknown", ...}`, then forwards to the original IMP so the
+// trackpad click still fires. Requires a Force Touch trackpad to observe events.
+void SpliceKit_installHapticBridge(void);
+
+// Fire a haptic ourselves with an explicit event name. Both the trackpad click
+// (if hardware is present) and the JSON-RPC broadcast happen exactly once.
+// Used by snap-emitter swizzles to add tactile feedback for snap events FCP
+// doesn't haptic natively (timeline clip-body snap, playhead snap to edit,
+// etc.).
+void SpliceKit_emitHaptic(NSString *eventName);
+
+// Install snap-only emitters: fire a haptic each time a snap target *changes*
+// during a drag, mirroring the debouncing pattern FCP already uses for its
+// trim-limit haptic. Currently covers timeline clip-body snap on the spine
+// and playhead snap to edit points / markers.
+void SpliceKit_installHapticSnapEmitters(void);
+
 // Async dispatch + per-connection event subscriptions.
 // asyncDispatch runs the handler on a background queue, returns immediately
 // with a correlation_id, and broadcasts a `command.completed` event on finish.

@@ -3437,6 +3437,20 @@ static void SpliceKit_appDidLaunch(void) {
         SpliceKit_installAsync();
     });
 
+    // Mirror FCP haptics out over the event channel so external accessories
+    // (Logi MX Master 4) can play matching feedback. Must run after
+    // AsyncEvents so SpliceKit_broadcastEvent has a working subscriber path.
+    SpliceKit_safeInstall("HapticBridge", ^{
+        SpliceKit_installHapticBridge();
+    });
+
+    // Add tactile feedback for FCP timeline snap events that don't natively
+    // fire a haptic — clip-body snap on the spine, playhead snap to edits/
+    // markers, etc. Hooks the central snappingCalc:… delegate callback.
+    SpliceKit_safeInstall("HapticSnapEmitters", ^{
+        SpliceKit_installHapticSnapEmitters();
+    });
+
     // Start the control server on a background thread
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         SpliceKit_startControlServer();

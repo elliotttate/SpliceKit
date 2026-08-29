@@ -94,6 +94,9 @@ static id sStopTrackingObserver  = nil;
     BOOL filmstripWasDisabled;
     BOOL anchoredWasSuspended;
     double minThumbnailCountPrev;
+    BOOL capturedFilmstrip;
+    BOOL capturedAnchored;
+    BOOL capturedMinThumbnailCount;
     int refcount;
 }
 @end
@@ -101,6 +104,14 @@ static id sStopTrackingObserver  = nil;
 @end
 
 static void * const kSuspendStateKey = (void *)&kSuspendStateKey;
+static NSHashTable *sSuspendedTimelineViews = nil; // weak objects
+
+static NSHashTable *IS_suspendedViews(void) {
+    if (!sSuspendedTimelineViews) {
+        sSuspendedTimelineViews = [NSHashTable weakObjectsHashTable];
+    }
+    return sSuspendedTimelineViews;
+}
 
 static SpliceKitSuspendStateBox *IS_getOrCreateState(id timelineView) {
     SpliceKitSuspendStateBox *st = objc_getAssociatedObject(timelineView, kSuspendStateKey);
@@ -125,35 +136,53 @@ static void IS_beginSuspend(id timelineView) {
     SpliceKitSuspendStateBox *st = IS_getOrCreateState(timelineView);
     st->refcount++;
     if (st->refcount > 1) return; // already suspended
+    st->capturedFilmstrip = NO;
+    st->capturedAnchored = NO;
+    st->capturedMinThumbnailCount = NO;
+    [IS_suspendedViews() addObject:timelineView];
 
     @try {
         // Save current state
         SEL filmstripGet = @selector(disableFilmstripLayerUpdates);
         SEL anchoredGet  = @selector(suspendLayerUpdatesForAnchoredClips);
         SEL minThumbGet  = @selector(minThumbnailCount);
+        id layerManager = nil;
+        SEL layerManagerSel = @selector(layerManager);
+        if ([timelineView respondsToSelector:layerManagerSel]) {
+            layerManager = ((id (*)(id, SEL))objc_msgSend)(timelineView, layerManagerSel);
+        }
         if ([timelineView respondsToSelector:filmstripGet]) {
             st->filmstripWasDisabled = ((BOOL (*)(id, SEL))objc_msgSend)(timelineView, filmstripGet);
+            st->capturedFilmstrip = YES;
         }
-        if ([timelineView respondsToSelector:anchoredGet]) {
-            st->anchoredWasSuspended = ((BOOL (*)(id, SEL))objc_msgSend)(timelineView, anchoredGet);
+        // FCP 12.3 exposes the getter on TLKLayerManager while retaining the
+        // setter on TLKTimelineView. Older builds exposed both on the view.
+        id anchoredOwner = [timelineView respondsToSelector:anchoredGet]
+            ? timelineView : ([layerManager respondsToSelector:anchoredGet] ? layerManager : nil);
+        if (anchoredOwner) {
+            st->anchoredWasSuspended = ((BOOL (*)(id, SEL))objc_msgSend)(anchoredOwner, anchoredGet);
+            st->capturedAnchored = YES;
         }
         if ([timelineView respondsToSelector:minThumbGet]) {
             // Normal objc_msgSend for double-returning methods on arm64/x86_64.
             // objc_msgSend_fpret is x86-long-double-only and not usable in fat builds.
             st->minThumbnailCountPrev = ((double (*)(id, SEL))objc_msgSend)(timelineView, minThumbGet);
+            st->capturedMinThumbnailCount = YES;
         }
 
         // Apply suspend
         SEL filmstripSet = @selector(setDisableFilmstripLayerUpdates:);
         SEL anchoredSet  = @selector(setSuspendLayerUpdatesForAnchoredClips:);
         SEL minThumbSet  = @selector(setMinThumbnailCount:);
-        if ([timelineView respondsToSelector:filmstripSet]) {
+        if (st->capturedFilmstrip && [timelineView respondsToSelector:filmstripSet]) {
             ((void (*)(id, SEL, BOOL))objc_msgSend)(timelineView, filmstripSet, YES);
         }
-        if ([timelineView respondsToSelector:anchoredSet]) {
+        if (st->capturedAnchored && [timelineView respondsToSelector:anchoredSet]) {
             ((void (*)(id, SEL, BOOL))objc_msgSend)(timelineView, anchoredSet, YES);
+        } else if (st->capturedAnchored && [layerManager respondsToSelector:anchoredSet]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(layerManager, anchoredSet, YES);
         }
-        if ([timelineView respondsToSelector:minThumbSet]) {
+        if (st->capturedMinThumbnailCount && [timelineView respondsToSelector:minThumbSet]) {
             ((void (*)(id, SEL, double))objc_msgSend)(timelineView, minThumbSet, 0.0);
         }
     } @catch (NSException *e) {
@@ -175,21 +204,31 @@ static void IS_endSuspend(id timelineView) {
         SEL filmstripSet = @selector(setDisableFilmstripLayerUpdates:);
         SEL anchoredSet  = @selector(setSuspendLayerUpdatesForAnchoredClips:);
         SEL minThumbSet  = @selector(setMinThumbnailCount:);
-        if ([timelineView respondsToSelector:filmstripSet]) {
+        id layerManager = nil;
+        SEL layerManagerSel = @selector(layerManager);
+        if ([timelineView respondsToSelector:layerManagerSel]) {
+            layerManager = ((id (*)(id, SEL))objc_msgSend)(timelineView, layerManagerSel);
+        }
+        if (st->capturedFilmstrip && [timelineView respondsToSelector:filmstripSet]) {
             ((void (*)(id, SEL, BOOL))objc_msgSend)(timelineView, filmstripSet,
                                                     st->filmstripWasDisabled);
         }
-        if ([timelineView respondsToSelector:anchoredSet]) {
+        if (st->capturedAnchored && [timelineView respondsToSelector:anchoredSet]) {
             ((void (*)(id, SEL, BOOL))objc_msgSend)(timelineView, anchoredSet,
                                                     st->anchoredWasSuspended);
+        } else if (st->capturedAnchored && [layerManager respondsToSelector:anchoredSet]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(layerManager, anchoredSet,
+                                                    st->anchoredWasSuspended);
         }
-        if ([timelineView respondsToSelector:minThumbSet]) {
+        if (st->capturedMinThumbnailCount && [timelineView respondsToSelector:minThumbSet]) {
             ((void (*)(id, SEL, double))objc_msgSend)(timelineView, minThumbSet,
                                                      st->minThumbnailCountPrev);
         }
     } @catch (NSException *e) {
         SpliceKit_log(@"[TLInteractionSuspend] endSuspend exception: %@", e.reason ?: e.description);
     }
+
+    [IS_suspendedViews() removeObject:timelineView];
 
     // Coalesced catch-up. Use performSelector so multiple end-calls within
     // the same run-loop turn collapse to one invocation.
@@ -389,12 +428,26 @@ void SpliceKit_removeTimelineInteractionSuspend(void) {
         sOrigMagnifyWithEvent = NULL;
     }
 
+    // Lower the begin gate first, then tear down tracking observers so no new
+    // suspension can start while we restore in-flight views.
+    sInteractionSuspendInstalled = NO;
+
     // Tear down the tracking observers so scroll/marquee interactions stop
     // calling begin/end-suspend. The inner gate in IS_beginSuspend is a
     // belt-and-braces backstop; removing the observers is the real fix.
     IS_removeNotificationObservers();
 
-    sInteractionSuspendInstalled = NO;
+    // Disabling in the middle of a gesture used to strand these private flags
+    // in their suspended state because the matching stop notification was no
+    // longer observed. Force every live view back to its captured values.
+    for (id timelineView in IS_suspendedViews().allObjects) {
+        SpliceKitSuspendStateBox *st = IS_getState(timelineView);
+        if (!st || st->refcount <= 0) continue;
+        st->refcount = 1;
+        IS_endSuspend(timelineView);
+    }
+    [IS_suspendedViews() removeAllObjects];
+
     SpliceKit_log(@"[TLInteractionSuspend] Removed");
 }
 

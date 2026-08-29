@@ -8,6 +8,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <Vision/Vision.h>
 #import <VideoToolbox/VideoToolbox.h>
+#import <CoreVideo/CoreVideo.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <mach/mach.h>
@@ -68,6 +69,170 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamDestination) {
 @end
 @implementation SpliceKitLiveCamFlippedView
 - (BOOL)isFlipped { return YES; }
+@end
+
+// Compact broadcast-style input meter for the LiveCam audio card. The old
+// NSLevelIndicator was only 12 points tall and mapped linear RMS to an
+// arbitrary 0-100 range, so it was easy to miss and gave no useful headroom
+// information. This view uses the standard dBFS scale, keeps a short peak hold,
+// and makes clipping visible without taking over the compact four-card layout.
+@interface SpliceKitLiveCamAudioMeterView : NSView
+@property (nonatomic, assign) double rmsDB;
+@property (nonatomic, assign) double peakDB;
+@property (nonatomic, assign) double heldPeakDB;
+@property (nonatomic, assign) NSTimeInterval peakHoldUntil;
+@property (nonatomic, assign) NSTimeInterval clipHoldUntil;
+- (void)updateWithRMSDB:(double)rmsDB peakDB:(double)peakDB;
+- (void)reset;
+@end
+
+@implementation SpliceKitLiveCamAudioMeterView
+
+static double SpliceKitLiveCamMeterClampedDB(double value) {
+    if (!isfinite(value)) return -60.0;
+    return MIN(0.0, MAX(-60.0, value));
+}
+
+static CGFloat SpliceKitLiveCamMeterPosition(double value) {
+    return (CGFloat)((SpliceKitLiveCamMeterClampedDB(value) + 60.0) / 60.0);
+}
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (!self) return nil;
+    _rmsDB = -60.0;
+    _peakDB = -60.0;
+    _heldPeakDB = -60.0;
+    self.toolTip = @"Live microphone level in dBFS. Keep peaks out of the red to avoid clipping.";
+    [self setAccessibilityElement:YES];
+    [self setAccessibilityRole:NSAccessibilityLevelIndicatorRole];
+    [self setAccessibilityLabel:@"Audio monitor"];
+    return self;
+}
+
+- (NSSize)intrinsicContentSize {
+    return NSMakeSize(168.0, 46.0);
+}
+
+- (void)updateWithRMSDB:(double)rmsDB peakDB:(double)peakDB {
+    self.rmsDB = SpliceKitLiveCamMeterClampedDB(rmsDB);
+    self.peakDB = SpliceKitLiveCamMeterClampedDB(peakDB);
+
+    NSTimeInterval now = CACurrentMediaTime();
+    if (self.peakDB >= self.heldPeakDB) {
+        self.heldPeakDB = self.peakDB;
+        self.peakHoldUntil = now + 0.8;
+    } else if (now > self.peakHoldUntil) {
+        self.heldPeakDB = MAX(self.peakDB, self.heldPeakDB - 2.0);
+    }
+    if (self.peakDB >= -0.5) {
+        self.clipHoldUntil = now + 1.5;
+    }
+
+    NSString *accessibilityValue = self.peakDB <= -59.5
+        ? @"No signal"
+        : [NSString stringWithFormat:@"Peak %.0f decibels full scale", self.peakDB];
+    [self setAccessibilityValue:accessibilityValue];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)reset {
+    self.rmsDB = -60.0;
+    self.peakDB = -60.0;
+    self.heldPeakDB = -60.0;
+    self.peakHoldUntil = 0.0;
+    self.clipHoldUntil = 0.0;
+    [self setAccessibilityValue:@"No signal"];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+
+    NSRect bounds = self.bounds;
+    NSRect track = NSMakeRect(1.0, 14.0, MAX(1.0, NSWidth(bounds) - 2.0), 10.0);
+    NSBezierPath *trackPath = [NSBezierPath bezierPathWithRoundedRect:track
+                                                             xRadius:3.0
+                                                             yRadius:3.0];
+    [[NSColor colorWithWhite:0.04 alpha:0.88] setFill];
+    [trackPath fill];
+
+    NSArray<NSColor *> *zoneColors = @[
+        [NSColor colorWithRed:0.20 green:0.82 blue:0.42 alpha:1.0],
+        [NSColor colorWithRed:0.96 green:0.73 blue:0.18 alpha:1.0],
+        [NSColor colorWithRed:0.96 green:0.25 blue:0.23 alpha:1.0],
+    ];
+    const double zoneStarts[] = { -60.0, -12.0, -3.0 };
+    const double zoneEnds[] = { -12.0, -3.0, 0.0 };
+
+    [NSGraphicsContext saveGraphicsState];
+    [trackPath addClip];
+    for (NSUInteger i = 0; i < 3; i++) {
+        CGFloat startX = NSMinX(track) + NSWidth(track) * SpliceKitLiveCamMeterPosition(zoneStarts[i]);
+        CGFloat endX = NSMinX(track) + NSWidth(track) * SpliceKitLiveCamMeterPosition(zoneEnds[i]);
+        [[zoneColors[i] colorWithAlphaComponent:0.18] setFill];
+        NSRectFill(NSMakeRect(startX, NSMinY(track), MAX(0.0, endX - startX), NSHeight(track)));
+    }
+
+    CGFloat activeWidth = NSWidth(track) * SpliceKitLiveCamMeterPosition(self.rmsDB);
+    [[NSBezierPath bezierPathWithRect:NSMakeRect(NSMinX(track),
+                                                 NSMinY(track),
+                                                 activeWidth,
+                                                 NSHeight(track))] addClip];
+    for (NSUInteger i = 0; i < 3; i++) {
+        CGFloat startX = NSMinX(track) + NSWidth(track) * SpliceKitLiveCamMeterPosition(zoneStarts[i]);
+        CGFloat endX = NSMinX(track) + NSWidth(track) * SpliceKitLiveCamMeterPosition(zoneEnds[i]);
+        [zoneColors[i] setFill];
+        NSRectFill(NSMakeRect(startX, NSMinY(track), MAX(0.0, endX - startX), NSHeight(track)));
+    }
+    [NSGraphicsContext restoreGraphicsState];
+
+    if (self.heldPeakDB > -59.5) {
+        CGFloat peakX = NSMinX(track) + NSWidth(track) * SpliceKitLiveCamMeterPosition(self.heldPeakDB);
+        NSBezierPath *peakLine = [NSBezierPath bezierPath];
+        [peakLine moveToPoint:NSMakePoint(peakX, NSMinY(track) + 1.0)];
+        [peakLine lineToPoint:NSMakePoint(peakX, NSMaxY(track) - 1.0)];
+        peakLine.lineWidth = 1.5;
+        [[NSColor colorWithWhite:1.0 alpha:0.95] setStroke];
+        [peakLine stroke];
+    }
+
+    NSDictionary *headerAttributes = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:9.0 weight:NSFontWeightSemibold],
+        NSForegroundColorAttributeName: [NSColor secondaryLabelColor],
+        NSKernAttributeName: @(0.8),
+    };
+    [@"MONITOR" drawAtPoint:NSMakePoint(1.0, 30.0) withAttributes:headerAttributes];
+
+    BOOL clipping = CACurrentMediaTime() < self.clipHoldUntil;
+    NSString *readout = clipping
+        ? @"CLIP"
+        : (self.peakDB <= -59.5
+            ? @"−∞ dBFS"
+            : [NSString stringWithFormat:@"%.0f dBFS", self.peakDB]);
+    NSDictionary *readoutAttributes = @{
+        NSFontAttributeName: [NSFont monospacedDigitSystemFontOfSize:9.0 weight:NSFontWeightSemibold],
+        NSForegroundColorAttributeName: clipping ? [NSColor systemRedColor] : [NSColor secondaryLabelColor],
+    };
+    NSSize readoutSize = [readout sizeWithAttributes:readoutAttributes];
+    [readout drawAtPoint:NSMakePoint(MAX(1.0, NSMaxX(bounds) - readoutSize.width - 1.0), 30.0)
+          withAttributes:readoutAttributes];
+
+    NSDictionary *tickAttributes = @{
+        NSFontAttributeName: [NSFont monospacedDigitSystemFontOfSize:7.5 weight:NSFontWeightRegular],
+        NSForegroundColorAttributeName: [NSColor tertiaryLabelColor],
+    };
+    NSArray<NSNumber *> *ticks = @[@(-48), @(-24), @(-12), @(-6), @(0)];
+    for (NSNumber *tick in ticks) {
+        NSString *label = tick.stringValue;
+        NSSize labelSize = [label sizeWithAttributes:tickAttributes];
+        CGFloat centerX = NSMinX(track) + NSWidth(track) * SpliceKitLiveCamMeterPosition(tick.doubleValue);
+        CGFloat labelX = MIN(NSMaxX(bounds) - labelSize.width,
+                             MAX(NSMinX(bounds), centerX - labelSize.width * 0.5));
+        [label drawAtPoint:NSMakePoint(labelX, 1.0) withAttributes:tickAttributes];
+    }
+}
+
 @end
 
 typedef NS_ENUM(NSInteger, SpliceKitLiveCamTimelinePlacement) {
@@ -283,24 +448,6 @@ static double SpliceKitLiveCamResidentMB(void) {
     return (double)info.phys_footprint / (1024.0 * 1024.0);
 }
 
-// Cheap estimate of how deep a CIImage's filter graph is. CIImage.description
-// walks the whole operator tree and prints each node on its own line, so line
-// count scales roughly linearly with chain depth. This isn't exact but is
-// sufficient to tell "fresh image" (a handful of lines) from "accumulated 200-
-// frame chain" (hundreds of lines).
-static NSUInteger SpliceKitLiveCamCIImageChainDepth(CIImage *image) {
-    if (!image) return 0;
-    NSString *desc = image.description;
-    if (desc.length == 0) return 0;
-    NSUInteger lines = 1;
-    const char *bytes = desc.UTF8String;
-    if (!bytes) return 1;
-    for (const char *p = bytes; *p; p++) {
-        if (*p == '\n') lines++;
-    }
-    return lines;
-}
-
 static NSString *SpliceKitLiveCamTrimmedString(id value) {
     return [SpliceKitLiveCamString(value)
         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -426,6 +573,19 @@ static NSString *SpliceKitLiveCamResolutionTitleForKey(NSString *key) {
         return @"1280x720 (720p)";
     }
     return [NSString stringWithFormat:@"%ldx%ld", (long)lrint(size.width), (long)lrint(size.height)];
+}
+
+static AVCaptureSessionPreset SpliceKitLiveCamSessionPresetForResolution(CGSize size) {
+    if (fabs(size.width - 3840.0) < 1.0 && fabs(size.height - 2160.0) < 1.0) {
+        return AVCaptureSessionPreset3840x2160;
+    }
+    if (fabs(size.width - 1920.0) < 1.0 && fabs(size.height - 1080.0) < 1.0) {
+        return AVCaptureSessionPreset1920x1080;
+    }
+    if (fabs(size.width - 1280.0) < 1.0 && fabs(size.height - 720.0) < 1.0) {
+        return AVCaptureSessionPreset1280x720;
+    }
+    return AVCaptureSessionPresetHigh;
 }
 
 static NSString *SpliceKitLiveCamFrameDurationString(double fps) {
@@ -766,6 +926,7 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 @property (nonatomic, assign, readonly) BOOL supported;
 @property (nonatomic, assign, readonly) BOOL usingSubjectLift;
 @property (nonatomic, copy, readonly) NSString *lastError;
+@property (nonatomic, assign, readonly) NSUInteger maskGeneration;
 @property (nonatomic, assign) SpliceKitLiveCamSegmentationQuality quality;
 - (CIImage *)maskImageForSampleBuffer:(CMSampleBufferRef)sampleBuffer;
 - (void)reset;
@@ -780,6 +941,7 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 @property (nonatomic, assign, readwrite) BOOL usingSubjectLift;
 @property (nonatomic, copy, readwrite) NSString *lastError;
 @property (nonatomic, assign) NSUInteger frameCounter;
+@property (nonatomic, assign, readwrite) NSUInteger maskGeneration;
 @end
 
 @implementation SpliceKitLiveCamSegmentationEngine
@@ -826,6 +988,7 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         CVPixelBufferRelease(self.latestMaskBuffer);
         self.latestMaskBuffer = nil;
     }
+    self.maskGeneration = 0;
 }
 
 - (void)setQuality:(SpliceKitLiveCamSegmentationQuality)quality {
@@ -857,11 +1020,25 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
     return 0.6;
 }
 
+// Match inference cadence to the requested quality tier. The compositor still
+// runs at camera frame rate and reuses the last materialized matte between
+// Vision updates, so Fast saves substantial neural-engine/GPU work without
+// making preview or recording cadence uneven.
+- (NSUInteger)inferenceFrameInterval {
+    switch (self.quality) {
+        case SpliceKitLiveCamSegmentationQualityFast:     return 3;
+        case SpliceKitLiveCamSegmentationQualityBalanced: return 2;
+        case SpliceKitLiveCamSegmentationQualityAccurate: return 1;
+    }
+    return 2;
+}
+
 - (CIImage *)maskImageForSampleBuffer:(CMSampleBufferRef)sampleBuffer {
     if (!self.supported || !sampleBuffer || !self.primaryRequest) return nil;
 
     self.frameCounter += 1;
-    BOOL shouldAnalyze = (self.frameCounter <= 2) || (self.frameCounter % 2 == 0);
+    NSUInteger inferenceInterval = [self inferenceFrameInterval];
+    BOOL shouldAnalyze = (self.frameCounter <= 2) || (self.frameCounter % inferenceInterval == 0);
     if (shouldAnalyze) {
         CVPixelBufferRef maskBuffer = [self runInferenceForSampleBuffer:sampleBuffer];
         if (maskBuffer) {
@@ -869,6 +1046,7 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
                 CVPixelBufferRelease(self.latestMaskBuffer);
             }
             self.latestMaskBuffer = maskBuffer; // ownership transferred from runInference
+            self.maskGeneration += 1;
             self.lastError = @"";
         }
     }
@@ -983,6 +1161,7 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 @property (nonatomic, assign) CGFloat wrap;          // 0..1, background light bleed into edge
 @property (nonatomic, assign) CGFloat temporalSmoothing; // 0..1, EMA factor against previous mask
 @property (nonatomic, assign) BOOL transparentBackground; // when YES, output premultiplied alpha
+@property (nonatomic, assign) NSUInteger sourceGeneration;
 @end
 
 @implementation SpliceKitLiveCamMaskParams
@@ -1023,6 +1202,16 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 @property (nonatomic, strong) NSMutableDictionary<NSString *, CIImage *> *overlayCache;
 @property (nonatomic, strong) NSMutableArray<CIImage *> *trailFrames;
 @property (nonatomic, strong) CIImage *previousMaskForBlend;
+@property (nonatomic, assign) CVPixelBufferPoolRef maskHistoryPool;
+@property (nonatomic, assign) size_t maskHistoryWidth;
+@property (nonatomic, assign) size_t maskHistoryHeight;
+@property (nonatomic, assign) NSUInteger maskHistoryFrames;
+@property (nonatomic, assign) NSUInteger previousMaskSourceGeneration;
+@property (nonatomic, assign) CGFloat previousMaskEdgeSoftness;
+@property (nonatomic, assign) CGFloat previousMaskRefinement;
+@property (nonatomic, assign) CGFloat previousMaskChoke;
+@property (nonatomic, assign) CGFloat previousMaskTemporalSmoothing;
+@property (nonatomic, assign) BOOL previousMaskConfigurationValid;
 @end
 
 @implementation SpliceKitLiveCamRenderer
@@ -1040,12 +1229,17 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         _ciContext = [CIContext contextWithMTLCommandQueue:_commandQueue options:@{
             kCIContextWorkingColorSpace: (__bridge id)_colorSpace,
             kCIContextOutputColorSpace: (__bridge id)_colorSpace,
+            // Every camera frame has different inputs. Retaining Core Image's
+            // transient intermediates only grows memory and cannot produce a
+            // useful cache hit for this streaming workload.
+            kCIContextCacheIntermediates: @NO,
         }];
         SpliceKit_log(@"[LiveCamEffects] Metal-backed CIContext ready on %@", _metalDevice.name ?: @"<unnamed>");
     } else {
         _ciContext = [CIContext contextWithOptions:@{
             kCIContextWorkingColorSpace: (__bridge id)_colorSpace,
             kCIContextOutputColorSpace: (__bridge id)_colorSpace,
+            kCIContextCacheIntermediates: @NO,
         }];
         SpliceKit_log(@"[LiveCamEffects] Falling back to CPU/GL Core Image context");
     }
@@ -1058,6 +1252,10 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 }
 
 - (void)dealloc {
+    if (_maskHistoryPool) {
+        CVPixelBufferPoolRelease(_maskHistoryPool);
+        _maskHistoryPool = NULL;
+    }
     if (_colorSpace) {
         CGColorSpaceRelease(_colorSpace);
         _colorSpace = nil;
@@ -1288,11 +1486,99 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 }
 
 - (void)resetMaskHistory {
-    NSUInteger depth = SpliceKitLiveCamCIImageChainDepth(self.previousMaskForBlend);
-    if (depth > 5) {
-        SpliceKit_log(@"[LiveCamPerf] resetMaskHistory: dropped mask chain depth=%lu", (unsigned long)depth);
+    if (self.maskHistoryFrames > 0) {
+        SpliceKit_log(@"[LiveCamPerf] resetMaskHistory: released materialized history after %lu masks",
+                      (unsigned long)self.maskHistoryFrames);
     }
     self.previousMaskForBlend = nil;
+    self.previousMaskSourceGeneration = 0;
+    self.previousMaskConfigurationValid = NO;
+    self.maskHistoryFrames = 0;
+    if (self.maskHistoryPool) {
+        CVPixelBufferPoolFlush(self.maskHistoryPool, kCVPixelBufferPoolFlushExcessBuffers);
+    }
+}
+
+// CIImage is a lazy recipe, not a pixel snapshot. Keeping a filtered CIImage as
+// feedback for the next frame creates mask[n] -> mask[n-1] -> ... forever. Core
+// Image recursively walks that graph during recording and eventually exhausts
+// the 544 KB capture-queue stack. Materialize each completed mask into a bounded
+// pool-backed pixel buffer so feedback always has constant graph depth.
+- (CIImage *)materializedMaskForHistory:(CIImage *)mask extent:(CGRect)extent {
+    if (!mask || CGRectIsEmpty(extent) || !self.ciContext) return nil;
+
+    size_t width = (size_t)MAX(1.0, ceil(CGRectGetWidth(extent)));
+    size_t height = (size_t)MAX(1.0, ceil(CGRectGetHeight(extent)));
+    if (!self.maskHistoryPool || self.maskHistoryWidth != width || self.maskHistoryHeight != height) {
+        if (self.maskHistoryPool) {
+            CVPixelBufferPoolRelease(self.maskHistoryPool);
+            self.maskHistoryPool = NULL;
+        }
+
+        NSDictionary *poolAttributes = @{
+            (id)kCVPixelBufferPoolMinimumBufferCountKey: @3,
+        };
+        NSDictionary *bufferAttributes = @{
+            (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_OneComponent8),
+            (id)kCVPixelBufferWidthKey: @(width),
+            (id)kCVPixelBufferHeightKey: @(height),
+            (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
+            (id)kCVPixelBufferMetalCompatibilityKey: @YES,
+        };
+        CVReturn poolStatus = CVPixelBufferPoolCreate(kCFAllocatorDefault,
+                                                       (__bridge CFDictionaryRef)poolAttributes,
+                                                       (__bridge CFDictionaryRef)bufferAttributes,
+                                                       &_maskHistoryPool);
+        if (poolStatus != kCVReturnSuccess || !self.maskHistoryPool) {
+            SpliceKit_log(@"[LiveCamPerf] mask history pool creation failed (%d) for %zux%zu",
+                          (int)poolStatus, width, height);
+            self.maskHistoryWidth = 0;
+            self.maskHistoryHeight = 0;
+            return nil;
+        }
+        self.maskHistoryWidth = width;
+        self.maskHistoryHeight = height;
+        SpliceKit_log(@"[LiveCamPerf] materialized mask history ready at %zux%zu", width, height);
+    }
+
+    CVPixelBufferRef historyBuffer = NULL;
+    NSDictionary *allocationLimit = @{
+        (id)kCVPixelBufferPoolAllocationThresholdKey: @8,
+    };
+    CVReturn bufferStatus = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+        kCFAllocatorDefault,
+        self.maskHistoryPool,
+        (__bridge CFDictionaryRef)allocationLimit,
+        &historyBuffer);
+    if (bufferStatus != kCVReturnSuccess || !historyBuffer) {
+        SpliceKit_log(@"[LiveCamPerf] mask history buffer unavailable (%d); using current-frame mask without feedback",
+                      (int)bufferStatus);
+        return nil;
+    }
+
+    CGRect targetExtent = CGRectMake(0, 0, width, height);
+    CIImage *normalized = mask;
+    if (fabs(CGRectGetMinX(extent)) > 0.001 || fabs(CGRectGetMinY(extent)) > 0.001) {
+        normalized = [mask imageByApplyingTransform:CGAffineTransformMakeTranslation(-CGRectGetMinX(extent),
+                                                                                     -CGRectGetMinY(extent))];
+    }
+    normalized = [normalized imageByCroppingToRect:targetExtent];
+    [self.ciContext render:normalized
+           toCVPixelBuffer:historyBuffer
+                    bounds:targetExtent
+                colorSpace:nil];
+
+    CIImage *materialized = [CIImage imageWithCVPixelBuffer:historyBuffer
+                                                   options:@{ kCIImageColorSpace: [NSNull null] }];
+    CVPixelBufferRelease(historyBuffer);
+    if (!materialized) return nil;
+
+    materialized = [materialized imageByCroppingToRect:targetExtent];
+    if (fabs(CGRectGetMinX(extent)) > 0.001 || fabs(CGRectGetMinY(extent)) > 0.001) {
+        materialized = [materialized imageByApplyingTransform:CGAffineTransformMakeTranslation(CGRectGetMinX(extent),
+                                                                                                CGRectGetMinY(extent))];
+    }
+    return [materialized imageByCroppingToRect:extent];
 }
 
 // Checkerboard composited under transparent preview only — never written to disk.
@@ -1337,6 +1623,22 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
                  background:(CIImage *)backgroundImage
                      params:(SpliceKitLiveCamMaskParams *)params
                      extent:(CGRect)extent {
+    BOOL sameSource = self.previousMaskForBlend &&
+        self.previousMaskConfigurationValid &&
+        params.sourceGeneration == self.previousMaskSourceGeneration &&
+        fabs(params.edgeSoftness - self.previousMaskEdgeSoftness) < 0.0001 &&
+        fabs(params.refinement - self.previousMaskRefinement) < 0.0001 &&
+        fabs(params.choke - self.previousMaskChoke) < 0.0001 &&
+        fabs(params.temporalSmoothing - self.previousMaskTemporalSmoothing) < 0.0001 &&
+        self.maskHistoryWidth == (size_t)MAX(1.0, ceil(CGRectGetWidth(extent))) &&
+        self.maskHistoryHeight == (size_t)MAX(1.0, ceil(CGRectGetHeight(extent)));
+    if (sameSource) {
+        // Vision intentionally updates every other capture frame. Reuse the
+        // already-materialized matte on the intervening frame instead of
+        // repeating morphology, blur, temporal blend, and a GPU render.
+        return self.previousMaskForBlend;
+    }
+
     CIImage *mask = [self imageFittedForCanvas:rawMask canvasSize:extent.size fill:YES];
     mask = [mask imageByCroppingToRect:extent];
 
@@ -1380,7 +1682,23 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         mask = [mask imageByCroppingToRect:extent];
     }
 
-    self.previousMaskForBlend = mask;
+    CIImage *materialized = [self materializedMaskForHistory:mask extent:extent];
+    if (materialized) {
+        self.previousMaskForBlend = materialized;
+        self.previousMaskSourceGeneration = params.sourceGeneration;
+        self.previousMaskEdgeSoftness = params.edgeSoftness;
+        self.previousMaskRefinement = params.refinement;
+        self.previousMaskChoke = params.choke;
+        self.previousMaskTemporalSmoothing = params.temporalSmoothing;
+        self.previousMaskConfigurationValid = YES;
+        self.maskHistoryFrames += 1;
+        return materialized;
+    }
+
+    // Allocation/render failure must degrade to a single-frame mask. Never
+    // retain the lazy result, or the recursive graph and crash return.
+    self.previousMaskForBlend = nil;
+    self.previousMaskConfigurationValid = NO;
     return mask;
 }
 
@@ -1659,7 +1977,7 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 @property (nonatomic, strong) NSTextField *backgroundInfoLabel;
 @property (nonatomic, strong) NSTextField *backgroundStatusLabel;
 @property (nonatomic, strong) NSTextField *nameHintLabel;
-@property (nonatomic, strong) NSLevelIndicator *audioMeter;
+@property (nonatomic, strong) SpliceKitLiveCamAudioMeterView *audioMeter;
 @property (nonatomic, strong) NSPopUpButton *lookCategoryPopup;
 @property (nonatomic, strong) NSPopUpButton *lookPresetPopup;
 @property (nonatomic, strong) NSPopUpButton *backgroundModePopup;
@@ -1740,10 +2058,19 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 @property (nonatomic, strong) NSDate *recordingStartDate;
 @property (nonatomic, assign) NSUInteger droppedVideoFrames;
 @property (nonatomic, assign) NSUInteger droppedAudioFrames;
+@property (atomic, assign) NSUInteger sourceAudioDiscontinuities;
+@property (atomic, assign) NSUInteger sourceAudioGapFrames;
+@property (atomic, assign) double capturedAudioSampleRate;
+@property (atomic, assign) NSUInteger capturedAudioChannels;
+@property (nonatomic, assign) CMTime expectedNextAudioPTS;
+@property (nonatomic, assign) BOOL audioFormatLogged;
+@property (nonatomic, assign) NSTimeInterval lastAudioMeterDispatchTime;
+@property (atomic, assign) NSUInteger audioMeterBuffersReceived;
+@property (atomic, assign) NSUInteger audioMeterDecodedSamples;
+@property (atomic, assign) OSStatus audioMeterLastError;
 @property (nonatomic, assign) NSUInteger perfFrameCount;
 @property (nonatomic, assign) double perfFrameMsSum;
 @property (nonatomic, assign) double perfFrameMsMax;
-@property (nonatomic, assign) NSUInteger perfPrevMaskChainDepth;
 @property (nonatomic, assign) NSTimeInterval perfLastLogTime;
 @property (nonatomic, assign) double smoothedAudioLevel;
 @property (nonatomic, assign) BOOL systemBlurSupported;
@@ -1776,7 +2103,16 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
     _adjustments = [[SpliceKitLiveCamAdjustmentState alloc] init];
     _sessionQueue = dispatch_queue_create("com.splicekit.livecam.session", DISPATCH_QUEUE_SERIAL);
     _videoQueue = dispatch_queue_create("com.splicekit.livecam.video", DISPATCH_QUEUE_SERIAL);
-    _audioQueue = dispatch_queue_create("com.splicekit.livecam.audio", DISPATCH_QUEUE_SERIAL);
+    // USB audio callbacks have hard real-time-ish deadlines. Keep them ahead of
+    // the much heavier Core Image / 4K encode work so memory pressure or a busy
+    // video frame cannot starve the microphone callback and turn an otherwise
+    // valid Shure buffer into an audible discontinuity.
+    dispatch_queue_attr_t audioQueueAttributes =
+        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
+                                                 QOS_CLASS_USER_INTERACTIVE,
+                                                 0);
+    _audioQueue = dispatch_queue_create("com.splicekit.livecam.audio", audioQueueAttributes);
+    _expectedNextAudioPTS = kCMTimeInvalid;
     _presets = @[
         [SpliceKitLiveCamPreset presetWithIdentifier:@"clean" name:@"Clean" category:@"Clean" summary:@"Natural camera image with no stylized treatment." premium:NO],
         [SpliceKitLiveCamPreset presetWithIdentifier:@"faceCamPunch" name:@"Face-Cam Punch" category:@"Clean" summary:@"Tightens the framing for quick commentary pickups." premium:NO],
@@ -1859,6 +2195,15 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         @"outputPath": self.finalRecordingURL.path ?: @"",
         @"droppedVideoFrames": @(self.droppedVideoFrames),
         @"droppedAudioFrames": @(self.droppedAudioFrames),
+        @"sourceAudioDiscontinuities": @(self.sourceAudioDiscontinuities),
+        @"sourceAudioGapFrames": @(self.sourceAudioGapFrames),
+        @"audioSampleRate": @(self.capturedAudioSampleRate),
+        @"audioChannels": @(self.capturedAudioChannels),
+        @"audioLevelDB": @(self.audioMeter.rmsDB),
+        @"audioPeakDB": @(self.audioMeter.peakDB),
+        @"audioMeterBuffersReceived": @(self.audioMeterBuffersReceived),
+        @"audioMeterDecodedSamples": @(self.audioMeterDecodedSamples),
+        @"audioMeterLastError": @(self.audioMeterLastError),
     };
 }
 
@@ -2335,13 +2680,8 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
                                              target:self
                                              action:@selector(configurationChanged:)];
 
-    self.audioMeter = [[NSLevelIndicator alloc] initWithFrame:NSZeroRect];
-    self.audioMeter.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity;
-    self.audioMeter.minValue = 0.0;
-    self.audioMeter.maxValue = 100.0;
-    self.audioMeter.warningValue = 70.0;
-    self.audioMeter.criticalValue = 90.0;
-    [self.audioMeter.heightAnchor constraintEqualToConstant:12.0].active = YES;
+    self.audioMeter = [[SpliceKitLiveCamAudioMeterView alloc] initWithFrame:NSZeroRect];
+    [self.audioMeter.heightAnchor constraintEqualToConstant:46.0].active = YES;
 
     self.destinationControl = [[NSSegmentedControl alloc] initWithFrame:NSZeroRect];
     self.destinationControl.segmentCount = 2;
@@ -2433,7 +2773,7 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 
     NSArray<NSView *> *audioRows = @[
         [self labeledRowWithLabel:@"Microphone" control:self.microphonePopup],
-        [self labeledRowWithLabel:@"Input Level" control:self.audioMeter],
+        [self centeredViewRow:self.audioMeter],
     ];
 
     NSArray<NSView *> *lookRows = @[
@@ -3494,7 +3834,14 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         }
 
         AVCaptureSession *session = [[AVCaptureSession alloc] init];
-        if ([session canSetSessionPreset:AVCaptureSessionPresetHigh]) {
+        // Use an exact macOS capture preset where one exists. The old generic
+        // "High" preset made a selected 720p preview arrive as 1920x1080 and
+        // forced 2.25x as many pixels through every effect.
+        AVCaptureSessionPreset requestedPreset =
+            SpliceKitLiveCamSessionPresetForResolution(targetResolution);
+        if ([session canSetSessionPreset:requestedPreset]) {
+            session.sessionPreset = requestedPreset;
+        } else if ([session canSetSessionPreset:AVCaptureSessionPresetHigh]) {
             session.sessionPreset = AVCaptureSessionPresetHigh;
         }
 
@@ -3529,6 +3876,8 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         videoOutput.alwaysDiscardsLateVideoFrames = YES;
         videoOutput.videoSettings = @{
             (NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+            (NSString *)kCVPixelBufferWidthKey: @((NSInteger)lrint(targetResolution.width)),
+            (NSString *)kCVPixelBufferHeightKey: @((NSInteger)lrint(targetResolution.height)),
         };
         [videoOutput setSampleBufferDelegate:self queue:self.videoQueue];
         if ([session canAddOutput:videoOutput]) {
@@ -3537,6 +3886,11 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         }
 
         AVCaptureAudioDataOutput *audioOutput = [[AVCaptureAudioDataOutput alloc] init];
+        // Preserve the hardware's native rate and channel layout. In
+        // particular, the MVX2U is a 48 kHz mono source; forcing a stereo
+        // capture format here adds an unnecessary real-time conversion before
+        // the writer has even seen the source format.
+        audioOutput.audioSettings = nil;
         [audioOutput setSampleBufferDelegate:self queue:self.audioQueue];
         if (audioDevice && [session canAddOutput:audioOutput]) {
             [session addOutput:audioOutput];
@@ -3552,8 +3906,11 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         }
 
         self.session = session;
-        self.latestPreviewImage = nil;
-        [self.segmentationEngine reset];
+        dispatch_sync(self.videoQueue, ^{
+            self.latestPreviewImage = nil;
+            [self.segmentationEngine reset];
+            [self.renderer resetMaskHistory];
+        });
 
         if (self.isVisible) {
             [session startRunning];
@@ -3585,10 +3942,14 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         if (self.session.isRunning) {
             [self.session stopRunning];
         }
-        self.latestPreviewImage = nil;
-        [self.segmentationEngine reset];
+        dispatch_sync(self.videoQueue, ^{
+            self.latestPreviewImage = nil;
+            [self.segmentationEngine reset];
+            [self.renderer resetMaskHistory];
+        });
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.audioMeter.doubleValue = 0.0;
+            self.smoothedAudioLevel = 0.0;
+            [self.audioMeter reset];
         });
     });
 }
@@ -3746,6 +4107,59 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
     return 12.0 * 1000.0 * 1000.0;
 }
 
+- (NSDictionary<NSString *, id> *)audioWriterSettingsForCurrentSession {
+    // Apple's recommendation is derived from the configured capture session,
+    // so it retains a mono USB microphone as mono and uses its actual sample
+    // rate. The previous fixed 48 kHz/stereo dictionary made AVAssetWriter
+    // perform an undocumented real-time mono-to-stereo conversion for the
+    // Shure MVX2U, which is both unnecessary and vulnerable to crackle when
+    // the 4K video path is under pressure.
+    NSDictionary<NSString *, id> *recommended =
+        [self.audioOutput recommendedAudioSettingsForAssetWriterWithOutputFileType:AVFileTypeQuickTimeMovie];
+    NSNumber *recommendedRate = recommended[AVSampleRateKey];
+    NSNumber *recommendedChannels = recommended[AVNumberOfChannelsKey];
+    if (recommended.count > 0 && recommendedRate.doubleValue > 0.0 &&
+        recommendedChannels.unsignedIntegerValue > 0) {
+        return recommended;
+    }
+
+    // The recommendation should be available once the session is running, but
+    // retain a format-aware fallback for devices/drivers that do not provide
+    // one. Read the active audio ASBD instead of assuming every microphone is
+    // stereo.
+    double sampleRate = 48000.0;
+    NSUInteger channelCount = 1;
+    AVCaptureDevice *audioDevice = self.audioInput.device;
+    CMFormatDescriptionRef formatDescription = audioDevice.activeFormat.formatDescription;
+    if (formatDescription &&
+        CMFormatDescriptionGetMediaType(formatDescription) == kCMMediaType_Audio) {
+        const AudioStreamBasicDescription *asbd =
+            CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription);
+        if (asbd) {
+            if (asbd->mSampleRate > 0.0) sampleRate = asbd->mSampleRate;
+            if (asbd->mChannelsPerFrame > 0) {
+                channelCount = MIN((NSUInteger)2, (NSUInteger)asbd->mChannelsPerFrame);
+            }
+        }
+    }
+
+    return @{
+        AVFormatIDKey: @(kAudioFormatMPEG4AAC),
+        AVNumberOfChannelsKey: @(channelCount),
+        AVSampleRateKey: @(sampleRate),
+        AVEncoderBitRateKey: @(channelCount == 1 ? 96000 : 160000),
+        AVEncoderAudioQualityKey: @(AVAudioQualityHigh),
+    };
+}
+
+- (void)resetAudioDiagnosticsForRecording {
+    dispatch_sync(self.audioQueue, ^{
+        self.expectedNextAudioPTS = kCMTimeInvalid;
+        self.sourceAudioDiscontinuities = 0;
+        self.sourceAudioGapFrames = 0;
+    });
+}
+
 - (void)prepareWriterForCurrentSettings {
     NSString *baseName = [self recordingBaseName];
     NSString *tempPath = SpliceKitLiveCamUniquePath(SpliceKitLiveCamTemporaryDirectory(), [baseName stringByAppendingString:@".partial"], @"mov");
@@ -3819,16 +4233,16 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
     if (self.microphoneAuthorized &&
         self.muteCheckbox.state != NSControlStateValueOn &&
         self.audioInput != nil) {
-        NSDictionary *audioSettings = @{
-            AVFormatIDKey: @(kAudioFormatMPEG4AAC),
-            AVNumberOfChannelsKey: @2,
-            AVSampleRateKey: @48000,
-            AVEncoderBitRateKey: @128000,
-        };
+        NSDictionary<NSString *, id> *audioSettings = [self audioWriterSettingsForCurrentSession];
         self.audioWriterInput = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:audioSettings];
         self.audioWriterInput.expectsMediaDataInRealTime = YES;
         if ([self.assetWriter canAddInput:self.audioWriterInput]) {
             [self.assetWriter addInput:self.audioWriterInput];
+            SpliceKit_log(@"[LiveCamAudio] writer format rate=%.0fHz channels=%lu codec=%@ bitrate=%@",
+                          [audioSettings[AVSampleRateKey] doubleValue],
+                          (unsigned long)[audioSettings[AVNumberOfChannelsKey] unsignedIntegerValue],
+                          audioSettings[AVFormatIDKey] ?: @"",
+                          audioSettings[AVEncoderBitRateKey] ?: @"");
         } else {
             self.audioWriterInput = nil;
         }
@@ -3840,6 +4254,7 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
     self.writerDidStart = NO;
     self.droppedVideoFrames = 0;
     self.droppedAudioFrames = 0;
+    [self resetAudioDiagnosticsForRecording];
 
     SpliceKit_log(@"[LiveCamRecord] Writer prepared path=%@ final=%@ quality=%@ canvas=%.0fx%.0f",
                   self.temporaryRecordingURL.path,
@@ -3986,10 +4401,14 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
             return;
         }
 
-        SpliceKit_log(@"[LiveCamRecord] finalized output=%@ droppedVideo=%lu droppedAudio=%lu",
+        SpliceKit_log(@"[LiveCamRecord] finalized output=%@ droppedVideo=%lu droppedAudio=%lu sourceAudioDiscontinuities=%lu sourceAudioGapFrames=%lu audio=%.0fHz/%luch",
                       finalURL.path,
                       (unsigned long)self.droppedVideoFrames,
-                      (unsigned long)self.droppedAudioFrames);
+                      (unsigned long)self.droppedAudioFrames,
+                      (unsigned long)self.sourceAudioDiscontinuities,
+                      (unsigned long)self.sourceAudioGapFrames,
+                      self.capturedAudioSampleRate,
+                      (unsigned long)self.capturedAudioChannels);
 
         dispatch_async(dispatch_get_main_queue(), ^{
             [self updateStatus:@"Finalizing complete. Importing into Final Cut Pro…"];
@@ -4171,18 +4590,99 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
                           placementText]};
 }
 
-- (void)handleAudioMeterFromSampleBuffer:(CMSampleBufferRef)sampleBuffer {
+- (void)trackAudioFormatAndContinuityFromSampleBuffer:(CMSampleBufferRef)sampleBuffer {
     CMFormatDescriptionRef format = CMSampleBufferGetFormatDescription(sampleBuffer);
     const AudioStreamBasicDescription *asbd =
         CMAudioFormatDescriptionGetStreamBasicDescription(format);
     if (!asbd) return;
 
-    UInt32 bufferListSize = sizeof(AudioBufferList) + sizeof(AudioBuffer) * 8;
-    AudioBufferList *audioBufferList = malloc(bufferListSize);
+    double sampleRate = asbd->mSampleRate;
+    NSUInteger channels = asbd->mChannelsPerFrame;
+    BOOL formatChanged = !self.audioFormatLogged ||
+        fabs(self.capturedAudioSampleRate - sampleRate) > 0.5 ||
+        self.capturedAudioChannels != channels;
+    self.capturedAudioSampleRate = sampleRate;
+    self.capturedAudioChannels = channels;
+    if (formatChanged) {
+        self.audioFormatLogged = YES;
+        SpliceKit_log(@"[LiveCamAudio] source format rate=%.0fHz channels=%lu format=0x%08x flags=0x%08x bits=%u bytesPerFrame=%u",
+                      sampleRate,
+                      (unsigned long)channels,
+                      (unsigned int)asbd->mFormatID,
+                      (unsigned int)asbd->mFormatFlags,
+                      (unsigned int)asbd->mBitsPerChannel,
+                      (unsigned int)asbd->mBytesPerFrame);
+    }
+
+    CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    CMItemCount sampleCount = CMSampleBufferGetNumSamples(sampleBuffer);
+    if (!CMTIME_IS_VALID(pts) || sampleRate <= 0.0 || sampleCount <= 0) {
+        self.expectedNextAudioPTS = kCMTimeInvalid;
+        return;
+    }
+
+    if (self.recordingActive && CMTIME_IS_VALID(self.expectedNextAudioPTS)) {
+        double gapSeconds = CMTimeGetSeconds(CMTimeSubtract(pts, self.expectedNextAudioPTS));
+        // Host-time conversion can introduce sub-millisecond rounding. A gap
+        // beyond 2 ms is large enough to be audible and indicates a capture
+        // discontinuity, even when AVAssetWriter itself reports zero drops.
+        if (isfinite(gapSeconds) && fabs(gapSeconds) > 0.002) {
+            self.sourceAudioDiscontinuities += 1;
+            self.sourceAudioGapFrames += (NSUInteger)llround(fabs(gapSeconds) * sampleRate);
+            NSUInteger eventCount = self.sourceAudioDiscontinuities;
+            if (eventCount <= 8 || eventCount % 25 == 0) {
+                SpliceKit_log(@"[LiveCamAudio] source discontinuity #%lu gap=%+.3fms near %.3fs",
+                              (unsigned long)eventCount,
+                              gapSeconds * 1000.0,
+                              CMTimeGetSeconds(pts));
+            }
+        }
+    }
+
+    CMTime bufferDuration = CMTimeMakeWithSeconds((double)sampleCount / sampleRate, 1000000000);
+    self.expectedNextAudioPTS = CMTimeAdd(pts, bufferDuration);
+}
+
+- (void)handleAudioMeterFromSampleBuffer:(CMSampleBufferRef)sampleBuffer {
+    self.audioMeterBuffersReceived += 1;
+
+    // Metering is intentionally capped at 20 Hz. Do this before inspecting or
+    // copying the PCM payload so the audio callback stays lightweight even for
+    // high-rate/multichannel devices.
+    NSTimeInterval now = CACurrentMediaTime();
+    if (now - self.lastAudioMeterDispatchTime < 0.05) return;
+    self.lastAudioMeterDispatchTime = now;
+
+    CMFormatDescriptionRef format = CMSampleBufferGetFormatDescription(sampleBuffer);
+    const AudioStreamBasicDescription *asbd =
+        CMAudioFormatDescriptionGetStreamBasicDescription(format);
+    if (!asbd) return;
+
+    // Ask Core Media for the exact AudioBufferList size first. AVCapture can
+    // return more buffers than the old fixed stack-sized estimate (especially
+    // for non-interleaved and aggregate devices), in which case the previous
+    // code returned kCMSampleBufferError_ArrayTooSmall and silently left the
+    // UI frozen. The first call is a size query and does not copy audio.
+    size_t bufferListSize = 0;
+    OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer,
+        &bufferListSize,
+        NULL,
+        0,
+        NULL,
+        NULL,
+        0,
+        NULL);
+    if (status != noErr || bufferListSize < sizeof(AudioBufferList)) {
+        self.audioMeterLastError = status != noErr ? status : kCMSampleBufferError_ArrayTooSmall;
+        return;
+    }
+
+    AudioBufferList *audioBufferList = calloc(1, bufferListSize);
     if (!audioBufferList) return;
 
     CMBlockBufferRef blockBuffer = NULL;
-    OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+    status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
         sampleBuffer,
         NULL,
         audioBufferList,
@@ -4193,30 +4693,95 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
         &blockBuffer);
 
     if (status != noErr) {
+        self.audioMeterLastError = status;
         free(audioBufferList);
         if (blockBuffer) CFRelease(blockBuffer);
         return;
     }
 
     double total = 0.0;
+    double peak = 0.0;
     NSUInteger count = 0;
     for (UInt32 i = 0; i < audioBufferList->mNumberBuffers; i++) {
         AudioBuffer buffer = audioBufferList->mBuffers[i];
         if (!buffer.mData || buffer.mDataByteSize == 0) continue;
 
-        if ((asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0) {
+        BOOL isFloat = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
+        BOOL isSignedInteger = (asbd->mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0;
+        if (isFloat && asbd->mBitsPerChannel == 32) {
             const float *samples = (const float *)buffer.mData;
             NSUInteger sampleCount = buffer.mDataByteSize / sizeof(float);
             for (NSUInteger s = 0; s < sampleCount; s++) {
-                total += samples[s] * samples[s];
+                double value = samples[s];
+                total += value * value;
+                peak = MAX(peak, fabs(value));
             }
             count += sampleCount;
-        } else {
+        } else if (isFloat && asbd->mBitsPerChannel == 64) {
+            const double *samples = (const double *)buffer.mData;
+            NSUInteger sampleCount = buffer.mDataByteSize / sizeof(double);
+            for (NSUInteger s = 0; s < sampleCount; s++) {
+                double value = samples[s];
+                total += value * value;
+                peak = MAX(peak, fabs(value));
+            }
+            count += sampleCount;
+        } else if (isSignedInteger && asbd->mBitsPerChannel == 16) {
             const int16_t *samples = (const int16_t *)buffer.mData;
             NSUInteger sampleCount = buffer.mDataByteSize / sizeof(int16_t);
             for (NSUInteger s = 0; s < sampleCount; s++) {
                 double normalized = (double)samples[s] / 32768.0;
                 total += normalized * normalized;
+                peak = MAX(peak, fabs(normalized));
+            }
+            count += sampleCount;
+        } else if (isSignedInteger && asbd->mBitsPerChannel == 24) {
+            BOOL nonInterleaved =
+                (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+            BOOL bigEndian =
+                (asbd->mFormatFlags & kAudioFormatFlagIsBigEndian) != 0;
+            BOOL alignedHigh =
+                (asbd->mFormatFlags & kAudioFormatFlagIsAlignedHigh) != 0;
+            UInt32 bytesPerSample = nonInterleaved
+                ? asbd->mBytesPerFrame
+                : (asbd->mChannelsPerFrame > 0
+                    ? asbd->mBytesPerFrame / asbd->mChannelsPerFrame
+                    : 0);
+
+            if (bytesPerSample == 4) {
+                const int32_t *samples = (const int32_t *)buffer.mData;
+                NSUInteger sampleCount = buffer.mDataByteSize / sizeof(int32_t);
+                for (NSUInteger s = 0; s < sampleCount; s++) {
+                    int32_t value = samples[s];
+                    if (bigEndian) value = (int32_t)CFSwapInt32BigToHost((uint32_t)value);
+                    if (!alignedHigh) value = (int32_t)((uint32_t)value << 8);
+                    double normalized = (double)value / 2147483648.0;
+                    total += normalized * normalized;
+                    peak = MAX(peak, fabs(normalized));
+                }
+                count += sampleCount;
+            } else if (bytesPerSample == 3) {
+                const uint8_t *bytes = (const uint8_t *)buffer.mData;
+                NSUInteger sampleCount = buffer.mDataByteSize / 3;
+                for (NSUInteger s = 0; s < sampleCount; s++) {
+                    const uint8_t *sample = bytes + s * 3;
+                    int32_t value = bigEndian
+                        ? ((int32_t)sample[0] << 16) | ((int32_t)sample[1] << 8) | sample[2]
+                        : ((int32_t)sample[2] << 16) | ((int32_t)sample[1] << 8) | sample[0];
+                    if (value & 0x00800000) value |= (int32_t)0xff000000;
+                    double normalized = (double)value / 8388608.0;
+                    total += normalized * normalized;
+                    peak = MAX(peak, fabs(normalized));
+                }
+                count += sampleCount;
+            }
+        } else if (isSignedInteger && asbd->mBitsPerChannel == 32) {
+            const int32_t *samples = (const int32_t *)buffer.mData;
+            NSUInteger sampleCount = buffer.mDataByteSize / sizeof(int32_t);
+            for (NSUInteger s = 0; s < sampleCount; s++) {
+                double normalized = (double)samples[s] / 2147483648.0;
+                total += normalized * normalized;
+                peak = MAX(peak, fabs(normalized));
             }
             count += sampleCount;
         }
@@ -4225,14 +4790,22 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
     if (blockBuffer) CFRelease(blockBuffer);
     free(audioBufferList);
 
-    if (count == 0) return;
+    self.audioMeterDecodedSamples = count;
+    if (count == 0) {
+        self.audioMeterLastError = kCMSampleBufferError_InvalidMediaFormat;
+        return;
+    }
+    self.audioMeterLastError = noErr;
 
     double rms = sqrt(total / (double)count);
     self.smoothedAudioLevel = (self.smoothedAudioLevel * 0.82) + (rms * 0.18);
-    double meterValue = MIN(100.0, self.smoothedAudioLevel * 180.0);
+    double rmsDB = self.smoothedAudioLevel > 0.000001
+        ? 20.0 * log10(self.smoothedAudioLevel)
+        : -60.0;
+    double peakDB = peak > 0.000001 ? 20.0 * log10(peak) : -60.0;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.audioMeter.doubleValue = meterValue;
+        [self.audioMeter updateWithRMSDB:rmsDB peakDB:peakDB];
     });
 }
 
@@ -4319,6 +4892,7 @@ typedef NS_ENUM(NSInteger, SpliceKitLiveCamSegmentationQuality) {
 - (void)captureOutput:(AVCaptureOutput *)output
 didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
        fromConnection:(AVCaptureConnection *)connection {
+    @autoreleasepool {
     if (output == self.videoOutput) {
         CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
         if (!imageBuffer) return;
@@ -4352,6 +4926,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
             maskParams.wrap = self.backgroundWrapSlider.doubleValue;
             maskParams.temporalSmoothing = 0.45;
             maskParams.transparentBackground = transparentBg;
+            maskParams.sourceGeneration = self.segmentationEngine.maskGeneration;
         }
 
         CIImage *rendered = [self.renderer renderedImageFromImage:source
@@ -4385,10 +4960,9 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         }
 
         // Perf instrumentation: accumulate per-frame render time and log a
-        // summary every ~2 seconds with the current CIImage graph depth of
-        // the retained previous-mask (which is the primary suspect for the
-        // "slower over time, snaps back after mode toggle" behavior) and
-        // process RSS. Remove once the slowdown is root-caused and fixed.
+        // summary every ~2 seconds with the number of masks materialized into
+        // bounded history buffers and process RSS. CIImage.description is not
+        // a reliable graph-depth metric on current Core Image releases.
         static mach_timebase_info_data_t timebase = {0, 0};
         if (timebase.denom == 0) mach_timebase_info(&timebase);
         double frameMs = ((mach_absolute_time() - frameStartTicks) * timebase.numer / (double)timebase.denom) / 1.0e6;
@@ -4399,14 +4973,15 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         if (self.perfLastLogTime == 0) self.perfLastLogTime = now;
         if (now - self.perfLastLogTime >= 2.0 && self.perfFrameCount > 0) {
             double avgMs = self.perfFrameMsSum / self.perfFrameCount;
-            NSUInteger chainDepth = SpliceKitLiveCamCIImageChainDepth(self.renderer.previousMaskForBlend);
             double rssMB = SpliceKitLiveCamResidentMB();
-            SpliceKit_log(@"[LiveCamPerf] frames=%lu avg=%.1fms max=%.1fms maskGraph=%lu lines rss=%.1fMB bg=%ld refinement=%.2f choke=%.2f edge=%.2f spill=%.2f wrap=%.2f",
+            SpliceKit_log(@"[LiveCamPerf] frames=%lu avg=%.1fms max=%.1fms materializedMasks=%lu rss=%.1fMB input=%.0fx%.0f bg=%ld refinement=%.2f choke=%.2f edge=%.2f spill=%.2f wrap=%.2f",
                           (unsigned long)self.perfFrameCount,
                           avgMs,
                           self.perfFrameMsMax,
-                          (unsigned long)chainDepth,
+                          (unsigned long)self.renderer.maskHistoryFrames,
                           rssMB,
+                          CGRectGetWidth(source.extent),
+                          CGRectGetHeight(source.extent),
                           (long)backgroundMode,
                           self.backgroundRefinementSlider.doubleValue,
                           self.backgroundChokeSlider.doubleValue,
@@ -4419,10 +4994,12 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
             self.perfLastLogTime = now;
         }
     } else if (output == self.audioOutput) {
+        [self trackAudioFormatAndContinuityFromSampleBuffer:sampleBuffer];
         [self handleAudioMeterFromSampleBuffer:sampleBuffer];
         if (self.muteCheckbox.state != NSControlStateValueOn) {
             [self appendAudioSampleBuffer:sampleBuffer];
         }
+    }
     }
 }
 

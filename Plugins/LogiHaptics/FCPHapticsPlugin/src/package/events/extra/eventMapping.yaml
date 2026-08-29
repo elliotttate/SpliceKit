@@ -1,0 +1,56 @@
+# Maps each FCP haptic event onto a Logitech-defined waveform.
+#
+# Logitech groups waveforms by intended use:
+#   • Precision enhancers (snap-feel): subtle_collision, damp_collision,
+#     sharp_collision, damp_state_change
+#   • Progress / state: sharp_state_change, completed, square, mad, firework
+#   • Alerts / incoming: knock, ringing, jingle, happy_alert, angry_alert, wave
+#
+# Every haptic in this plugin is snap-flavored — keep them all in the
+# precision-enhancer family so a heavy edit session feels coherent.
+
+haptics:
+    # ---------------------------------------------------------------------------
+    # Native FCP haptics (mirror the trackpad)
+    # ---------------------------------------------------------------------------
+    viewer_snap:
+        DEFAULT: subtle_collision
+        MX Master 4: subtle_collision
+
+    title_drop_snap:
+        DEFAULT: subtle_collision
+        MX Master 4: damp_collision
+
+    trim_limit:
+        DEFAULT: damp_state_change
+        MX Master 4: sharp_collision
+
+    jkl_pressure:
+        DEFAULT: sharp_state_change
+        MX Master 4: sharp_state_change
+
+    # ---------------------------------------------------------------------------
+    # SpliceKit-added snap haptics
+    # ---------------------------------------------------------------------------
+
+    # Clip snap — fires when a dragged clip's edge engages an edit point or
+    # marker. Logitech's own design guidelines list "layer content snap with
+    # smart guide" as a canonical subtle_collision use case, and that's
+    # exactly the feel we want here: a light "click" of recognition rather
+    # than a thump.
+    clip_snap:
+        DEFAULT: subtle_collision
+        MX Master 4: subtle_collision
+
+    # Playhead snap — same family as clip_snap. Kept identical to the clip
+    # waveform so an editor's hand can't be tricked into thinking the wrong
+    # surface engaged; differentiation is visual (yellow guide line vs.
+    # snapped playhead tint) not tactile.
+    playhead_snap:
+        DEFAULT: subtle_collision
+        MX Master 4: subtle_collision
+
+    # Catch-all
+    unknown:
+        DEFAULT: subtle_collision
+        MX Master 4: subtle_collision

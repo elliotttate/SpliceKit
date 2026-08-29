@@ -1,0 +1,43 @@
+# ==================================================================================================
+# GENERAL SETTINGS
+# ==================================================================================================
+
+type: plugin4
+name: FCPHaptics
+displayName: FCP Haptics
+description: Mirrors Final Cut Pro's snap, trim-limit, and pressure-step haptics from the Force Touch trackpad onto the Logitech MX Master 4 mouse via SpliceKit.
+
+pluginFileName: FCPHapticsPlugin.dll
+version: 0.1
+author: briantate
+copyright: Copyright © 2026 briantate. All rights reserved.
+
+
+# ==================================================================================================
+# PLUGIN PROPERTIES
+# ==================================================================================================
+
+# We don't ship a Windows binary — SpliceKit is FCP-only.
+pluginFolderMac: bin
+
+# This is a universal "always running" plugin: it has no actions to bind, so the
+# device family list is irrelevant for haptic delivery (the MX Master 4 receives
+# haptics independently of which control surface is connected). LoupedeckCtFamily
+# is left in so the plugin shows up in Logi Options+ regardless of attached gear.
+supportedDevices:
+    - LoupedeckCtFamily
+
+pluginCapabilities:
+    # Required for PluginEvents.RaiseEvent to actually drive haptic feedback —
+    # the service uses this flag to pick up events/extra/eventMapping.yaml.
+    - HasHapticMapping
+
+minimumLoupedeckVersion: 6.0
+
+
+# ==================================================================================================
+# LOUPEDECK MARKETPLACE SETTINGS
+# ==================================================================================================
+
+license: MIT
+licenseUrl: https://opensource.org/licenses/MIT

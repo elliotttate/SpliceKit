@@ -1,0 +1,31 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.8.34408.163
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FCPHapticsPlugin", "src\FCPHapticsPlugin.csproj", "{AC3A2129-6338-49E5-AA95-136C54DF7DA1}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{BD08438B-1C4A-4FFA-A856-D5285D570BB8}"
+	ProjectSection(SolutionItems) = preProject
+		.vscode\launch.json = .vscode\launch.json
+		.vscode\tasks.json = .vscode\tasks.json
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{AC3A2129-6338-49E5-AA95-136C54DF7DA1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC3A2129-6338-49E5-AA95-136C54DF7DA1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC3A2129-6338-49E5-AA95-136C54DF7DA1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC3A2129-6338-49E5-AA95-136C54DF7DA1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {6EDD4FA7-0E35-42E0-A514-22FAC4E9330D}
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,31 @@
+displayName: Final Cut Pro Haptics
+description: Tactile feedback events forwarded from Final Cut Pro via SpliceKit.
+
+events:
+    - name: viewer_snap
+      displayName: Viewer Snap
+      description: Viewer canvas snap line crossed (transform/crop/title handle).
+
+    - name: title_drop_snap
+      displayName: Title Drop Snap
+      description: Title drag-into-timeline highlight snapped to a new alignment target.
+
+    - name: trim_limit
+      displayName: Trim Limit
+      description: Trim or roll edge first hits a constraint (out of media handles).
+
+    - name: jkl_pressure
+      displayName: J/K/L Pressure Step
+      description: Force Touch transport button stepped to a new playback rate bucket.
+
+    - name: clip_snap
+      displayName: Clip Snap
+      description: A clip dragged on the timeline snapped to an edit point, marker, or other target.
+
+    - name: playhead_snap
+      displayName: Playhead Snap
+      description: The playhead or skim playhead snapped to a clip edge, marker, or range edge.
+
+    - name: unknown
+      displayName: Unknown FCP Haptic
+      description: FCP fired a haptic from a call site SpliceKit could not classify.
