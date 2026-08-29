@@ -38,6 +38,7 @@ SpliceKitMixerPanel.m
 SpliceKitSidebarCoalesce.m
 SpliceKitTimelineInteractionSuspend.m
 SpliceKitTimelinePlayheadOverlay.m
+SpliceKitUprezzer.m
 SpliceKitTimelinePerfMode.m
 SpliceKitURLImport.m
 SpliceKitLiveCam.m
