@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "splicekit": {
-      "command": "/Users/briantate/.venvs/splicekit-mcp/bin/python",
-      "args": ["/Users/briantate/Documents/GitHub/SpliceKit/mcp/server.py"]
+      "command": "/Users/sunguru/.venvs/splicekit-mcp/bin/python",
+      "args": ["/Users/sunguru/SpliceKit/mcp/server.py"]
     }
   }
 }
