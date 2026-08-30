@@ -270,13 +270,22 @@ class PatcherModel: ObservableObject {
 
     private func deployTools(to toolsDir: String,
                              silenceBin: String,
-                             parakeetBin: String) async {
+                             parakeetBin: String,
+                             whisperBin: String) async {
         shell("mkdir -p \(shellQuote(toolsDir))")
         if FileManager.default.fileExists(atPath: silenceBin) {
             shell("cp \(shellQuote(silenceBin)) \(shellQuote(toolsDir + "/silence-detector"))")
         }
         if FileManager.default.fileExists(atPath: parakeetBin) {
             shell("cp \(shellQuote(parakeetBin)) \(shellQuote(toolsDir + "/parakeet-transcriber"))")
+        }
+        if FileManager.default.fileExists(atPath: whisperBin) {
+            shell("cp \(shellQuote(whisperBin)) \(shellQuote(toolsDir + "/whisper-transcriber"))")
+        } else {
+            // Loud warning instead of silently skipping: a missing whisper-transcriber
+            // leaves the social-captions Whisper engines reporting "not found" at runtime
+            // even though the patch otherwise "succeeds".
+            await logAsync("WARNING: whisper-transcriber not staged; Whisper caption engines will be unavailable. Re-download the patcher if this persists.")
         }
 
         for toolName in ["yt-dlp", "ffmpeg"] {
@@ -889,6 +898,12 @@ class PatcherModel: ObservableObject {
             shell("cp '\(bundledParakeet)' '\(parakeetBin)'")
         }
 
+        let whisperBin = buildDir + "/whisper-transcriber"
+        let bundledWhisper = (Bundle.main.resourcePath ?? "") + "/tools/whisper-transcriber"
+        if FileManager.default.fileExists(atPath: bundledWhisper) {
+            shell("cp '\(bundledWhisper)' '\(whisperBin)'")
+        }
+
         await completeStepAsync(.buildDylib)
 
         // Step 4: Create macOS framework bundle (Versions/A + symlinks)
@@ -960,7 +975,7 @@ class PatcherModel: ObservableObject {
 
         // Deploy tools
         let toolsDir = NSHomeDirectory() + "/Applications/SpliceKit/tools"
-        await deployTools(to: toolsDir, silenceBin: silenceBin, parakeetBin: parakeetBin)
+        await deployTools(to: toolsDir, silenceBin: silenceBin, parakeetBin: parakeetBin, whisperBin: whisperBin)
 
         await logAsync("Framework installed")
         await completeStepAsync(.installFramework)
@@ -1167,6 +1182,12 @@ class PatcherModel: ObservableObject {
         if FileManager.default.fileExists(atPath: bundledParakeet) {
             shell("cp '\(bundledParakeet)' '\(parakeetBin)'")
         }
+
+        let whisperBin = buildDir + "/whisper-transcriber"
+        let bundledWhisper = (Bundle.main.resourcePath ?? "") + "/tools/whisper-transcriber"
+        if FileManager.default.fileExists(atPath: bundledWhisper) {
+            shell("cp '\(bundledWhisper)' '\(whisperBin)'")
+        }
         await completeStepAsync(.buildDylib)
 
         // Install framework (overwrite existing binary)
@@ -1230,7 +1251,7 @@ class PatcherModel: ObservableObject {
 
         // Deploy tools
         let toolsDir = NSHomeDirectory() + "/Applications/SpliceKit/tools"
-        await deployTools(to: toolsDir, silenceBin: silenceBin, parakeetBin: parakeetBin)
+        await deployTools(to: toolsDir, silenceBin: silenceBin, parakeetBin: parakeetBin, whisperBin: whisperBin)
 
         await logAsync("Framework updated")
         await completeStepAsync(.installFramework)
