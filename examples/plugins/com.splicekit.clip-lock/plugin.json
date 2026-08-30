@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.clip-lock",
+  "name": "ClipLock",
+  "version": "1.0.0",
+  "description": "Locks a clip, compound clip, or connected clip to prevent it from being moved, trimmed, deleted, cut, or having effects dropped onto it. Right-click a clip or press ⌥L to toggle. Lock state persists per-clip in the library (survives restarts and re-opening the project). Survives SpliceKit patcher updates.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": ["clips.lock", "clips.unlock", "clips.toggleLock", "clips.isLocked", "clips.listLocked", "clips.unlockAll"],
+  "dependencies": []
+}

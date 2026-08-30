@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.close-other-libraries",
+  "name": "Close Other Libraries",
+  "version": "1.0.0",
+  "description": "Adds a 'Close Other Libraries' item to the File menu (⇧W) that closes every open library except the active one. Survives SpliceKit patcher updates.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

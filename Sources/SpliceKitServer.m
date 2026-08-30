@@ -18,7 +18,6 @@
 #import "SpliceKitTranscriptPanel.h"
 #import "SpliceKitCaptionPanel.h"
 #import "SpliceKitCommandPalette.h"
-#import "SpliceKitDebugUI.h"
 #import "SpliceKitLua.h"
 #import "SpliceKitURLImport.h"
 #import "SpliceKitBRAWExports.h"
@@ -211,6 +210,7 @@ typedef struct { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch
 typedef struct { SpliceKit_CMTime start; SpliceKit_CMTime duration; } SpliceKit_CMTimeRange;
 
 static SpliceKit_CMTimeRange SpliceKit_clipRangeForItem(id item);
+static BOOL SpliceKit_seekAndMark(id timeline, SpliceKit_CMTime time, NSString *actionSelector);
 static NSDictionary *SpliceKit_prepareBrowserClipSourceForInsertion(id sourceBrowserClip,
                                                                     SpliceKit_CMTimeRange clipRange,
                                                                     BOOL preferAudio);
@@ -3046,6 +3046,127 @@ NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
         return allResult ?: @{@"error": @"Failed to add transitions to all clips"};
     }
 
+    // === Select Forward / Backward from Playhead ===
+    // selectForward: select every primary-storyline item whose start time is >= playhead.
+    // selectBackward: select every primary-storyline item whose end time is <= playhead.
+    // Items that span the playhead are excluded from both — the behaviour is intentionally
+    // conservative so that subsequent ripple-delete or copy operations are predictable.
+    if ([action isEqualToString:@"selectForward"] || [action isEqualToString:@"selectBackward"]) {
+        BOOL wantForward = [action isEqualToString:@"selectForward"];
+        __block NSDictionary *sfResult = nil;
+        SpliceKit_executeOnMainThread(^{
+            @try {
+                id timeline = SpliceKit_getActiveTimelineModule();
+                if (!timeline) {
+                    sfResult = @{@"error": @"No active timeline module — is a project open?"};
+                    return;
+                }
+
+                id sequence = nil;
+                if ([timeline respondsToSelector:@selector(sequence)])
+                    sequence = ((id (*)(id, SEL))objc_msgSend)(timeline, @selector(sequence));
+                if (!sequence) {
+                    sfResult = @{@"error": @"No sequence in timeline."};
+                    return;
+                }
+
+                // Current playhead position in seconds
+                SpliceKit_CMTime phTime = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
+                    timeline, @selector(playheadTime));
+                double playheadSec = (phTime.timescale > 0)
+                    ? (double)phTime.value / phTime.timescale : 0.0;
+
+                // Primary spine: sequence → primaryObject → containedItems
+                id primaryObj = nil;
+                if ([sequence respondsToSelector:@selector(primaryObject)])
+                    primaryObj = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(primaryObject));
+
+                id itemsSource = nil;
+                if (primaryObj && [primaryObj respondsToSelector:@selector(containedItems)])
+                    itemsSource = ((id (*)(id, SEL))objc_msgSend)(primaryObj, @selector(containedItems));
+                if (!itemsSource && [sequence respondsToSelector:@selector(containedItems)])
+                    itemsSource = ((id (*)(id, SEL))objc_msgSend)(sequence, @selector(containedItems));
+
+                if (![itemsSource isKindOfClass:[NSArray class]] ||
+                    [(NSArray *)itemsSource count] == 0) {
+                    sfResult = @{@"error": @"Timeline is empty."};
+                    return;
+                }
+
+                NSArray *allItems = (NSArray *)itemsSource;
+
+                SEL erSel = NSSelectorFromString(@"effectiveRangeOfObject:");
+                if (!primaryObj || ![primaryObj respondsToSelector:erSel]) {
+                    sfResult = @{@"error": @"Timeline model does not support positional queries."};
+                    return;
+                }
+
+                // 1 ms epsilon absorbs floating-point imprecision at edit points
+                const double kEps = 0.001;
+                NSMutableArray *toSelect = [NSMutableArray array];
+
+                for (id item in allItems) {
+                    @try {
+                        SpliceKit_CMTimeRange range = ((SpliceKit_CMTimeRange (*)(id, SEL, id))STRET_MSG)(
+                            primaryObj, erSel, item);
+                        double startSec = (range.start.timescale > 0)
+                            ? (double)range.start.value / range.start.timescale : 0.0;
+                        double durSec = (range.duration.timescale > 0)
+                            ? (double)range.duration.value / range.duration.timescale : 0.0;
+                        double endSec = startSec + durSec;
+
+                        BOOL include = wantForward
+                            ? (startSec >= playheadSec - kEps)   // clip starts at or after playhead
+                            : (endSec   <= playheadSec + kEps);  // clip ends at or before playhead
+                        if (include)
+                            [toSelect addObject:item];
+                    } @catch (NSException *) {}
+                }
+
+                if (toSelect.count == 0) {
+                    sfResult = @{
+                        @"status":           @"ok",
+                        @"selected":         @0,
+                        @"action":           action,
+                        @"playhead_seconds": @(playheadSec),
+                        @"message":          [NSString stringWithFormat:
+                            @"No clips found %@ the playhead (%.3f s).",
+                            wantForward ? @"forward from" : @"backward from", playheadSec]
+                    };
+                    return;
+                }
+
+                SEL setSelSel = NSSelectorFromString(@"setSelectedItems:");
+                if (![timeline respondsToSelector:setSelSel])
+                    setSelSel = NSSelectorFromString(@"_setSelectedItems:");
+                if (![timeline respondsToSelector:setSelSel]) {
+                    sfResult = @{@"error": @"Timeline does not support setSelectedItems:"};
+                    return;
+                }
+                ((void (*)(id, SEL, id))objc_msgSend)(timeline, setSelSel, toSelect);
+
+                SpliceKit_log(@"[Timeline] %@ — selected %lu of %lu items at playhead %.3f s",
+                              action, (unsigned long)toSelect.count,
+                              (unsigned long)allItems.count, playheadSec);
+
+                sfResult = @{
+                    @"status":           @"ok",
+                    @"action":           action,
+                    @"selected":         @(toSelect.count),
+                    @"total":            @(allItems.count),
+                    @"playhead_seconds": @(playheadSec),
+                    @"message":          [NSString stringWithFormat:
+                        @"Selected %lu of %lu clip(s) %@ the playhead (%.3f s).",
+                        (unsigned long)toSelect.count, (unsigned long)allItems.count,
+                        wantForward ? @"forward from" : @"backward from", playheadSec]
+                };
+            } @catch (NSException *e) {
+                sfResult = @{@"error": [NSString stringWithFormat:@"Exception: %@", e.reason]};
+            }
+        });
+        return sfResult ?: @{@"error": @"selectForward/selectBackward failed"};
+    }
+
     if ([action isEqualToString:@"removeAllKeyframesFromClip"]) {
         __block NSDictionary *clearResult = nil;
         SpliceKit_executeOnMainThread(^{
@@ -3236,6 +3357,252 @@ NSDictionary *SpliceKit_handleTimelineAction(NSDictionary *params) {
             }
         });
         return muteResult ?: @{@"error": @"Failed to toggle audio mute"};
+    }
+
+    // === Paste Overwrite ===
+    // Pastes clipboard content at the playhead, overwriting (not inserting) what's there.
+    //
+    // FCP's magnetic timeline only supports ripple-insert paste. To get overwrite behavior:
+    //  1. Ensure native clipboard data (converts FCPXML→native if needed)
+    //  2. Probe paste to measure clipboard duration (paste:, read delta, undo)
+    //  3. Ripple-delete the range [playhead, playhead+D] to clear the destination
+    //  4. Paste again (now inserts into the cleared position)
+    //
+    // Net effect: clipboard content replaces [P, P+D]; timeline duration unchanged.
+    if ([action isEqualToString:@"pasteOverwrite"]) {
+        __block NSDictionary *ovResult = nil;
+        SpliceKit_executeOnMainThread(^{
+            __block BOOL screenFrozen = NO;
+            @try {
+                id timeline = SpliceKit_getActiveTimelineModule();
+                if (!timeline) {
+                    ovResult = @{@"error": @"No active timeline module. Is a project open?"};
+                    return;
+                }
+                // Ensure native clipboard data exists (convert FCPXML→native if needed)
+                Class ffpbClass = objc_getClass("FFPasteboard");
+                BOOL hasNative = NO;
+                if (ffpbClass) {
+                    id ffpb = ((id (*)(id, SEL, id))objc_msgSend)(
+                        ((id (*)(id, SEL))objc_msgSend)((id)ffpbClass, @selector(alloc)),
+                        NSSelectorFromString(@"initWithName:"), NSPasteboardNameGeneral);
+                    hasNative = ((BOOL (*)(id, SEL, BOOL))objc_msgSend)(ffpb,
+                        NSSelectorFromString(@"hasEdits:"), NO);
+                }
+                if (!hasNative) hasNative = SpliceKit_convertFCPXMLToNativeClipboard();
+                if (!hasNative) {
+                    ovResult = @{@"error": @"Nothing to paste — clipboard is empty"};
+                    return;
+                }
+
+                // Save playhead position (overwrite start point)
+                SpliceKit_CMTime phTime = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
+                    timeline, @selector(playheadTime));
+                double phSec = (phTime.timescale > 0) ? (double)phTime.value / phTime.timescale : 0;
+
+                // Freeze screen to hide intermediate probe steps
+                NSDisableScreenUpdates();
+                screenFrozen = YES;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC),
+                    dispatch_get_main_queue(), ^{
+                    if (screenFrozen) { screenFrozen = NO; NSEnableScreenUpdates(); }
+                });
+
+                // Step 1 — Determine clipboard duration from FCPXML on the pasteboard.
+                // Reading the FCPXML avoids a probe paste entirely so there are no
+                // visible intermediate steps on screen.
+                double clipDur = 0;
+                {
+                    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+                    Class IXType = objc_getClass("IXXMLPasteboardType");
+                    if (IXType) {
+                        NSString *currentType = ((id (*)(id, SEL))objc_msgSend)(
+                            (id)IXType, NSSelectorFromString(@"current"));
+                        NSData *xmlData = currentType ? [pb dataForType:currentType] : nil;
+                        if (!xmlData) {
+                            NSString *genericType = ((id (*)(id, SEL))objc_msgSend)(
+                                (id)IXType, NSSelectorFromString(@"generic"));
+                            if (genericType) xmlData = [pb dataForType:genericType];
+                        }
+                        if (xmlData) {
+                            NSString *fcpxml = [[NSString alloc] initWithData:xmlData
+                                                                     encoding:NSUTF8StringEncoding];
+                            // Parse duration="X/Ys" from the first <sequence> element
+                            NSRegularExpression *re = [NSRegularExpression
+                                regularExpressionWithPattern:@"<sequence[^>]+\\bduration=\"([^\"]+)\""
+                                                    options:0 error:nil];
+                            NSTextCheckingResult *m = [re firstMatchInString:fcpxml options:0
+                                range:NSMakeRange(0, fcpxml.length)];
+                            if (m && [m numberOfRanges] > 1) {
+                                NSString *d = [fcpxml substringWithRange:[m rangeAtIndex:1]];
+                                // FCP rational time: "numerator/denominators" or "Xs"
+                                if ([d hasSuffix:@"s"]) d = [d substringToIndex:d.length - 1];
+                                NSRange slash = [d rangeOfString:@"/"];
+                                if (slash.location != NSNotFound) {
+                                    double num = [[d substringToIndex:slash.location] doubleValue];
+                                    double den = [[d substringFromIndex:slash.location + 1] doubleValue];
+                                    if (den > 0) clipDur = num / den;
+                                } else {
+                                    clipDur = [d doubleValue];
+                                }
+                            }
+                        }
+                    }
+                }
+                SpliceKit_log(@"[PasteOverwrite] Clipboard duration from FCPXML: %.4fs", clipDur);
+
+                // Fallback: probe paste to measure duration if FCPXML parse failed.
+                // This is a last resort and will cause a brief flash.
+                if (clipDur < 0.001) {
+                    SpliceKit_log(@"[PasteOverwrite] FCPXML duration unavailable — using probe paste");
+                    ((void (*)(id, SEL, id))objc_msgSend)(timeline, NSSelectorFromString(@"paste:"), nil);
+                    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.25]];
+                    SpliceKit_CMTime phAfter = ((SpliceKit_CMTime (*)(id, SEL))STRET_MSG)(
+                        timeline, @selector(playheadTime));
+                    double phAfterSec = (phAfter.timescale > 0) ? (double)phAfter.value / phAfter.timescale : 0;
+                    clipDur = phAfterSec - phSec;
+
+                    if (clipDur < 0.001) {
+                        [[NSApplication sharedApplication] sendAction:@selector(undo:) to:nil from:nil];
+                        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+                        screenFrozen = NO;
+                        NSEnableScreenUpdates();
+                        ovResult = @{@"error": @"Cannot determine clipboard duration — clipboard may be empty"};
+                        return;
+                    }
+                    // Undo the probe paste via responder chain
+                    [[NSApplication sharedApplication] sendAction:@selector(undo:) to:nil from:nil];
+                    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+                }
+
+                // Steps 2–4 — Paste → Blade → Select real clips → deleteSelectionOnly:
+                //
+                // DESIGN: Every prior approach tried to operate on the gap clip left by a
+                // lift (step 2). Gap clips resist selection by selectClipAtPlayhead:, and
+                // _deleteCore:replaceWithGap:NO acts on the current clip SELECTION (the
+                // freshly pasted clips), not the range. Instead, we skip the lift entirely:
+                //
+                //  Step 2: paste: at T → clipboard inserts at [T, T+D];
+                //          original content shifts right to [T+D, ...]
+                //  Step 3: blade: at T+2D → creates a clean cut so [T+D, T+2D] is a
+                //          discrete, selectable segment of REAL (non-gap) original clips
+                //  Step 4: _selectRange:{T+D, D} extendRange:NO selectedItem:nil
+                //          → selects all clips in [T+D, T+2D] (even if spanning multiple)
+                //  Step 5: clearRange:, deleteSelectionOnly: → ripple-deletes only the
+                //          selected clips, closing the [T+D, T+2D] hole
+                //
+                // Net: clipboard at [T, T+D], original content from T+2D onward shifts
+                // left by D, timeline duration unchanged. No gap clips at any point.
+
+                int32_t ts = (phTime.timescale > 0) ? phTime.timescale : 600;
+                SpliceKit_CMTime endTime;          // T + D
+                endTime.value     = (int64_t)((phSec + clipDur) * ts + 0.5);
+                endTime.timescale = ts;
+                endTime.flags     = 1;
+                endTime.epoch     = 0;
+                SpliceKit_CMTime gapEndTime;       // T + 2D
+                gapEndTime.value     = (int64_t)((phSec + 2.0 * clipDur) * ts + 0.5);
+                gapEndTime.timescale = ts;
+                gapEndTime.flags     = 1;
+                gapEndTime.epoch     = 0;
+                SEL setPhSel0 = NSSelectorFromString(@"setPlayheadTime:");
+
+                // Step 2: Paste at T (ripple-inserts clipboard; original content shifts right).
+                id tmPaste = SpliceKit_getActiveTimelineModule() ?: timeline;
+                if ([tmPaste respondsToSelector:setPhSel0])
+                    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(tmPaste, setPhSel0, phTime);
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"selectToolArrow:") to:nil from:nil];
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.03]];
+                ((void (*)(id, SEL, id))objc_msgSend)(tmPaste, NSSelectorFromString(@"paste:"), nil);
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.25]];
+
+                // Step 3: Blade at T+2D — isolates exactly D seconds of original content
+                // in [T+D, T+2D].  The edit point at T+D already exists (paste boundary).
+                id tmBlade = SpliceKit_getActiveTimelineModule() ?: timeline;
+                if ([tmBlade respondsToSelector:setPhSel0])
+                    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(tmBlade, setPhSel0, gapEndTime);
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                ((void (*)(id, SEL, id))objc_msgSend)(tmBlade, NSSelectorFromString(@"blade:"), nil);
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.15]];
+
+                // Step 4: Select all clips in [T+D, T+2D] via _selectRange:extendRange:selectedItem:.
+                // Uses NSInvocation because the CMTimeRange struct argument (48 bytes) is too
+                // large to pass cleanly via objc_msgSend on all ABIs.
+                typedef struct { SpliceKit_CMTime start; SpliceKit_CMTime duration; } SK_CMTimeRange;
+                SpliceKit_CMTime durTime;          // duration = D
+                durTime.value     = endTime.value - phTime.value;
+                durTime.timescale = ts;
+                durTime.flags     = 1;
+                durTime.epoch     = 0;
+                SK_CMTimeRange selRange = { endTime, durTime };
+
+                SEL selectRangeSel = NSSelectorFromString(@"_selectRange:extendRange:selectedItem:");
+                id tmSel = SpliceKit_getActiveTimelineModule() ?: timeline;
+                BOOL selectedWithRange = NO;
+                if ([tmSel respondsToSelector:selectRangeSel]) {
+                    NSMethodSignature *sig = [tmSel methodSignatureForSelector:selectRangeSel];
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    inv.target   = tmSel;
+                    inv.selector = selectRangeSel;
+                    [inv setArgument:&selRange atIndex:2];   // CMTimeRange at arg 2
+                    BOOL extendNo = NO;
+                    [inv setArgument:&extendNo atIndex:3];   // extendRange:NO
+                    id nilItem = nil;
+                    [inv setArgument:&nilItem atIndex:4];    // selectedItem:nil
+                    [inv invoke];
+                    selectedWithRange = YES;
+                    SpliceKit_log(@"[PasteOverwrite] _selectRange:%.3f–%.3fs OK",
+                                  phSec + clipDur, phSec + 2.0 * clipDur);
+                } else {
+                    // Fallback: works when [T+D, T+2D] contains exactly one clip
+                    SpliceKit_log(@"[PasteOverwrite] _selectRange: unavailable, using selectClipAtPlayhead:");
+                    SpliceKit_CMTime midTime;
+                    midTime.value     = endTime.value + 1;
+                    midTime.timescale = ts; midTime.flags = 1; midTime.epoch = 0;
+                    if ([tmSel respondsToSelector:setPhSel0])
+                        ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(tmSel, setPhSel0, midTime);
+                    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                    [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"selectClipAtPlayhead:") to:nil from:nil];
+                    selectedWithRange = YES;
+                }
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+
+                // Step 5: clearRange: so delete: acts on the selection, not a range lift.
+                //         deleteSelectionOnly: ripple-deletes only the selected clips.
+                [[NSApplication sharedApplication] sendAction:NSSelectorFromString(@"clearRange:") to:nil from:nil];
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+
+                id tmDel = SpliceKit_getActiveTimelineModule() ?: timeline;
+                SEL delSelOnly = NSSelectorFromString(@"deleteSelectionOnly:");
+                if ([tmDel respondsToSelector:delSelOnly]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(tmDel, delSelOnly, nil);
+                } else {
+                    ((void (*)(id, SEL, id))objc_msgSend)(tmDel, NSSelectorFromString(@"delete:"), nil);
+                }
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.25]];
+
+                // Restore playhead to T.
+                id tm = SpliceKit_getActiveTimelineModule() ?: timeline;
+                if ([tm respondsToSelector:setPhSel0])
+                    ((void (*)(id, SEL, SpliceKit_CMTime))objc_msgSend)(tm, setPhSel0, phTime);
+
+                screenFrozen = NO;
+                NSEnableScreenUpdates();
+
+                ovResult = @{
+                    @"action":            @"pasteOverwrite",
+                    @"status":            @"ok",
+                    @"clipboardDuration": @(clipDur),
+                    @"overwriteStart":    @(phSec),
+                    @"overwriteEnd":      @(phSec + clipDur)
+                };
+            } @catch (NSException *e) {
+                if (screenFrozen) { screenFrozen = NO; NSEnableScreenUpdates(); }
+                ovResult = @{@"error": [NSString stringWithFormat:@"Exception in pasteOverwrite: %@", e.reason]};
+            }
+        });
+        return ovResult ?: @{@"error": @"pasteOverwrite timed out"};
     }
 
     NSString *selector = actionMap[action];
@@ -9312,6 +9679,16 @@ static NSDictionary *SpliceKit_handleBackgroundRenderControl(NSDictionary *param
     return result ?: @{@"error": @"Unable to control background render state"};
 }
 
+// Forward declarations for FCP-default preference functions defined later in this file
+NSString *SpliceKit_getTransitionWarningDefault(void);
+void      SpliceKit_setTransitionWarningDefault(NSString *value);
+NSInteger SpliceKit_getDefaultClipHeight(void);
+void      SpliceKit_setDefaultClipHeight(NSInteger pixelHeight);
+NSString *SpliceKit_getDefaultAudioChannelConfig(void);
+void      SpliceKit_setDefaultAudioChannelConfig(NSString *value);
+NSString *SpliceKit_getDefaultAudioPanMode(void);
+void      SpliceKit_setDefaultAudioPanMode(NSString *value);
+
 static NSDictionary *SpliceKit_handleOptionsGet(NSDictionary *params) {
     return @{
         @"effectDragAsAdjustmentClip": @(SpliceKit_isEffectDragAsAdjustmentClipEnabled()),
@@ -9322,6 +9699,10 @@ static NSDictionary *SpliceKit_handleOptionsGet(NSDictionary *params) {
         @"lLadder": SpliceKit_getLLadder(),
         @"jLadder": SpliceKit_getJLadder(),
         @"defaultSpatialConformType": SpliceKit_getDefaultSpatialConformType(),
+        @"transitionWarningDefault": SpliceKit_getTransitionWarningDefault(),
+        @"defaultClipHeight": @(SpliceKit_getDefaultClipHeight()),
+        @"defaultAudioChannelConfig": SpliceKit_getDefaultAudioChannelConfig() ?: @"",
+        @"defaultAudioPanMode": SpliceKit_getDefaultAudioPanMode() ?: @"",
         @"aiEngine": @([SpliceKitCommandPalette sharedPalette].aiEngine),
         @"gemmaModel": [SpliceKitCommandPalette sharedPalette].gemmaModel ?: @"unsloth/gemma-4-E4B-it-UD-MLX-4bit",
         @"sidebarCoalesceLiveScroll": @(SpliceKit_isSidebarCoalesceLiveScrollEnabled()),
@@ -9447,6 +9828,44 @@ static NSDictionary *SpliceKit_handleOptionsSet(NSDictionary *params) {
         SpliceKit_setTLKOptimizedReloadEnabled([enabled boolValue]);
         return @{@"status": @"ok",
                  @"tlkOptimizedReload": @(SpliceKit_isTLKOptimizedReloadEnabled())};
+    } else if ([option isEqualToString:@"transitionWarningDefault"]) {
+        NSString *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' required (\"ask\", \"freeze_frames\", \"ripple_trim\")"};
+        value = [value lowercaseString];
+        if (!([value isEqualToString:@"ask"] ||
+              [value isEqualToString:@"freeze_frames"] ||
+              [value isEqualToString:@"ripple_trim"])) {
+            return @{@"error": @"Invalid value — must be \"ask\", \"freeze_frames\", or \"ripple_trim\""};
+        }
+        SpliceKit_setTransitionWarningDefault(value);
+        return @{@"status": @"ok", @"transitionWarningDefault": SpliceKit_getTransitionWarningDefault()};
+    } else if ([option isEqualToString:@"defaultClipHeight"]) {
+        NSNumber *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' required (0=off, 35=small, 80=medium, 153=large)"};
+        SpliceKit_setDefaultClipHeight([value integerValue]);
+        return @{@"status": @"ok", @"defaultClipHeight": @(SpliceKit_getDefaultClipHeight())};
+    } else if ([option isEqualToString:@"defaultAudioChannelConfig"]) {
+        NSString *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' required (\"\" to disable, \"stereo\", \"dual_mono\")"};
+        value = [value lowercaseString];
+        if (![value isEqualToString:@""] &&
+            ![value isEqualToString:@"stereo"] &&
+            ![value isEqualToString:@"dual_mono"]) {
+            return @{@"error": @"Invalid value — must be \"\", \"stereo\", or \"dual_mono\""};
+        }
+        SpliceKit_setDefaultAudioChannelConfig(value.length ? value : nil);
+        return @{@"status": @"ok",
+                 @"defaultAudioChannelConfig": SpliceKit_getDefaultAudioChannelConfig() ?: @""};
+    } else if ([option isEqualToString:@"defaultAudioPanMode"]) {
+        NSString *value = params[@"value"];
+        if (!value) return @{@"error": @"'value' required (\"\" to disable, \"none\", \"stereo\", \"mono\", \"surround\")"};
+        value = [value lowercaseString];
+        NSArray *valid = @[@"", @"none", @"stereo", @"mono", @"surround"];
+        if (![valid containsObject:value])
+            return @{@"error": @"Invalid value — must be \"\", \"none\", \"stereo\", \"mono\", or \"surround\""};
+        SpliceKit_setDefaultAudioPanMode(value.length ? value : nil);
+        return @{@"status": @"ok",
+                 @"defaultAudioPanMode": SpliceKit_getDefaultAudioPanMode() ?: @""};
     }
 
     return @{@"error": [NSString stringWithFormat:@"Unknown option: %@", option]};
@@ -9496,10 +9915,16 @@ static int sFreezeExtendOperationReportErrors = 0;
 static BOOL sFreezeExtendHasOperationReplay = NO;
 
 // Swizzled -[FFAnchoredSequence defaultTransitionOverlapType]
-// Original returns 1 (needs handles). We return 2 (overlap/use edge frames) when forced.
+// Original returns 1 (needs handles). We return 2 (overlap/use edge frames) when forced,
+// or when the global "freeze_frames" preference is set.
 static int SpliceKit_swizzled_defaultTransitionOverlapType(id self, SEL _cmd) {
     if (sForceOverlap) {
         SpliceKit_log(@"[FreezeExtend] defaultTransitionOverlapType -> 2 (freeze-frame overlap)");
+        return 2;
+    }
+    NSString *pref = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitTransitionWarningDefault"];
+    if ([pref isEqualToString:@"freeze_frames"]) {
         return 2;
     }
     return ((int (*)(id, SEL))sOrigDefaultOverlapType)(self, _cmd);
@@ -10537,19 +10962,22 @@ static void SpliceKit_scheduleFreezeExtendRepair(void) {
 }
 
 static int SpliceKit_effectiveTransitionOverlapType(int overlapType, NSString *source) {
-    if (!SpliceKit_shouldForceFreezeOverlap()) {
-        return overlapType;
-    }
-
-    if (overlapType != 2) {
-        SpliceKit_log(@"[FreezeExtend] Forcing transitionOverlapType -> 2");
-        if (source.length > 0) {
-            SpliceKit_log(@"%@", [NSString stringWithFormat:
-                @"[FreezeExtend] Source=%@ original transitionOverlapType=%d",
-                source, overlapType]);
+    // Per-transition force (API freeze_extend or dialog "Use Freeze Frames")
+    if (SpliceKit_shouldForceFreezeOverlap()) {
+        if (overlapType != 2) {
+            SpliceKit_log(@"[FreezeExtend] Forcing transitionOverlapType -> 2");
+            if (source.length > 0)
+                SpliceKit_log(@"[FreezeExtend] Source=%@ original=%d", source, overlapType);
         }
+        return 2;
     }
-    return 2;
+    // Global preference: always use edge frames (no dialog, no ripple trim)
+    NSString *pref = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitTransitionWarningDefault"];
+    if ([pref isEqualToString:@"freeze_frames"]) {
+        return 2;
+    }
+    return overlapType;
 }
 
 static NSModalResponse SpliceKit_swizzled_NSAlert_runModal(id self, SEL _cmd) {
@@ -10852,14 +11280,69 @@ static NSString *sFreezeExtendPendingEffectID = nil;
 static BOOL sFreezeExtendAsyncPending = NO;
 
 // Replacement for -[FFAnchoredSequence displayTransitionAvailableMediaAlertDialog:]
-// Instead of showing the "not enough extra media" dialog, cancel the current
-// transition attempt, schedule hold-frame extensions on the short clips, then
-// retry the transition on the next run-loop iteration.
+// Handles three modes set via SpliceKitTransitionWarningDefault preference:
+//   "ripple_trim"  - auto-accept without showing the dialog (FCP ripple-trims)
+//   "freeze_frames"- never reached (effectiveTransitionOverlapType already returns 2)
+//   "ask" (default)- show our custom dialog with "Use Freeze Frames" added
 static char SpliceKit_swizzled_displayTransitionAlert(id self, SEL _cmd, char *result) {
-    // Freeze-extend auto-hold is disabled pending further development.
-    // Pass through to FCP's original dialog.
+    NSString *pref = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitTransitionWarningDefault"];
+
+    // Auto-ripple: create anyway, no dialog shown
+    if ([pref isEqualToString:@"ripple_trim"] && !sFreezeExtendPendingAutoAccept) {
+        SpliceKit_log(@"[TransitionDefault] Auto-ripple trim (preference)");
+        if (result) *result = 1;
+        return 1;
+    }
+
+    // Freeze frames: effectiveTransitionOverlapType should have returned 2 already
+    // so the dialog shouldn't be reached. Fallback: set flags and accept.
+    if ([pref isEqualToString:@"freeze_frames"] && !sFreezeExtendPendingAutoAccept) {
+        SpliceKit_log(@"[TransitionDefault] Auto-freeze frames fallback");
+        sForceOverlap = YES;
+        sFreezeExtendUseFreezeFramesForCurrentAlert = YES;
+        if (result) *result = 1;
+        return 1;
+    }
+
+    // API-triggered freeze extend auto-accept: existing complex retry path
     if (!sFreezeExtendPendingAutoAccept) {
-        return ((char (*)(id, SEL, char *))sOrigDisplayTransitionAlert)(self, _cmd, result);
+        // "ask" mode: replace FCP's 2-button dialog with our 3-button version
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:@"There is not enough extra media beyond clip edges to create the transition."];
+        [alert setInformativeText:
+            @"You can create the transition anyway (ripple trim), extend the clip edges with "
+            @"freeze frames, or cancel."];
+        [alert addButtonWithTitle:@"Create Anyway"];
+        [alert addButtonWithTitle:@"Use Freeze Frames"];
+        [alert addButtonWithTitle:@"Cancel"];
+
+        NSModalResponse resp = [alert runModal];
+
+        if (resp == NSAlertThirdButtonReturn) {
+            // Cancel
+            SpliceKit_log(@"[TransitionDialog] Cancelled");
+            if (result) *result = 0;
+            return 0;
+        }
+        if (resp == NSAlertSecondButtonReturn) {
+            // Use Freeze Frames: set flags then accept; FCP will call
+            // defaultTransitionOverlapType again and get 2
+            SpliceKit_log(@"[TransitionDialog] Chose 'Use Freeze Frames'");
+            sForceOverlap = YES;
+            sFreezeExtendUseFreezeFramesForCurrentAlert = YES;
+            if (result) *result = 1;
+            // Reset after this run-loop turn so sForceOverlap doesn't persist
+            dispatch_async(dispatch_get_main_queue(), ^{
+                sForceOverlap = NO;
+                sFreezeExtendUseFreezeFramesForCurrentAlert = NO;
+            });
+            return 1;
+        }
+        // Create Anyway (ripple trim)
+        SpliceKit_log(@"[TransitionDialog] Chose 'Create Anyway'");
+        if (result) *result = 1;
+        return 1;
     }
 
     SpliceKit_log(@"[FreezeExtend] Intercepted 'not enough media' dialog");
@@ -12816,6 +13299,118 @@ void SpliceKit_installDefaultSpatialConformType(void) {
     sDefaultConformInstalled = YES;
     SpliceKit_log(@"[DefaultConform] Swizzled -[FFHeConformEffect createChannelsInFolder:] (current: %@)",
                   SpliceKit_getDefaultSpatialConformType());
+}
+
+#pragma mark - Transition Warning Default
+
+// "SpliceKitTransitionWarningDefault": "ask" (default), "freeze_frames", "ripple_trim"
+// - "ask"          : show our 3-button dialog (Create Anyway / Use Freeze Frames / Cancel)
+// - "freeze_frames": pass overlapType=2 to FCP — no dialog, uses edge frames
+// - "ripple_trim"  : auto-accept FCP's dialog with result=1 — no dialog, FCP ripple-trims
+
+NSString *SpliceKit_getTransitionWarningDefault(void) {
+    NSString *val = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitTransitionWarningDefault"];
+    if ([val isEqualToString:@"freeze_frames"] || [val isEqualToString:@"ripple_trim"])
+        return val;
+    return @"ask";
+}
+
+void SpliceKit_setTransitionWarningDefault(NSString *value) {
+    if (!value || [value isEqualToString:@"ask"]) {
+        [[NSUserDefaults standardUserDefaults]
+            removeObjectForKey:@"SpliceKitTransitionWarningDefault"];
+    } else {
+        [[NSUserDefaults standardUserDefaults]
+            setObject:value forKey:@"SpliceKitTransitionWarningDefault"];
+    }
+    SpliceKit_log(@"[TransitionDefault] Set to '%@'", value ?: @"ask");
+}
+
+#pragma mark - Default Clip Height
+
+// "SpliceKitDefaultClipHeight": 0 (no override), 35 (small), 80 (medium), 153 (large)
+// Writes to FFOrganizedTimelineClipHeight which FCP reads as the global clip height
+// preference. TLKUserDefaults is reloaded so the change takes effect immediately.
+
+NSInteger SpliceKit_getDefaultClipHeight(void) {
+    NSNumber *val = [[NSUserDefaults standardUserDefaults]
+                        objectForKey:@"SpliceKitDefaultClipHeight"];
+    return val ? [val integerValue] : 0;
+}
+
+void SpliceKit_setDefaultClipHeight(NSInteger pixelHeight) {
+    if (pixelHeight <= 0) {
+        [[NSUserDefaults standardUserDefaults]
+            removeObjectForKey:@"SpliceKitDefaultClipHeight"];
+        SpliceKit_log(@"[DefaultClipHeight] Cleared (no override)");
+        return;
+    }
+    [[NSUserDefaults standardUserDefaults]
+        setInteger:pixelHeight forKey:@"SpliceKitDefaultClipHeight"];
+    // Also write to FCP's own key so new projects pick it up
+    [[NSUserDefaults standardUserDefaults]
+        setInteger:pixelHeight forKey:@"FFOrganizedTimelineClipHeight"];
+    // Reload TLK so the change is visible immediately
+    Class tlk = NSClassFromString(@"TLKUserDefaults");
+    if (tlk) {
+        SEL load = NSSelectorFromString(@"_loadUserDefaults");
+        if ([tlk respondsToSelector:load])
+            ((void (*)(id, SEL))objc_msgSend)((id)tlk, load);
+    }
+    SpliceKit_log(@"[DefaultClipHeight] Set to %ld px", (long)pixelHeight);
+}
+
+#pragma mark - Default Audio Channel Config
+
+// "SpliceKitDefaultAudioChannelConfig": nil/empty (no override), "stereo", "dual_mono"
+// Stored as a preference; applied to new clips via the audio component source API.
+
+NSString *SpliceKit_getDefaultAudioChannelConfig(void) {
+    NSString *val = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitDefaultAudioChannelConfig"];
+    if ([val isEqualToString:@"dual_mono"] || [val isEqualToString:@"stereo"])
+        return val;
+    return @""; // no override
+}
+
+void SpliceKit_setDefaultAudioChannelConfig(NSString *value) {
+    if (!value || value.length == 0) {
+        [[NSUserDefaults standardUserDefaults]
+            removeObjectForKey:@"SpliceKitDefaultAudioChannelConfig"];
+        SpliceKit_log(@"[DefaultAudioChannel] Cleared (no override)");
+    } else {
+        [[NSUserDefaults standardUserDefaults]
+            setObject:value forKey:@"SpliceKitDefaultAudioChannelConfig"];
+        SpliceKit_log(@"[DefaultAudioChannel] Set to '%@'", value);
+    }
+}
+
+#pragma mark - Default Audio Pan Mode
+
+// "SpliceKitDefaultAudioPanMode": nil/empty (no override), "none", "stereo", "mono"
+// "stereo" adds a Stereo Left+Right panner AU; "mono" adds a Mono panner; "none" = no panner.
+// Applied to clips via FFEffectStack(Audio) addSurroundPannerEffectWithPanMode: on clip addition.
+
+NSString *SpliceKit_getDefaultAudioPanMode(void) {
+    NSString *val = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:@"SpliceKitDefaultAudioPanMode"];
+    if ([val isEqualToString:@"none"] || [val isEqualToString:@"stereo"] ||
+        [val isEqualToString:@"mono"] || [val isEqualToString:@"surround"])
+        return val;
+    return @""; // no override
+}
+
+void SpliceKit_setDefaultAudioPanMode(NSString *value) {
+    if (!value || value.length == 0) {
+        [[NSUserDefaults standardUserDefaults]
+            removeObjectForKey:@"SpliceKitDefaultAudioPanMode"];
+        SpliceKit_log(@"[DefaultAudioPanMode] Cleared (no override)");
+    } else {
+        [[NSUserDefaults standardUserDefaults]
+            setObject:value forKey:@"SpliceKitDefaultAudioPanMode"];
+        SpliceKit_log(@"[DefaultAudioPanMode] Set to '%@'", value);
+    }
 }
 
 #pragma mark - Transition Handlers
@@ -27102,47 +27697,36 @@ static NSDictionary *SpliceKit_handleDebugObserveNotification(NSDictionary *para
     return @{@"status": @"ok", @"observing": name};
 }
 
-#pragma mark - Debug: Hidden UI (Settings Panel + Menu Bar)
+#pragma mark - Debug: Hidden UI (Settings Panel)
 
-// debug.showSettingsPanel — rebuilds FCP's missing Debug preferences pane
-// and injects it into the Settings window. Implementation lives in
-// SpliceKitDebugUI.m (ObjC-heavy view construction + LKPreferences ivar patching).
+// debug.showSettingsPanel — reports/controls the "SpliceKit" and "Debug" tabs
+// in FCP's Settings window. Installation itself is owned by the
+// com.splicekit.preferences-pane plugin (~/Library/Application Support/SpliceKit/plugins),
+// which installs both tabs automatically at every launch — this handler only
+// introspects/mutates LKPreferences' live state directly.
 static NSDictionary *SpliceKit_handleDebugShowSettingsPanel(NSDictionary *params) {
-    NSString *act = params[@"action"] ?: @"install";
-    if ([act isEqualToString:@"status"]) {
-        return @{@"installed": @(SpliceKit_isDebugSettingsPanelInstalled())};
-    }
-    if ([act isEqualToString:@"uninstall"] || [act isEqualToString:@"remove"]) {
-        BOOL ok = SpliceKit_uninstallDebugSettingsPanel();
-        return @{@"status": ok ? @"ok" : @"error",
-                 @"installed": @(SpliceKit_isDebugSettingsPanelInstalled())};
-    }
-    BOOL ok = SpliceKit_installDebugSettingsPanel();
-    if (!ok) {
-        return @{@"error": @"Failed to install Debug settings panel — see SpliceKit log"};
-    }
-    return @{@"status": @"ok",
-             @"installed": @(SpliceKit_isDebugSettingsPanelInstalled()),
-             @"note": @"Open Final Cut Pro → Settings to see the Debug tab."};
-}
+    NSString *act = params[@"action"] ?: @"status";
 
-// debug.installMenuBar — adds the "Debug" top-level menu back to the menu bar.
-static NSDictionary *SpliceKit_handleDebugInstallMenuBar(NSDictionary *params) {
-    NSString *act = params[@"action"] ?: @"install";
-    if ([act isEqualToString:@"status"]) {
-        return @{@"installed": @(SpliceKit_isDebugMenuBarInstalled())};
-    }
+    Class prefsClass = objc_getClass("LKPreferences");
+    id shared = (prefsClass && [prefsClass respondsToSelector:@selector(sharedPreferences)])
+        ? ((id (*)(id, SEL))objc_msgSend)((id)prefsClass, @selector(sharedPreferences)) : nil;
+    Ivar titlesIvar = shared ? class_getInstanceVariable(object_getClass(shared), "_preferenceTitles") : NULL;
+    NSArray *titles = titlesIvar ? object_getIvar(shared, titlesIvar) : nil;
+    BOOL installed = [titles isKindOfClass:[NSArray class]] &&
+                      [titles containsObject:@"SpliceKit"] && [titles containsObject:@"Debug"];
+
     if ([act isEqualToString:@"uninstall"] || [act isEqualToString:@"remove"]) {
-        BOOL ok = SpliceKit_uninstallDebugMenuBar();
-        return @{@"status": ok ? @"ok" : @"error",
-                 @"installed": @(SpliceKit_isDebugMenuBarInstalled())};
-    }
-    BOOL ok = SpliceKit_installDebugMenuBar();
-    if (!ok) {
-        return @{@"error": @"Failed to install Debug menu bar — see SpliceKit log"};
+        return @{@"status": @"error",
+                 @"installed": @(installed),
+                 @"note": @"Uninstalling now happens by disabling the com.splicekit.preferences-pane "
+                          @"plugin (set SpliceKitPlugin.com.splicekit.preferences-pane.disabled) and restarting FCP."};
     }
     return @{@"status": @"ok",
-             @"installed": @(SpliceKit_isDebugMenuBarInstalled())};
+             @"installed": @(installed),
+             @"note": installed
+                 ? @"Open Final Cut Pro → Settings to see the SpliceKit and Debug tabs."
+                 : @"Not installed — check that the com.splicekit.preferences-pane plugin loaded "
+                   @"(see ~/Library/Logs/SpliceKit/splicekit.log)."};
 }
 
 #pragma mark - Debug: Breakpoints
@@ -28179,8 +28763,6 @@ NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         result = SpliceKit_handleDebugObserveNotification(params);
     } else if ([method isEqualToString:@"debug.showSettingsPanel"]) {
         result = SpliceKit_handleDebugShowSettingsPanel(params);
-    } else if ([method isEqualToString:@"debug.installMenuBar"]) {
-        result = SpliceKit_handleDebugInstallMenuBar(params);
     } else if ([method isEqualToString:@"debug.breakpoint"]) {
         result = SpliceKit_handleDebugBreakpoint(params);
     }

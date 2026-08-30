@@ -26,8 +26,8 @@ SpliceKitSentry.m
 SpliceKitTranscriptPanel.m
 SpliceKitTranscriptDiagnostics.m
 SpliceKitCaptionPanel.m
+SpliceKitUndoHistoryPanel.m
 SpliceKitCommandPalette.m
-SpliceKitDebugUI.m
 SpliceKitStructureBlocks.m
 SpliceKitSectionsBar.m
 SpliceKitTimelineOverview.m
@@ -39,6 +39,7 @@ SpliceKitSidebarCoalesce.m
 SpliceKitTimelineInteractionSuspend.m
 SpliceKitTimelinePlayheadOverlay.m
 SpliceKitTimelinePerfMode.m
+SpliceKitWaveformExpand.m
 SpliceKitURLImport.m
 SpliceKitLiveCam.m
 SpliceKitVisionPro.m

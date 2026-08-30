@@ -1,6 +1,9 @@
 //
-//  SpliceKitDebugUI.m
-//  Rebuilds FCP's hidden Debug preferences pane + Debug menu bar programmatically.
+//  DebugUI.m
+//  com.splicekit.preferences-pane
+//
+//  Rebuilds FCP's hidden Debug preferences pane programmatically.
+//  Survives SpliceKit patcher updates — the entire feature lives here.
 //
 //  The Debug preferences module (PEAppDebugPreferencesModule) is still compiled
 //  into FCP, but Apple strips PEAppDebugPreferencesModule.nib from the bundle
@@ -14,19 +17,26 @@
 //    3. Mutating LKPreferences' internal arrays/dictionary directly to add the
 //       Debug pane to _preferenceTitles, _preferenceModules, and
 //       _masterPreferenceViews.
-//    4. Calling _setupToolbar so the Settings-window toolbar picks up the new
-//       tab without a relaunch.
 //
-//  The Debug menu bar is simpler: build an NSMenu tree, wire each item's
-//  target/action to our controller, and insert the top-level item before Help.
+//  (The Debug top-level menu bar reconstruction that used to live alongside
+//  this — SpliceKit_installDebugMenuBar — is intentionally not ported here:
+//  it was already disabled at every launch in the core dylib and unused.)
 //
 
-#import "SpliceKitDebugUI.h"
-#import "SpliceKit.h"
-#import "SpliceKitLogPanel.h"
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+
+#import "SKPluginShared.h"
+
+// Minimal forward declaration — the real SpliceKitLogPanel class lives in the
+// core dylib. Only the two methods used below need to be declared for the
+// compiler; resolution happens at load time via -undefined dynamic_lookup.
+@interface SpliceKitLogPanel : NSObject
++ (instancetype)sharedPanel;
+- (void)showPanel;
+- (void)hidePanel;
+@end
 
 #pragma mark - Shared Helpers
 
@@ -73,8 +83,8 @@ static NSArray<NSString *> *SKDebug_renderFlags(void) {
 }
 
 static NSArray<NSString *> *SKDebug_fcpBehaviorFlags(void) {
+    // FFDontCoalesceGaps lives in the SpliceKit preferences pane — omit here.
     return @[
-        @"FFDontCoalesceGaps",
         @"FFDisableSnapping",
         @"FFDisableSkimming",
     ];
@@ -307,7 +317,7 @@ static NSInteger SKDebug_vamlMenuItemState(NSString *getterName, NSString *defau
 #pragma mark FCP-native debug actions
 
 - (void)toggleCGContextDraw:(id)sender {
-    // FCP 12.0 ships this selector as an empty stub in release builds, so keep
+    // FCP ships this selector as an empty stub in release builds, so keep
     // the behavior explicit instead of surfacing a dead-looking action.
     (void)sender;
     SpliceKit_log(@"PEAppController.toggleDebugCGContextDraw: is a no-op in this FCP build");
@@ -469,14 +479,28 @@ static NSBox *SKDebug_makeSeparator(void) {
     return box;
 }
 
-static NSStackView *SKDebug_makeCheckboxGroup(NSArray<NSString *> *keys) {
+// descriptions: key → human-readable explanation (may be nil for a given key).
+static NSStackView *SKDebug_makeCheckboxGroup(NSArray<NSString *> *keys,
+                                              NSDictionary<NSString *, NSString *> *descriptions) {
     NSStackView *stack = [NSStackView stackViewWithViews:@[]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
-    stack.spacing = 4;
+    stack.spacing = 6;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     for (NSString *key in keys) {
-        [stack addArrangedSubview:SKDebug_makeCheckbox(key, SKDebug_humanizeKey(key))];
+        NSString *desc = descriptions[key];
+        if (desc.length > 0) {
+            NSStackView *row = [NSStackView stackViewWithViews:@[]];
+            row.orientation = NSUserInterfaceLayoutOrientationVertical;
+            row.alignment = NSLayoutAttributeLeading;
+            row.spacing = 2;
+            row.translatesAutoresizingMaskIntoConstraints = NO;
+            [row addArrangedSubview:SKDebug_makeCheckbox(key, SKDebug_humanizeKey(key))];
+            [row addArrangedSubview:SKDebug_makeNoteLabel(desc)];
+            [stack addArrangedSubview:row];
+        } else {
+            [stack addArrangedSubview:SKDebug_makeCheckbox(key, SKDebug_humanizeKey(key))];
+        }
     }
     return stack;
 }
@@ -529,22 +553,52 @@ static NSView *SKDebug_buildDebugPrefsView(void) {
 
     // --- Timeline Visual Overlays ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Timeline Visual Overlays")];
-    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_tlkVisualFlags())];
+    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_tlkVisualFlags(), @{
+        @"TLKShowItemLaneIndex":      @"Shows the lane number on each timeline item — useful for understanding connected clip stacking order.",
+        @"TLKShowMisalignedEdges":    @"Highlights item edges that are not pixel-aligned, which can cause sub-pixel rendering artefacts.",
+        @"TLKShowRenderBar":          @"Shows the render status colour bar overlaid on the timeline ruler.",
+        @"TLKShowHiddenGapItems":     @"Reveals gap items that FCP normally hides from view, exposing the true timeline data model.",
+        @"TLKShowHiddenItemHeaders":  @"Reveals item header elements (role labels, etc.) that FCP hides in compact layouts.",
+        @"TLKShowInvalidLayoutRects": @"Highlights rectangles where layout constraints could not be satisfied.",
+        @"TLKShowContainerBounds":    @"Draws the bounding box of each timeline container (primary storyline, connected story lines).",
+        @"TLKShowContentLayers":      @"Draws the boundary of each content layer within an item (video, audio, overlay).",
+        @"TLKShowRulerBounds":        @"Shows the ruler overlay bounding box.",
+        @"TLKShowUsedRegion":         @"Highlights the portion of each container that is actually occupied by items.",
+        @"TLKShowZeroHeightSpineItems": @"Reveals spine items with zero height — normally invisible but present in the data model.",
+        @"TLKDebugColorChangedObjects": @"Tints objects that changed during the last layout pass, making update propagation visible.",
+    })];
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- Timeline Logging ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Timeline Logging")];
-    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_tlkLoggingFlags())];
+    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_tlkLoggingFlags(), @{
+        @"TLKLogVisibleLayerChanges":    @"Logs when visible layers are added, removed, or reordered (high volume during scrubbing).",
+        @"TLKLogParts":                  @"Logs timeline part lifecycle events: load, layout, unload, recycle.",
+        @"TLKLogReloadRequests":         @"Logs every request to reload or refresh timeline content.",
+        @"TLKLogRecyclingLayerChanges":  @"Logs when layers are recycled between items to reduce allocation overhead.",
+        @"TLKLogVisibleRectChanges":     @"Logs changes to the visible rectangle as the user scrolls or zooms.",
+        @"TLKLogSegmentationStatistics": @"Logs statistics about how the timeline is segmented for rendering.",
+    })];
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- Performance & Rendering ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Performance & Rendering")];
-    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_renderFlags())];
+    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_renderFlags(), @{
+        @"TLKPerformanceMonitorEnabled":         @"Enables TLK's built-in overlay showing layout and render timings per frame.",
+        @"TLKDisableItemContents":               @"Disables all item content rendering (video frames, waveforms, thumbnails). Useful for isolating UI performance from media decode.",
+        @"DebugKeyItemVideoFilmstripsDisabled":  @"Disables video filmstrip thumbnail generation only, leaving waveforms and backgrounds intact.",
+        @"DebugKeyItemBackgroundDisabled":       @"Disables the coloured background bar behind each clip.",
+        @"DebugKeyItemAudioWaveformsDisabled":   @"Disables audio waveform drawing — can speed up rendering on large timelines.",
+        @"GPU_LOGGING":                          @"Enables verbose GPU and FxPlug shader pipeline logging in the system log.",
+    })];
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- FCP Behavior Overrides ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"FCP Behavior Overrides")];
-    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_fcpBehaviorFlags())];
+    [root addArrangedSubview:SKDebug_makeCheckboxGroup(SKDebug_fcpBehaviorFlags(), @{
+        @"FFDisableSnapping":  @"Disables magnetic snapping when moving or trimming clips. Useful when testing free-form positioning.",
+        @"FFDisableSkimming":  @"Disables clip skimming when the pointer hovers over clips in the browser or timeline.",
+    })];
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- ProAppSupport Log ---
@@ -569,6 +623,11 @@ static NSView *SKDebug_buildDebugPrefsView(void) {
         levelPopup.target = [SpliceKitDebugController shared];
         levelPopup.action = @selector(setLogLevel:);
         [row addArrangedSubview:levelPopup];
+        NSTextField *logLevelNote = SKDebug_makeNoteLabel(
+            @"Minimum severity for ProAppSupport-emitted log entries. "
+            @"Trace is most verbose; Failure is errors only.");
+        logLevelNote.preferredMaxLayoutWidth = 200;
+        [row addArrangedSubview:logLevelNote];
         [row addArrangedSubview:SKDebug_makeCheckbox(@"LogUI", @"Show In-App Log Panel")];
         [row addArrangedSubview:SKDebug_makeCheckbox(@"LogThread", @"Include Thread Info")];
         [root addArrangedSubview:row];
@@ -621,11 +680,18 @@ static NSView *SKDebug_buildDebugPrefsView(void) {
         [row addArrangedSubview:p2];
 
         [root addArrangedSubview:row];
+        [root addArrangedSubview:SKDebug_makeNoteLabel(
+            @"Video Decoder Log: verbosity of the NLE video decode pipeline (0 = off, higher = more detail). "
+            @"Frame Drop Log: verbosity of dropped-frame reporting (0 = off). "
+            @"Both write to the system unified log — view with Console.app or `log stream --process \"Final Cut Pro\"`.")];
     }
     [root addArrangedSubview:SKDebug_makeSeparator()];
 
     // --- Presets (row of buttons) ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Presets")];
+    [root addArrangedSubview:SKDebug_makeNoteLabel(
+        @"One-click combinations of the flags above. \"All Off\" removes every debug key "
+        @"from NSUserDefaults and CFPreferences, restoring FCP's default behaviour.")];
     {
         NSStackView *row1 = [NSStackView stackViewWithViews:@[
             SKDebug_makePresetButton(@"Timeline Visual", @"timeline_visual"),
@@ -649,6 +715,11 @@ static NSView *SKDebug_buildDebugPrefsView(void) {
 
     // --- Actions ---
     [root addArrangedSubview:SKDebug_makeSectionLabel(@"Actions")];
+    [root addArrangedSubview:SKDebug_makeNoteLabel(
+        @"HMD Framerate Monitor uses FCP's built-in HMDFramerate (ProCore) to log overall fps, "
+        @"average getFrame() time in ms, and min/max frame times every 2 seconds. "
+        @"Output appears in the system unified log — monitor with Console.app. "
+        @"\"Clear User Defaults\" removes all debug flags set on this tab.")];
     {
         NSStackView *row = [NSStackView stackViewWithViews:@[]];
         row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -784,18 +855,9 @@ BOOL SpliceKit_installDebugSettingsPanel(void) {
         [modules addObject:module];
         master[title] = view;
 
-        // Rebuild the toolbar so the Debug tab appears. Private but stable — it's
-        // the same method LKPreferences calls from addPreferenceNamed:owner:.
-        SEL setupToolbar = NSSelectorFromString(@"_setupToolbar");
-        if ([shared respondsToSelector:setupToolbar]) {
-            ((void (*)(id, SEL))objc_msgSend)(shared, setupToolbar);
-        }
-
-        // Also update the panel's size constraint if it's open
-        SEL updateFrame = @selector(updatePanelFrameAnimated:);
-        if ([shared respondsToSelector:updateFrame]) {
-            ((void (*)(id, SEL, BOOL))objc_msgSend)(shared, updateFrame, NO);
-        }
+        // Do NOT call _setupToolbar here — it wipes FCP's owner registry and
+        // breaks native tab switching. Toolbar items are inserted directly
+        // when showPreferencesPanel is called (see PreferencesPane.m).
 
         sDebugPrefsInstalled = YES;
         success = YES;
@@ -849,238 +911,4 @@ BOOL SpliceKit_uninstallDebugSettingsPanel(void) {
 
 BOOL SpliceKit_isDebugSettingsPanelInstalled(void) {
     return sDebugPrefsInstalled;
-}
-
-#pragma mark - Debug Menu Bar
-
-// Build a submenu of checkbox items bound to BOOL defaults.
-static NSMenu *SKDebug_buildCheckboxSubmenu(NSString *title, NSArray<NSString *> *keys) {
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:title];
-    menu.autoenablesItems = YES;
-    menu.delegate = [SpliceKitDebugController shared];
-    SpliceKitDebugController *ctl = [SpliceKitDebugController shared];
-    for (NSString *key in keys) {
-        NSMenuItem *item = [[NSMenuItem alloc]
-            initWithTitle:SKDebug_humanizeKey(key)
-                   action:@selector(toggleBoolDefault:)
-            keyEquivalent:@""];
-        item.representedObject = key;
-        item.target = ctl;
-        item.state = [[NSUserDefaults standardUserDefaults] boolForKey:key]
-                     ? NSControlStateValueOn : NSControlStateValueOff;
-        [menu addItem:item];
-    }
-    return menu;
-}
-
-static NSMenuItem *SKDebug_buildDebugMenuItem(void) {
-    SpliceKitDebugController *ctl = [SpliceKitDebugController shared];
-
-    NSMenu *root = [[NSMenu alloc] initWithTitle:@"Debug"];
-    root.autoenablesItems = YES;
-
-    // Timeline Overlays submenu
-    NSMenuItem *overlays = [[NSMenuItem alloc] initWithTitle:@"Timeline Overlays"
-                                                      action:nil keyEquivalent:@""];
-    overlays.submenu = SKDebug_buildCheckboxSubmenu(@"Timeline Overlays", SKDebug_tlkVisualFlags());
-    [root addItem:overlays];
-
-    // Timeline Logging submenu
-    NSMenuItem *logging = [[NSMenuItem alloc] initWithTitle:@"Timeline Logging"
-                                                     action:nil keyEquivalent:@""];
-    logging.submenu = SKDebug_buildCheckboxSubmenu(@"Timeline Logging", SKDebug_tlkLoggingFlags());
-    [root addItem:logging];
-
-    // Rendering / Performance submenu
-    NSMenuItem *render = [[NSMenuItem alloc] initWithTitle:@"Rendering & Performance"
-                                                    action:nil keyEquivalent:@""];
-    render.submenu = SKDebug_buildCheckboxSubmenu(@"Rendering & Performance", SKDebug_renderFlags());
-    [root addItem:render];
-
-    // FCP Behavior submenu
-    NSMenuItem *fcp = [[NSMenuItem alloc] initWithTitle:@"FCP Behavior"
-                                                 action:nil keyEquivalent:@""];
-    fcp.submenu = SKDebug_buildCheckboxSubmenu(@"FCP Behavior", SKDebug_fcpBehaviorFlags());
-    [root addItem:fcp];
-
-    [root addItem:[NSMenuItem separatorItem]];
-
-    // Log Level submenu (radio-style — current level always has a checkmark)
-    NSMenu *logLevelMenu = [[NSMenu alloc] initWithTitle:@"Log Level"];
-    logLevelMenu.autoenablesItems = YES;
-    logLevelMenu.delegate = [SpliceKitDebugController shared];
-    NSArray *levels = SKDebug_logLevelNames();
-    for (NSInteger i = 0; i < (NSInteger)levels.count; i++) {
-        NSMenuItem *item = [[NSMenuItem alloc]
-            initWithTitle:[levels[i] capitalizedString]
-                   action:@selector(setLogLevel:)
-            keyEquivalent:@""];
-        item.tag = i;
-        item.target = ctl;
-        [logLevelMenu addItem:item];
-    }
-    NSMenuItem *logLevelHeader = [[NSMenuItem alloc] initWithTitle:@"Log Level" action:nil keyEquivalent:@""];
-    logLevelHeader.submenu = logLevelMenu;
-    [root addItem:logLevelHeader];
-
-    // LogUI / LogThread toggles
-    NSMenuItem *logUI = [[NSMenuItem alloc]
-        initWithTitle:@"Show In-App Log Panel"
-               action:@selector(toggleBoolDefault:)
-        keyEquivalent:@""];
-    logUI.representedObject = @"LogUI";
-    logUI.target = ctl;
-    logUI.state = [[NSUserDefaults standardUserDefaults] boolForKey:@"LogUI"]
-                  ? NSControlStateValueOn : NSControlStateValueOff;
-    [root addItem:logUI];
-
-    NSMenuItem *logThread = [[NSMenuItem alloc]
-        initWithTitle:@"Include Thread Info in Log"
-               action:@selector(toggleBoolDefault:)
-        keyEquivalent:@""];
-    logThread.representedObject = @"LogThread";
-    logThread.target = ctl;
-    logThread.state = [[NSUserDefaults standardUserDefaults] boolForKey:@"LogThread"]
-                      ? NSControlStateValueOn : NSControlStateValueOff;
-    [root addItem:logThread];
-
-    [root addItem:[NSMenuItem separatorItem]];
-
-    // Presets
-    struct { NSString *title; NSString *key; } presets[] = {
-        {@"Enable Timeline Visual Overlays", @"timeline_visual"},
-        {@"Enable Timeline Logging",         @"timeline_logging"},
-        {@"Enable Performance Monitoring",   @"performance"},
-        {@"Enable Render Debug",             @"render_debug"},
-        {@"Enable Verbose Logging",          @"verbose_logging"},
-        {@"Reset All Debug Flags",           @"all_off"},
-    };
-    NSMenu *presetMenu = [[NSMenu alloc] initWithTitle:@"Presets"];
-    for (size_t i = 0; i < sizeof(presets) / sizeof(presets[0]); i++) {
-        NSMenuItem *item = [[NSMenuItem alloc]
-            initWithTitle:presets[i].title
-                   action:@selector(applyPreset:)
-            keyEquivalent:@""];
-        item.representedObject = presets[i].key;
-        item.target = ctl;
-        [presetMenu addItem:item];
-    }
-    NSMenuItem *presetHeader = [[NSMenuItem alloc] initWithTitle:@"Presets" action:nil keyEquivalent:@""];
-    presetHeader.submenu = presetMenu;
-    [root addItem:presetHeader];
-
-    [root addItem:[NSMenuItem separatorItem]];
-
-    // FCP-native developer actions
-    NSMenu *fcpDevMenu = [[NSMenu alloc] initWithTitle:@"FCP Developer Tools"];
-    fcpDevMenu.autoenablesItems = YES;
-    fcpDevMenu.delegate = [SpliceKitDebugController shared];
-    {
-        NSMenuItem *cg = [[NSMenuItem alloc]
-            initWithTitle:@"Toggle CG Context Draw"
-                   action:@selector(toggleCGContextDraw:)
-            keyEquivalent:@""];
-        cg.target = ctl;
-        cg.enabled = NO;
-        [fcpDevMenu addItem:cg];
-
-        NSMenuItem *saveSearch = [[NSMenuItem alloc]
-            initWithTitle:@"Toggle Save Search Results (VAML)"
-                   action:@selector(toggleSaveSearchResults:)
-            keyEquivalent:@""];
-        saveSearch.target = ctl;
-        [fcpDevMenu addItem:saveSearch];
-
-        NSMenuItem *saveTrans = [[NSMenuItem alloc]
-            initWithTitle:@"Toggle Save Transcription (VAML)"
-                   action:@selector(toggleSaveTranscription:)
-            keyEquivalent:@""];
-        saveTrans.target = ctl;
-        [fcpDevMenu addItem:saveTrans];
-    }
-    NSMenuItem *fcpDevHeader = [[NSMenuItem alloc] initWithTitle:@"FCP Developer Tools" action:nil keyEquivalent:@""];
-    fcpDevHeader.submenu = fcpDevMenu;
-    [root addItem:fcpDevHeader];
-
-    [root addItem:[NSMenuItem separatorItem]];
-
-    // Framerate monitor controls
-    NSMenuItem *startFps = [[NSMenuItem alloc]
-        initWithTitle:@"Start HMD Framerate Monitor"
-               action:@selector(startFramerateMonitor:)
-        keyEquivalent:@""];
-    startFps.target = ctl;
-    [root addItem:startFps];
-
-    NSMenuItem *stopFps = [[NSMenuItem alloc]
-        initWithTitle:@"Stop HMD Framerate Monitor"
-               action:@selector(stopFramerateMonitor:)
-        keyEquivalent:@""];
-    stopFps.target = ctl;
-    [root addItem:stopFps];
-
-    // Top-level container
-    NSMenuItem *topLevel = [[NSMenuItem alloc] initWithTitle:@"Debug" action:nil keyEquivalent:@""];
-    topLevel.submenu = root;
-    return topLevel;
-}
-
-static BOOL sDebugMenuInstalled = NO;
-
-BOOL SpliceKit_installDebugMenuBar(void) {
-    if (sDebugMenuInstalled) return YES;
-
-    __block BOOL success = NO;
-    dispatch_block_t work = ^{
-        NSMenu *mainMenu = [NSApp mainMenu];
-        if (!mainMenu) return;
-        if ([mainMenu indexOfItemWithTitle:@"Debug"] >= 0) {
-            sDebugMenuInstalled = YES;
-            success = YES;
-            if ([[NSUserDefaults standardUserDefaults] boolForKey:@"LogUI"]) {
-                [[SpliceKitLogPanel sharedPanel] showPanel];
-            }
-            return;
-        }
-        NSMenuItem *debugItem = SKDebug_buildDebugMenuItem();
-        [SpliceKitDebugController shared].debugMenuItem = debugItem;
-
-        // Insert before "Splices" (if present) or "Help".
-        NSInteger insertIdx = [mainMenu indexOfItemWithTitle:@"Splices"];
-        if (insertIdx < 0) insertIdx = [mainMenu indexOfItemWithTitle:@"Help"];
-        if (insertIdx < 0) {
-            [mainMenu addItem:debugItem];
-        } else {
-            [mainMenu insertItem:debugItem atIndex:insertIdx];
-        }
-        sDebugMenuInstalled = YES;
-        success = YES;
-        SpliceKit_log(@"Debug menu bar installed");
-        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"LogUI"]) {
-            [[SpliceKitLogPanel sharedPanel] showPanel];
-        }
-    };
-
-    if ([NSThread isMainThread]) work(); else dispatch_sync(dispatch_get_main_queue(), work);
-    return success;
-}
-
-BOOL SpliceKit_uninstallDebugMenuBar(void) {
-    if (!sDebugMenuInstalled) return YES;
-    __block BOOL success = NO;
-    dispatch_block_t work = ^{
-        NSMenu *mainMenu = [NSApp mainMenu];
-        NSInteger idx = [mainMenu indexOfItemWithTitle:@"Debug"];
-        if (idx >= 0) [mainMenu removeItemAtIndex:idx];
-        [[SpliceKitLogPanel sharedPanel] hidePanel];
-        [SpliceKitDebugController shared].debugMenuItem = nil;
-        sDebugMenuInstalled = NO;
-        success = YES;
-    };
-    if ([NSThread isMainThread]) work(); else dispatch_sync(dispatch_get_main_queue(), work);
-    return success;
-}
-
-BOOL SpliceKit_isDebugMenuBarInstalled(void) {
-    return sDebugMenuInstalled;
 }

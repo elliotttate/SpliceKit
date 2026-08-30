@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.independent-slip",
+  "name": "Independent Slip",
+  "version": "1.0.0",
+  "description": "Adds two toolbar toggle buttons — [▶] Video Only and [♪] Audio Only — that make the Trim tool's slip and slide operations affect only video or only audio independently.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

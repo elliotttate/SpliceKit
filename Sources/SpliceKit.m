@@ -12,11 +12,11 @@
 #import "SpliceKitLua.h"
 #import "SpliceKitPlugins.h"
 #import "SpliceKitCommandPalette.h"
-#import "SpliceKitDebugUI.h"
 #import "SpliceKitSentry.h"
 #import "SpliceKitLiveCam.h"
 #import "SpliceKitURLImport.h"
 #import "SpliceKitImmersivePreviewPanel.h"
+#import "SpliceKitUndoHistoryPanel.h"
 #import <AppKit/AppKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <Security/Security.h>
@@ -459,9 +459,11 @@ static void SpliceKit_checkCompatibility(void) {
 - (void)toggleLiveCamPanel:(id)sender;
 - (void)updateLiveCamToolbarButtonState:(BOOL)active;
 - (void)toggleVisionProPanel:(id)sender;
+- (void)toggleUndoHistoryPanel:(id)sender;
 @property (nonatomic, weak) NSButton *toolbarButton;
 @property (nonatomic, weak) NSButton *paletteToolbarButton;
 @property (nonatomic, weak) NSButton *liveCamToolbarButton;
+@property (nonatomic, weak) NSButton *undoHistoryToolbarButton;
 @property (nonatomic, strong) NSMenu *luaScriptsMenu;
 @end
 
@@ -504,6 +506,15 @@ static void SpliceKit_checkCompatibility(void) {
         ((void (*)(id, SEL))objc_msgSend)(panel, @selector(hidePanel));
     } else {
         ((void (*)(id, SEL))objc_msgSend)(panel, @selector(showPanel));
+    }
+}
+
+- (void)toggleUndoHistoryPanel:(id)sender {
+    SpliceKitUndoHistoryPanel *panel = [SpliceKitUndoHistoryPanel sharedPanel];
+    if ([panel isVisible]) {
+        [panel hidePanel];
+    } else {
+        [panel showPanel];
     }
 }
 
@@ -2521,6 +2532,14 @@ static void SpliceKit_installMenu(void) {
     mixerItem.target = [SpliceKitMenuController shared];
     [bridgeMenu addItem:mixerItem];
 
+    NSMenuItem *undoHistoryItem = [[NSMenuItem alloc]
+        initWithTitle:@"Undo History"
+               action:@selector(toggleUndoHistoryPanel:)
+        keyEquivalent:@"u"];
+    undoHistoryItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption;
+    undoHistoryItem.target = [SpliceKitMenuController shared];
+    [bridgeMenu addItem:undoHistoryItem];
+
     [bridgeMenu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *muteAudioItem = [[NSMenuItem alloc]
@@ -2816,9 +2835,10 @@ static void SpliceKit_installMenu(void) {
     SpliceKit_log(@"SpliceKit menu installed (Ctrl+Option+T Transcript, Ctrl+Option+C Captions, Cmd+Shift+P Palette, Ctrl+Option+L Lua REPL)");
 }
 
-static NSString * const kSpliceKitLiveCamToolbarID = @"SpliceKitLiveCamItemID";
-static NSString * const kSpliceKitTranscriptToolbarID = @"SpliceKitTranscriptItemID";
-static NSString * const kSpliceKitPaletteToolbarID = @"SpliceKitPaletteItemID";
+static NSString * const kSpliceKitLiveCamToolbarID      = @"SpliceKitLiveCamItemID";
+static NSString * const kSpliceKitTranscriptToolbarID   = @"SpliceKitTranscriptItemID";
+static NSString * const kSpliceKitPaletteToolbarID      = @"SpliceKitPaletteItemID";
+static NSString * const kSpliceKitUndoHistoryToolbarID  = @"SpliceKitUndoHistoryItemID";
 static IMP sOriginalToolbarItemForIdentifier = NULL;
 
 // We swizzle FCP's toolbar delegate so it knows about our custom toolbar items.
@@ -2908,6 +2928,35 @@ static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
 
         return item;
     }
+    if ([identifier isEqualToString:kSpliceKitUndoHistoryToolbarID]) {
+        NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:kSpliceKitUndoHistoryToolbarID];
+        item.label = @"History";
+        item.paletteLabel = @"Undo History";
+        item.toolTip = @"Undo History";
+
+        NSImage *icon = [NSImage imageWithSystemSymbolName:@"clock.arrow.trianglehead.counterclockwise.rotate.90"
+                                  accessibilityDescription:@"Undo History"];
+        if (!icon) icon = [NSImage imageWithSystemSymbolName:@"clock.arrow.circlepath"
+                                     accessibilityDescription:@"Undo History"];
+        if (!icon) icon = [NSImage imageNamed:NSImageNameRefreshTemplate];
+        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration
+            configurationWithPointSize:13 weight:NSFontWeightMedium];
+        icon = [icon imageWithSymbolConfiguration:config];
+
+        NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 32, 25)];
+        [button setButtonType:NSButtonTypePushOnPushOff];
+        button.bezelStyle = NSBezelStyleTexturedRounded;
+        button.bordered = YES;
+        button.image = icon;
+        button.alternateImage = icon;
+        button.imagePosition = NSImageOnly;
+        button.target = [SpliceKitMenuController shared];
+        button.action = @selector(toggleUndoHistoryPanel:);
+
+        [SpliceKitMenuController shared].undoHistoryToolbarButton = button;
+        item.view = button;
+        return item;
+    }
     // Call original
     return ((id (*)(id, SEL, NSToolbar *, NSString *, BOOL))sOriginalToolbarItemForIdentifier)(
         self, _cmd, toolbar, identifier, willInsert);
@@ -2982,7 +3031,7 @@ static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
 
         // Guard against double-insertion — can happen if both the notification
         // and the polling fallback fire. Also clean up stale items (no view).
-        BOOL hasLiveCam = NO, hasTranscript = NO, hasPalette = NO;
+        BOOL hasLiveCam = NO, hasTranscript = NO, hasPalette = NO, hasUndoHistory = NO;
         for (NSInteger i = (NSInteger)toolbar.items.count - 1; i >= 0; i--) {
             NSToolbarItem *ti = toolbar.items[(NSUInteger)i];
             if ([ti.itemIdentifier isEqualToString:kSpliceKitLiveCamToolbarID]) {
@@ -3009,19 +3058,25 @@ static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
                 } else {
                     [toolbar removeItemAtIndex:(NSUInteger)i];
                 }
+            } else if ([ti.itemIdentifier isEqualToString:kSpliceKitUndoHistoryToolbarID]) {
+                if (ti.view) {
+                    if ([ti.view isKindOfClass:[NSButton class]])
+                        [SpliceKitMenuController shared].undoHistoryToolbarButton = (NSButton *)ti.view;
+                    hasUndoHistory = YES;
+                } else {
+                    [toolbar removeItemAtIndex:(NSUInteger)i];
+                }
             }
         }
-        if (hasLiveCam && hasTranscript && hasPalette) {
+        if (hasLiveCam && hasTranscript && hasPalette && hasUndoHistory) {
             SpliceKit_log(@"All toolbar buttons already present — skipping");
             return;
         }
 
-        // Insert our buttons just before the flexible space — that's where
-        // they look most natural, grouped with FCP's own tool buttons.
+        // Find a good base insertion point: just before the flexible space.
         NSUInteger insertIdx = toolbar.items.count;
         for (NSUInteger i = 0; i < toolbar.items.count; i++) {
-            NSToolbarItem *ti = toolbar.items[i];
-            if ([ti.itemIdentifier isEqualToString:NSToolbarFlexibleSpaceItemIdentifier]) {
+            if ([toolbar.items[i].itemIdentifier isEqualToString:NSToolbarFlexibleSpaceItemIdentifier]) {
                 insertIdx = i;
                 break;
             }
@@ -3039,6 +3094,20 @@ static id SpliceKit_toolbar_itemForItemIdentifier(id self, SEL _cmd, NSToolbar *
         if (!hasTranscript) {
             [toolbar insertItemWithItemIdentifier:kSpliceKitTranscriptToolbarID atIndex:insertIdx];
             SpliceKit_log(@"Transcript toolbar button inserted at index %lu", (unsigned long)insertIdx);
+            insertIdx++;
+        }
+        if (!hasUndoHistory) {
+            // Insert right after the Transcript button if it's already in the toolbar,
+            // otherwise use insertIdx which is already positioned correctly.
+            NSUInteger undoIdx = insertIdx;
+            for (NSUInteger i = 0; i < toolbar.items.count; i++) {
+                if ([toolbar.items[i].itemIdentifier isEqualToString:kSpliceKitTranscriptToolbarID]) {
+                    undoIdx = i + 1;
+                    break;
+                }
+            }
+            [toolbar insertItemWithItemIdentifier:kSpliceKitUndoHistoryToolbarID atIndex:undoIdx];
+            SpliceKit_log(@"Undo History toolbar button inserted at index %lu", (unsigned long)undoIdx);
         }
 
     } @catch (NSException *e) {
@@ -3371,6 +3440,9 @@ static void SpliceKit_appDidLaunch(void) {
     // Install effect browser favorites context menu (always on)
     SpliceKit_installEffectFavoritesSwizzle();
 
+    // Expand audio waveform to full clip height when video thumbnails are hidden (always on)
+    SpliceKit_installWaveformExpand();
+
     // Debounce FFSidebarModule KVO churn on the Effects sidebar's category
     // list during live scroll (fixes scrolling jerks with many effects).
     if (SpliceKit_isSidebarCoalesceLiveScrollEnabled()) {
@@ -3410,11 +3482,6 @@ static void SpliceKit_appDidLaunch(void) {
     // Swizzle J/L to use configurable speed ladders
     SpliceKit_installPlaybackSpeedSwizzle();
 
-    // Rebuild FCP's hidden Debug pane + Debug menu bar (Apple strips the NIB
-    // and leaves the menu unassigned in release builds; we reconstruct both).
-    SpliceKit_installDebugSettingsPanel();
-    // SpliceKit_installDebugMenuBar();  // disabled — don't add the Debug menu to the bar
-
     // Install right-click context menu for structure block color changes
     SpliceKit_safeInstall("StructureBlockContextMenu", ^{
         SpliceKit_installStructureBlockContextMenu();
@@ -3427,11 +3494,15 @@ static void SpliceKit_appDidLaunch(void) {
         });
     }
 
+
     // Bridge metadata (bridge.describe / bridge.alive) and async/events
     // infrastructure must be registered before the control server starts
     // accepting requests, since they go through the plugin registry.
     SpliceKit_safeInstall("BridgeMetadata", ^{
         SpliceKit_installBridgeMetadata();
+    });
+    SpliceKit_safeInstall("UndoHistoryHooks", ^{
+        [SpliceKitUndoHistoryPanel installHooks];
     });
     SpliceKit_safeInstall("AsyncEvents", ^{
         SpliceKit_installAsync();

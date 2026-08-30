@@ -5625,6 +5625,17 @@ SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWProviderProbe(NSDictio
     };
 }
 
+SPLICEKIT_BRAW_EXTERN_C void SpliceKit_bootstrapBRAWAtLaunchPhase(NSString *phase) {
+    (void)phase;
+}
+
+SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWAVProbe(NSDictionary *params) {
+    (void)params;
+    return @{
+        @"error": @"Blackmagic RAW SDK headers are not available at /Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Include/BlackmagicRawAPI.h",
+    };
+}
+
 SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameBytes(
     CFStringRef pathRef,
     uint32_t frameIndex,
@@ -5756,4 +5767,7 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_ReadAudioSamples(
     return NO;
 }
 
-#endif
+#endif // SPLICEKIT_HAS_BRAW_SDK
+
+// (Stubs for SpliceKit_bootstrapBRAWAtLaunchPhase and SpliceKit_handleBRAWAVProbe
+//  are already defined above inside the #else !SPLICEKIT_HAS_BRAW_SDK block.)

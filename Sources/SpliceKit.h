@@ -238,6 +238,9 @@ void SpliceKit_installTimelinePerformanceMode(void);
 void SpliceKit_setTimelinePerformanceModeEnabled(BOOL enabled);
 BOOL SpliceKit_isTimelinePerformanceModeEnabled(void);
 
+// Expands audio waveform to fill full clip height when video thumbnails are hidden.
+void SpliceKit_installWaveformExpand(void);
+
 // Swizzles pasteAnchored: and paste: to handle FCPXML on the pasteboard.
 // When FCPXML is detected, imports it into a temp project, converts to native
 // clipboard format, and then lets the original paste proceed. Includes caching,

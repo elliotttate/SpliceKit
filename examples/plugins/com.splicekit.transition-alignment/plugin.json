@@ -1,0 +1,22 @@
+{
+  "id": "com.splicekit.transition-alignment",
+  "name": "Transition Alignment",
+  "version": "1.0.0",
+  "description": "Exposes the hidden transitionOverlapType property on FFAnchoredTransition, restoring legacy FCP 7 transition alignment options (Center on Edit, End on Edit) via the transitions.setAlignment MCP method.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [
+    {
+      "name": "transitions.setAlignment",
+      "description": "Set transition alignment (Center on Edit or End on Edit) for selected or all transitions on the primary storyline.",
+      "params": {
+        "alignment": "\"center\" | \"end\"",
+        "scope": "\"all\" | \"selected\"  (default: \"all\")"
+      }
+    }
+  ],
+  "dependencies": []
+}

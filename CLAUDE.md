@@ -1052,6 +1052,44 @@ highlight color, others get the base text color.
 and point size from the selected Motion title's CHChannelText channel. `verify_captions()`
 walks connected titles on the timeline and checks text/fontSize against the expected style.
 
+## Undo History Palette
+
+A floating palette that shows every action pushed onto FCP's undo stack, including
+actions registered before the panel was opened. Redo entries (done-then-undone) are
+shown greyed-out below the current state. Click any row to undo or redo to that state.
+
+```
+history.show()                    # open the Undo History palette
+history.hide()                    # close it
+history.get()                     # return full history + cursor position
+history.jumpToIndex(index=-1)     # undo/redo to a specific index (-1 = pristine)
+history.clear()                   # clear SpliceKit's buffer (does NOT touch FCP undo stack)
+```
+
+`history.get()` returns:
+```json
+{
+  "entries": [
+    { "index": -1, "name": "(Pristine)", "timestamp": "", "isCurrent": false },
+    { "index": 0,  "name": "Blade",      "timestamp": "14:32:01", "isCurrent": false },
+    { "index": 1,  "name": "Add Marker", "timestamp": "14:32:05", "isCurrent": true  },
+    { "index": 2,  "name": "Trim Start", "timestamp": "14:32:09", "isCurrent": false }
+  ],
+  "cursor": 1,
+  "canUndo": true,
+  "canRedo": true,
+  "visible": true
+}
+```
+
+Entries at indices > cursor are redo-available (greyed in the UI).
+The palette tracks up to 100 entries in a ring buffer.
+
+**Implementation note**: history is captured by observing `NSUndoManagerDidCloseUndoGroupNotification`
+with per-manager nesting depth tracking — only the outermost group close (depth 0→1→0) produces an
+entry, so nested FCP transactions don't generate spurious rows. Recording is suppressed during
+undo/redo replay so redo-stack registrations aren't mistaken for new user actions.
+
 ## Lua Scripting
 
 SpliceKit embeds a Lua 5.4 VM directly in FCP's process. Scripts use the `sk`

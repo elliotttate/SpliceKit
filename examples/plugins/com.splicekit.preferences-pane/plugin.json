@@ -1,0 +1,13 @@
+{
+  "id": "com.splicekit.preferences-pane",
+  "name": "SpliceKit Preferences Pane",
+  "version": "1.0.0",
+  "description": "Adds 'SpliceKit' and 'Debug' tabs to Final Cut Pro's Settings window. The SpliceKit tab holds feature toggles, FCP Defaults (transition warning, clip height, audio channel/pan defaults, spatial conform), and Timecode Bar Shortcuts checkboxes. The Debug tab reconstructs FCP's internal developer preferences (Apple strips its NIB from release builds). Survives SpliceKit patcher updates.",
+  "author": "SpliceKit",
+  "apiVersion": 1,
+  "entry": {
+    "native": "plugin.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

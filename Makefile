@@ -380,7 +380,7 @@ braw-prototype: $(BRAW_IMPORT_EXEC) $(BRAW_DECODER_EXEC) $(BRAW_CLI_BIN)
 braw-raw-processor: $(BRAW_RAWPROC_EXEC)
 	@echo "Staged: $(BRAW_RAWPROC_BUNDLE)"
 
-deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) braw-prototype vp9-prototype mkv-prototype
+deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) vp9-prototype mkv-prototype
 	@echo "=== Deploying SpliceKit to modded FCP ==="
 		@rm -rf "$(FW_DIR)"
 		@mkdir -p "$(FW_DIR)/Versions/A/Resources"
@@ -394,9 +394,11 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) braw-pr
 		@cd "$(FW_DIR)/Versions" && ln -sfn A Current
 		@cd "$(FW_DIR)" && ln -sfn Versions/Current/SpliceKit SpliceKit
 		@cd "$(FW_DIR)" && ln -sfn Versions/Current/Resources Resources
-	@# Create Info.plist if missing
-	@test -f "$(FW_DIR)/Versions/A/Resources/Info.plist" || \
-		printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string><key>CFBundleName</key><string>SpliceKit</string><key>CFBundleVersion</key><string>1.0.0</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleExecutable</key><string>SpliceKit</string></dict></plist>' \
+	@# Always write Info.plist with the current SPLICEKIT_VERSION so the patcher
+	@# version check (CFBundleShortVersionString comparison) never triggers a
+	@# spurious "update available" prompt after a manual make deploy.
+	@mkdir -p "$(FW_DIR)/Versions/A/Resources"
+	@printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.splicekit.SpliceKit</string><key>CFBundleName</key><string>SpliceKit</string><key>CFBundleShortVersionString</key><string>$(SPLICEKIT_VERSION)</string><key>CFBundleVersion</key><string>$(SPLICEKIT_VERSION)</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleExecutable</key><string>SpliceKit</string></dict></plist>' \
 		> "$(FW_DIR)/Versions/A/Resources/Info.plist"
 	@# Add privacy usage descriptions for transcript, LiveCam, and palette voice dictation.
 	@/usr/libexec/PlistBuddy -c "Set :NSSpeechRecognitionUsageDescription 'SpliceKit uses speech recognition for transcript editing and command palette voice dictation inside Final Cut Pro.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'SpliceKit uses speech recognition for transcript editing and command palette voice dictation inside Final Cut Pro.'" "$(MODDED_APP)/Contents/Info.plist" 2>/dev/null || true
@@ -451,11 +453,13 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) braw-pr
 	@mkdir -p "$(MODDED_APP)/Contents/PlugIns/Codecs"
 	@rm -rf "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle"
 	@cp -R "$(VP9_DECODER_BUNDLE)" "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle"
+	@xattr -rc "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle" 2>/dev/null || true
 	@echo "VP9 decoder bundle copied into FCP.app/Contents/PlugIns"
 	@$(MAKE) mkv-prototype
 	@mkdir -p "$(MODDED_APP)/Contents/PlugIns/FormatReaders"
 	@rm -rf "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle"
 	@cp -R "$(MKV_IMPORT_BUNDLE)" "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle"
+	@xattr -rc "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle" 2>/dev/null || true
 	@echo "MKV/WebM format reader copied into FCP.app/Contents/PlugIns"
 	@if [ "$(ENABLE_BRAW_RAW_PROCESSOR)" = "1" ]; then \
 		$(MAKE) braw-raw-processor; \
@@ -464,6 +468,7 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) braw-pr
 		cp -R "$(BUILD_DIR)/braw-prototype/Extensions/SpliceKitBRAWRAWProcessor.appex" "$(MODDED_APP)/Contents/Extensions/SpliceKitBRAWRAWProcessor.appex"; \
 		echo "Opt-in BRAW RAW processor copied into FCP.app/Contents/Extensions"; \
 	fi
+	@xattr -rc "$(MODDED_APP)/Contents/PlugIns" 2>/dev/null || true
 	@sign_identity=$$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development:/ { print $$2; exit } /"Developer ID Application:/ && developer == "" { developer = $$2 } /[0-9]+\) [0-9A-F]+ "/ && first == "" { first = $$2 } END { if (developer != "") print developer; else if (first != "") print first }'); \
 	if [ -n "$$sign_identity" ]; then \
 		echo "Using signing identity: $$sign_identity"; \
@@ -479,6 +484,9 @@ deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) braw-pr
 	fi; \
 	if [ -d "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle" ]; then \
 		codesign --force --sign "$$sign_identity" "$(MODDED_APP)/Contents/PlugIns/Codecs/SpliceKitVP9Decoder.bundle"; \
+	fi; \
+	if [ -d "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle" ]; then \
+		codesign --force --sign "$$sign_identity" "$(MODDED_APP)/Contents/PlugIns/FormatReaders/SpliceKitMKVImport.bundle"; \
 	fi; \
 	if [ -d "$(MODDED_APP)/Contents/Extensions/SpliceKitBRAWRAWProcessor.appex" ]; then \
 		appex_sign_id="$(BRAW_RAWPROC_SIGN_ID)"; \
