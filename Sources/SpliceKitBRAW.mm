@@ -5599,6 +5599,17 @@ SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWDescribeImmersive(NSDi
     return SpliceKit_handleBRAWProbe(params);
 }
 
+// Local fix (no Blackmagic RAW SDK installed): SpliceKit.m and SpliceKitServer.m
+// call these unconditionally, but upstream's #else branch omits them, which
+// leaves undefined SpliceKit_* symbols and fails the Makefile's link check.
+SPLICEKIT_BRAW_EXTERN_C void SpliceKit_bootstrapBRAWAtLaunchPhase(NSString *phase) {
+    (void)phase;
+}
+
+SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWAVProbe(NSDictionary *params) {
+    return SpliceKit_handleBRAWProbe(params);
+}
+
 SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWReadMotionSamples(NSDictionary *params) {
     return SpliceKit_handleBRAWProbe(params);
 }

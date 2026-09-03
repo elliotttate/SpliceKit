@@ -51,10 +51,13 @@ step()  { echo -e "\n${CYAN}${BOLD}=== $* ===${NC}"; }
 detect_sign_identity() {
     /usr/bin/security find-identity -v -p codesigning 2>/dev/null | \
         awk '
-            /"Apple Development:/ { print $2; exit }
+            /"Apple Development:/ { print $2; printed = 1; exit }
             /"Developer ID Application:/ && developer == "" { developer = $2 }
             /[0-9]+\) [0-9A-F]+ "/ && first == "" { first = $2 }
             END {
+                # Local fix: awk still runs END after exit, which printed a second
+                # identity and broke codesign ("no identity found").
+                if (printed) exit;
                 if (developer != "") print developer;
                 else if (first != "") print first;
             }'
@@ -320,16 +323,12 @@ if [ -d "$LUA_DIR" ]; then
     log "Built: $LUA_LIB"
 fi
 
-info "Compiling ${#SOURCES[@]} source files..."
-clang -arch arm64 -arch x86_64 \
-    -mmacosx-version-min=14.0 \
-    -framework Foundation -framework AppKit -framework AVFoundation -framework Speech -framework CoreServices \
-    -fobjc-arc -fmodules -Wno-deprecated-declarations \
-    -undefined dynamic_lookup -dynamiclib \
-    -install_name @rpath/SpliceKit.framework/Versions/A/SpliceKit \
-    -I "$REPO_DIR/Sources" \
-    "${SOURCES[@]}" $LUA_FLAGS \
-    -o "$BUILD_DIR/SpliceKit" 2>&1
+info "Compiling ${#SOURCES[@]} source files via Makefile (canonical flags: Sentry, Metal, Vision, C++)..."
+# Local change: the inline clang line shipped here was stale (no Sentry framework,
+# missing frameworks, no C++ lib). The Makefile is the canonical build the GUI
+# patcher uses, so delegate to it.
+make -C "$REPO_DIR" all 2>&1 | tail -5
+[[ -f "$BUILD_DIR/SpliceKit" ]] || { err "Makefile build failed (see output above)"; exit 1; }
 
 log "Built: $(file "$BUILD_DIR/SpliceKit" | grep -o 'universal.*')"
 
@@ -377,7 +376,9 @@ step "Step 4: Injecting dylib into FCP binary"
 BINARY="$MODDED_APP/Contents/MacOS/Final Cut Pro"
 
 # Check if already injected
-if otool -L "$BINARY" 2>/dev/null | grep -q SpliceKit; then
+# Local fix: match the load command itself, not the otool header line, which
+# already contains "SpliceKit" via the ~/Applications/SpliceKit/ install path.
+if otool -L "$BINARY" 2>/dev/null | grep -q '@rpath/SpliceKit.framework/Versions/A/SpliceKit'; then
     log "Already injected (skipping)"
 else
     # Build insert_dylib if needed
