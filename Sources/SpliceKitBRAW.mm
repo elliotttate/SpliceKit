@@ -5625,6 +5625,14 @@ SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWProviderProbe(NSDictio
     };
 }
 
+SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWAVProbe(NSDictionary *params) {
+    return SpliceKit_handleBRAWProbe(params);
+}
+
+SPLICEKIT_BRAW_EXTERN_C void SpliceKit_bootstrapBRAWAtLaunchPhase(NSString *phase) {
+    (void)phase;
+}
+
 SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_DecodeFrameBytes(
     CFStringRef pathRef,
     uint32_t frameIndex,

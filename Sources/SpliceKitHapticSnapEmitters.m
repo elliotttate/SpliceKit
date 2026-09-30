@@ -49,6 +49,17 @@
 #import <objc/message.h>
 #import <CoreMedia/CoreMedia.h>
 
+// CMTime is 24 bytes, so on x86_64 it is returned in memory and the call must
+// go through objc_msgSend_stret, which takes the return-buffer pointer as its
+// first argument. Plain objc_msgSend reads that pointer as `self` and crashes.
+// objc_msgSend_stret does not exist on arm64, where plain objc_msgSend is right.
+// Same pattern as SpliceKitServer.m, SpliceKitLiveCam.m, SpliceKitURLImport.m.
+#if defined(__x86_64__)
+#define SPLICEKIT_SNAP_STRET_MSG objc_msgSend_stret
+#else
+#define SPLICEKIT_SNAP_STRET_MSG objc_msgSend
+#endif
+
 static IMP sOrigSnappingCalc = NULL;
 static IMP sOrigRemoveSnappingGuides = NULL;
 static BOOL sSnapEmittersInstalled = NO;
@@ -131,18 +142,22 @@ static void SK_snap_scheduleRelease(id module) {
 // label "playhead snap" distinctly from "clip-edge snap". Mirrors the same
 // CMTimeCompare branches the original snappingCalc: uses internally.
 static BOOL SK_snap_isToPlayhead(id module, CMTime snapTime) {
+    if (!module || ![module respondsToSelector:@selector(timelineView)]) return NO;
     id timelineView = ((id (*)(id, SEL))objc_msgSend)(module, @selector(timelineView));
     if (!timelineView) return NO;
 
-    // Cast objc_msgSend to a function pointer with the correct return type.
-    // The compiler picks the right ABI for arm64 (x8 sret register) and
-    // x86_64 (stret call) automatically, while objc_msgSend_stret is
-    // unavailable on arm64.
-    CMTime playheadTime = ((CMTime (*)(id, SEL))objc_msgSend)(
+    // Casting objc_msgSend to a struct-returning type is not enough on x86_64:
+    // the compiler emits the sret convention (return buffer in %rdi, self in
+    // %rsi) but still calls objc_msgSend, which expects self in %rdi. Use the
+    // stret variant above. This crashed FCP when skimming the timeline with
+    // snapping on.
+    if (![timelineView respondsToSelector:@selector(playheadTime)]) return NO;
+    CMTime playheadTime = ((CMTime (*)(id, SEL))SPLICEKIT_SNAP_STRET_MSG)(
         timelineView, @selector(playheadTime));
     if (CMTimeCompare(snapTime, playheadTime) == 0) return YES;
 
-    CMTime skimTime = ((CMTime (*)(id, SEL))objc_msgSend)(
+    if (![timelineView respondsToSelector:@selector(skimmingPlayheadTime)]) return NO;
+    CMTime skimTime = ((CMTime (*)(id, SEL))SPLICEKIT_SNAP_STRET_MSG)(
         timelineView, @selector(skimmingPlayheadTime));
     return CMTimeCompare(snapTime, skimTime) == 0;
 }
