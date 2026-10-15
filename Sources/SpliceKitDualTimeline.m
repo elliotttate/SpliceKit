@@ -33,6 +33,10 @@ static IMP sOriginalLayoutManagerExistingModuleFromLayout = NULL;
 static BOOL sDualTimelineInstalled = NO;
 
 static __weak id sFocusedEditorContainer = nil;
+// The container whose editor state was last rebound (_makeEditorActive:). Kept apart from
+// sFocusedEditorContainer, which the activeEditorContainer swizzle and the first-responder
+// handler also update without rebinding.
+static __weak id sReboundEditorContainer = nil;
 static __weak id sSecondaryContentBrowserModule = nil;
 static __weak id sSecondaryRootWindowModule = nil;
 
@@ -453,6 +457,7 @@ static void SpliceKit_dualTimelineSetFocusedContainer(id container, BOOL rebindE
     sFocusedEditorContainer = container;
 
     if (!rebindEditorState) return;
+    sReboundEditorContainer = container;
 
     id editorModule = SpliceKit_dualTimelineEditorModuleForContainer(container);
     SEL makeActiveSel = NSSelectorFromString(@"_makeEditorActive:");
@@ -786,7 +791,13 @@ static void SpliceKit_dualTimelineSwizzledWindowDidBecomeKey(id self, SEL _cmd, 
     }
 
     if (SpliceKit_dualTimelineEditorModuleForContainer(self)) {
-        SpliceKit_dualTimelineSetFocusedContainer(self, YES);
+        // Only rebind editor state when a different editor container becomes key. The same
+        // window becomes key again on app switches and when sheets/panels close; rebinding then
+        // calls _makeEditorActive:, which pushes the timeline selection to the inspector and wipes
+        // a browser selection ("Nothing to Inspect" after Cmd-Tab). Compare with the container
+        // last rebound, not sFocusedEditorContainer, which other paths move without rebinding.
+        BOOL switchingContainers = (self != sReboundEditorContainer);
+        SpliceKit_dualTimelineSetFocusedContainer(self, switchingContainers);
     }
 }
 
