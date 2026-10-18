@@ -1,0 +1,326 @@
+{
+  "fcp_version": "12.4",
+  "fcp_build": "454072",
+  "evidence_level": "static",
+  "source": "Research report B, B-evidence/objc-methods.jsonl.gz (otool and nm snapshot)",
+  "warning": "Selector/ABI evidence is not proof of argument semantics, native undo, persistence or rendering.",
+  "methods": [
+    {
+      "class": "FFAnchoredCaption",
+      "kind": "-",
+      "selector": "text",
+      "types": "@16@0:8",
+      "otool_line": 1327,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredCaption",
+      "kind": "-",
+      "selector": "setClippedRange:",
+      "types": "v64@0:8{?={?=qiIq}{?=qiIq}}16",
+      "otool_line": 1354,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredCaption",
+      "kind": "-",
+      "selector": "updateCaptionTextBlock:withAttributedStrings:",
+      "types": "v32@0:8@16@24",
+      "otool_line": 1381,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredCaption",
+      "kind": "-",
+      "selector": "setRole:",
+      "types": "v24@0:8@16",
+      "otool_line": 1453,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredCaption",
+      "kind": "-",
+      "selector": "captionTextBlocks",
+      "types": "@16@0:8",
+      "otool_line": 1495,
+      "nm_line": null
+    },
+    {
+      "class": "FFCaptionTextBlock",
+      "kind": "-",
+      "selector": "attributedStrings",
+      "types": "@16@0:8",
+      "otool_line": 7833,
+      "nm_line": null
+    },
+    {
+      "class": "FFCaptionTextBlock",
+      "kind": "-",
+      "selector": "text",
+      "types": "@16@0:8",
+      "otool_line": 7848,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredCollection",
+      "kind": "-",
+      "selector": "effectiveRangeOfObject:",
+      "types": "{?={?=qiIq}{?=qiIq}}24@0:8@16",
+      "otool_line": 26718,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredComponent",
+      "kind": "-",
+      "selector": "roleUID",
+      "types": "@16@0:8",
+      "otool_line": 28797,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredComponent",
+      "kind": "-",
+      "selector": "persistentID",
+      "types": "@16@0:8",
+      "otool_line": 28830,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredGeneratorComponent",
+      "kind": "-",
+      "selector": "initWithEffectID:duration:sampleDuration:",
+      "types": "@72@0:8@16{?=qiIq}24{?=qiIq}48",
+      "otool_line": 29118,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredObject",
+      "kind": "-",
+      "selector": "anchoredLane",
+      "types": "q16@0:8",
+      "otool_line": 32726,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredObject",
+      "kind": "-",
+      "selector": "clippedRange",
+      "types": "{?={?=qiIq}{?=qiIq}}16@0:8",
+      "otool_line": 32996,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredObject",
+      "kind": "-",
+      "selector": "setClippedRange:",
+      "types": "v64@0:8{?={?=qiIq}{?=qiIq}}16",
+      "otool_line": 33002,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredObject",
+      "kind": "-",
+      "selector": "mediaRange",
+      "types": "{?={?=qiIq}{?=qiIq}}16@0:8",
+      "otool_line": 33998,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredObject",
+      "kind": "-",
+      "selector": "sampleDuration",
+      "types": "{?=qiIq}16@0:8",
+      "otool_line": 34037,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredObject",
+      "kind": "-",
+      "selector": "isRetimed",
+      "types": "B16@0:8",
+      "otool_line": 34316,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredSequence(FFCreateCommand)",
+      "kind": "-",
+      "selector": "operationAddTransitionsToObjectsOnSpineObject:spineObjectsToAddTransition:before:after:spineTransitionClipsCreated:effects:transitionDuration:transitionOverlapType:reportErrors:error:",
+      "types": "B96@0:8@16@24B32B36^@40@48{?=qiIq}56i80B84^@88",
+      "otool_line": 39466,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredSequence(FFAnchoredSequenceActions)",
+      "kind": "-",
+      "selector": "_transitionTypeDictionaryForTransitionID:",
+      "types": "@24@0:8@16",
+      "otool_line": 39718,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredSequence(FFAnchoredSequenceActions)",
+      "kind": "-",
+      "selector": "actionAnchorItem:withAnchorInLocalTime:atTime:inContainer:inContainerAnchorLane:error:",
+      "types": "B96@0:8@16{?=qiIq}24{?=qiIq}48@72q80^@88",
+      "otool_line": 39964,
+      "nm_line": null
+    },
+    {
+      "class": "FFAnchoredSequence(FFAnchoredSequenceActions)",
+      "kind": "-",
+      "selector": "operationRemoveTransitionPreservingTime:coerceEdit:toTime:",
+      "types": "B52@0:8@16B24{?=qiIq}28",
+      "otool_line": 40141,
+      "nm_line": null
+    },
+    {
+      "class": "FFBaseDSObject",
+      "kind": "-",
+      "selector": "undoHandler",
+      "types": "@16@0:8",
+      "otool_line": 86041,
+      "nm_line": null
+    },
+    {
+      "class": "FFRole",
+      "kind": "-",
+      "selector": "isCaption",
+      "types": "B16@0:8",
+      "otool_line": 104379,
+      "nm_line": null
+    },
+    {
+      "class": "FFRole",
+      "kind": "-",
+      "selector": "captionFormat",
+      "types": "@16@0:8",
+      "otool_line": 104382,
+      "nm_line": null
+    },
+    {
+      "class": "FFRole",
+      "kind": "-",
+      "selector": "displayName",
+      "types": "@16@0:8",
+      "otool_line": 104436,
+      "nm_line": null
+    },
+    {
+      "class": "FFRole",
+      "kind": "-",
+      "selector": "mainRole",
+      "types": "@16@0:8",
+      "otool_line": 104445,
+      "nm_line": null
+    },
+    {
+      "class": "FFRole",
+      "kind": "-",
+      "selector": "uuid",
+      "types": "@16@0:8",
+      "otool_line": 104493,
+      "nm_line": null
+    },
+    {
+      "class": "FFRole",
+      "kind": "-",
+      "selector": "languageIdentifier",
+      "types": "@16@0:8",
+      "otool_line": 104514,
+      "nm_line": null
+    },
+    {
+      "class": "FFUndoHandler",
+      "kind": "-",
+      "selector": "undoableBegin:",
+      "types": "v24@0:8@16",
+      "otool_line": 112190,
+      "nm_line": null
+    },
+    {
+      "class": "FFUndoHandler",
+      "kind": "-",
+      "selector": "undoableEnd:save:error:",
+      "types": "B36@0:8@16B24^@28",
+      "otool_line": 112193,
+      "nm_line": null
+    },
+    {
+      "class": "FFHeXFormEffect",
+      "kind": "-",
+      "selector": "getPixelPositionAtTime:x:y:z:",
+      "types": "v64@0:8{?=qiIq}16^d40^d48^d56",
+      "otool_line": 154971,
+      "nm_line": null
+    },
+    {
+      "class": "FFHeXFormEffect",
+      "kind": "-",
+      "selector": "setPixelPositionAtTime:curveX:curveY:curveZ:options:",
+      "types": "v68@0:8{?=qiIq}16d40d48d56I64",
+      "otool_line": 154989,
+      "nm_line": null
+    },
+    {
+      "class": "FFPencilEffect",
+      "kind": "-",
+      "selector": "textFieldCount",
+      "types": "Q16@0:8",
+      "otool_line": 164022,
+      "nm_line": null
+    },
+    {
+      "class": "FFPencilEffect",
+      "kind": "-",
+      "selector": "textForField:",
+      "types": "@24@0:8Q16",
+      "otool_line": 164025,
+      "nm_line": null
+    },
+    {
+      "class": "FFPencilEffect",
+      "kind": "-",
+      "selector": "setText:forField:",
+      "types": "v32@0:8@16Q24",
+      "otool_line": 164031,
+      "nm_line": null
+    },
+    {
+      "class": "FFCutawayEffects",
+      "kind": "+",
+      "selector": "transformEffectForObject:createIfAbsent:",
+      "types": "@28@0:8@16B24",
+      "otool_line": 184299,
+      "nm_line": null
+    },
+    {
+      "class": "FFCutawayEffects",
+      "kind": "+",
+      "selector": "transformEffectForObject:",
+      "types": "@24@0:8@16",
+      "otool_line": 184302,
+      "nm_line": null
+    },
+    {
+      "class": "FFEffect",
+      "kind": "-",
+      "selector": "storeForUndo",
+      "types": "@16@0:8",
+      "otool_line": 184501,
+      "nm_line": null
+    },
+    {
+      "class": "FFEffect",
+      "kind": "-",
+      "selector": "effectID",
+      "types": "@16@0:8",
+      "otool_line": 184504,
+      "nm_line": null
+    }
+  ],
+  "unverified_optional_motion_selectors": [
+    "syncChannelStateForXMLExport",
+    "saveDirtyTextToEffectValues",
+    "_channelsChanged"
+  ]
+}

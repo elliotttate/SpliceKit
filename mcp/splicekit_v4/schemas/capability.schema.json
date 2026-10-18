@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SpliceKit v4 capability descriptor",
+  "type": "object",
+  "required": [
+    "name",
+    "description",
+    "input_schema",
+    "output_schema",
+    "backend",
+    "undo_kind",
+    "readback_supported",
+    "evidence_level",
+    "requires_fcp_build",
+    "known_limitations",
+    "write_supported"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": [
+        "string",
+        "integer"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "category": {
+      "type": "string"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "object"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "output_schema": {
+      "type": [
+        "object",
+        "boolean"
+      ]
+    },
+    "backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "method": {
+      "type": "string",
+      "pattern": "^v4\\."
+    },
+    "local_handler": {
+      "enum": [
+        "plan.validate",
+        "plan.preview_diff",
+        "plan.apply",
+        "review.capture"
+      ]
+    },
+    "read_supported": {
+      "type": "boolean"
+    },
+    "write_supported": {
+      "type": "boolean",
+      "default": false
+    },
+    "readback_supported": {
+      "type": "boolean"
+    },
+    "atomicity": {
+      "type": "string"
+    },
+    "undo_kind": {
+      "enum": [
+        "native_group",
+        "none",
+        "unknown"
+      ]
+    },
+    "evidence_level": {
+      "enum": [
+        "static",
+        "offline_tested",
+        "live_verified",
+        "production"
+      ]
+    },
+    "requires_fcp_build": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "known_limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "operation_kind": {
+      "enum": [
+        "read",
+        "mutation",
+        "admission"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "method"
+      ],
+      "not": {
+        "required": [
+          "local_handler"
+        ]
+      }
+    },
+    {
+      "required": [
+        "local_handler"
+      ],
+      "not": {
+        "required": [
+          "method"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1115 @@
+{
+  "schema": "splicekit.live-plan/1",
+  "id": "titles",
+  "template": true,
+  "description": "Offline-authored integration template. Bind fixture identities, verify baseline prerequisites, and explicitly remove template before live use. Each mutation is an independent apply/readback/owned-undo cycle. No live result is claimed.",
+  "fixture": {
+    "library_name": "SpliceKit-Test-v4",
+    "project": "SpliceKit-Test-30",
+    "frame_duration": "1/30s",
+    "clip_id": "REPLACE_WITH_NATIVE_PERSISTENT_ID",
+    "effect_a": "REPLACE_WITH_NATIVE_GAUSSIAN_A_FILE_UUID",
+    "effect_b": "REPLACE_WITH_NATIVE_GAUSSIAN_B_FILE_UUID",
+    "gaussian_id": "REPLACE_WITH_CATALOG_EFFECT_ID",
+    "letterbox_id": "REPLACE_WITH_CATALOG_LETTERBOX_ID",
+    "colorize_id": "REPLACE_WITH_CATALOG_COLORIZE_ID",
+    "letterbox_instance": "REPLACE_WITH_LETTERBOX_FILE_UUID",
+    "colorize_instance": "REPLACE_WITH_COLORIZE_FILE_UUID",
+    "amount_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "scale_path": "/intrinsic/transform/channels/9999/100",
+    "enum_path": "/effects/REPLACE_INSTANCE/channels/9999/101",
+    "color_path": "/effects/REPLACE_INSTANCE/channels/9999/102",
+    "enum_value": 2,
+    "title_id": "REPLACE_WITH_NATIVE_TITLE_PERSISTENT_ID",
+    "caption_id": "REPLACE_WITH_NATIVE_CAPTION_PERSISTENT_ID",
+    "turkish_role_id": "REPLACE_WITH_NATIVE_CAPTION_ROLE_ID",
+    "left_clip_id": "REPLACE_WITH_LEFT_CLIP_ID",
+    "right_clip_id": "REPLACE_WITH_RIGHT_CLIP_ID",
+    "transition_left": "REPLACE_WITH_OTHER_LEFT_CLIP_ID",
+    "transition_right": "REPLACE_WITH_OTHER_RIGHT_CLIP_ID",
+    "transition_id": "REPLACE_WITH_EXISTING_TRANSITION_ID",
+    "generator_id": "REPLACE_WITH_INSTALLED_GENERATOR_EFFECT_ID",
+    "color_instance_id": "REPLACE_WITH_NATIVE_COLOR_UUID",
+    "color_parameter_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "music_role_uid": "REPLACE_WITH_NATIVE_AUDIO_ROLE_UID",
+    "sample_component_value": 330,
+    "component_start_value": 300,
+    "time": {
+      "value": 330,
+      "timescale": 30,
+      "space": "clip_local"
+    },
+    "key_time": {
+      "value": 360,
+      "timescale": 30,
+      "space": "clip_local"
+    }
+  },
+  "steps": [
+    {
+      "id": "title-insert",
+      "capability": "v4.title.insert",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.title.insert",
+        "params": {
+          "effectID": ".../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti",
+          "lane": 2,
+          "start": {
+            "value": 30,
+            "timescale": 30
+          },
+          "duration": {
+            "value": 60,
+            "timescale": 30
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.title.get",
+          "params": {
+            "clip_id": {
+              "$ref": "/apply/readback/clip_id"
+            }
+          },
+          "expect": {
+            "/readback/fields": {
+              "$ref": "/apply/readback/fields"
+            },
+            "/readback/position": {
+              "$ref": "/apply/readback/position"
+            },
+            "/readback/clip_id": {
+              "$ref": "/apply/readback/clip_id"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "title-text",
+      "capability": "v4.title.set_text",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.title.set_text",
+        "params": {
+          "clip_id": {
+            "$ref": "/fixture/title_id"
+          },
+          "field_index": 0,
+          "text": "Edited title",
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.title.get",
+          "params": {
+            "clip_id": {
+              "$ref": "/fixture/title_id"
+            }
+          },
+          "expect": {
+            "/readback/fields": {
+              "$ref": "/apply/readback/fields"
+            },
+            "/readback/position": {
+              "$ref": "/apply/readback/position"
+            },
+            "/readback/clip_id": {
+              "$ref": "/apply/readback/clip_id"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "title-style",
+      "capability": "v4.title.set_style",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.title.set_style",
+        "params": {
+          "clip_id": {
+            "$ref": "/fixture/title_id"
+          },
+          "field_index": 0,
+          "spans": [
+            {
+              "range": {
+                "start": 6,
+                "length": 5
+              },
+              "style": {
+                "font": "Helvetica",
+                "size": 60,
+                "color": [
+                  1,
+                  0.8,
+                  0,
+                  1
+                ]
+              }
+            }
+          ],
+          "position": {
+            "x": 0,
+            "y": -200
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.title.get",
+          "params": {
+            "clip_id": {
+              "$ref": "/fixture/title_id"
+            }
+          },
+          "expect": {
+            "/readback/fields": {
+              "$ref": "/apply/readback/fields"
+            },
+            "/readback/position": {
+              "$ref": "/apply/readback/position"
+            },
+            "/readback/clip_id": {
+              "$ref": "/apply/readback/clip_id"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "caption-text",
+      "capability": "v4.caption.set_text",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.caption.set_text",
+        "params": {
+          "clip_id": {
+            "$ref": "/fixture/caption_id"
+          },
+          "block_index": 0,
+          "text": "Corrected caption",
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      }
+    },
+    {
+      "id": "caption-timing",
+      "capability": "v4.caption.set_timing",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.caption.set_timing",
+        "params": {
+          "clip_id": {
+            "$ref": "/fixture/caption_id"
+          },
+          "start": {
+            "value": 75,
+            "timescale": 30
+          },
+          "duration": {
+            "value": 45,
+            "timescale": 30
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      }
+    },
+    {
+      "id": "caption-role",
+      "capability": "v4.caption.set_role",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.caption.set_role",
+        "params": {
+          "clip_id": {
+            "$ref": "/fixture/caption_id"
+          },
+          "role_id": {
+            "$ref": "/fixture/turkish_role_id"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      }
+    },
+    {
+      "id": "transition-set",
+      "capability": "v4.transition.set",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.transition.set",
+        "params": {
+          "cut": {
+            "left_clip_id": {
+              "$ref": "/fixture/left_clip_id"
+            },
+            "right_clip_id": {
+              "$ref": "/fixture/right_clip_id"
+            }
+          },
+          "effectID": "FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265",
+          "duration": {
+            "value": 30,
+            "timescale": 30
+          },
+          "handle_policy": "fail",
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      }
+    },
+    {
+      "id": "transition-remove",
+      "capability": "v4.transition.remove",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.transition.remove",
+        "params": {
+          "cut": {
+            "left_clip_id": {
+              "$ref": "/fixture/transition_left"
+            },
+            "right_clip_id": {
+              "$ref": "/fixture/transition_right"
+            }
+          },
+          "transition_id": {
+            "$ref": "/fixture/transition_id"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      }
+    },
+    {
+      "id": "generator-insert",
+      "capability": "v4.generator.insert",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.generator.insert",
+        "params": {
+          "effectID": {
+            "$ref": "/fixture/generator_id"
+          },
+          "lane": 3,
+          "start": {
+            "value": 120,
+            "timescale": 30
+          },
+          "duration": {
+            "value": 60,
+            "timescale": 30
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      }
+    }
+  ],
+  "manual_cases": [
+    {
+      "id": "basic_title_and_word_color",
+      "fixture": "main",
+      "steps": [
+        {
+          "method": "v4.title.insert",
+          "params": {
+            "effectID": ".../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti",
+            "lane": 2,
+            "start": {
+              "value": 24,
+              "timescale": 24
+            },
+            "duration": {
+              "value": 48,
+              "timescale": 24
+            }
+          },
+          "expect": [
+            "ok=true; applied=true",
+            "readback.clip_id is a persistent native identity",
+            "lane=2, start=24/24, duration=48/24, exact effectID"
+          ],
+          "capture": {
+            "title_id": "readback.clip_id",
+            "insert_operation": "operation_id"
+          }
+        },
+        {
+          "method": "v4.title.get",
+          "params": {
+            "clip_id": "${title_id}"
+          },
+          "expect": [
+            "fields contains explicit field_index=0; position is readable"
+          ]
+        },
+        {
+          "method": "v4.title.set_text",
+          "params": {
+            "clip_id": "${title_id}",
+            "field_index": 0,
+            "text": "Hello world"
+          },
+          "expect": [
+            "field 0 text is exactly Hello world; other fields remain unchanged"
+          ],
+          "capture": {
+            "text_operation": "operation_id"
+          }
+        },
+        {
+          "method": "v4.title.set_style",
+          "params": {
+            "clip_id": "${title_id}",
+            "field_index": 0,
+            "spans": [
+              {
+                "range": {
+                  "start": 6,
+                  "length": 5
+                },
+                "style": {
+                  "font": "Helvetica",
+                  "size": 60,
+                  "color": [
+                    1,
+                    0.8,
+                    0,
+                    1
+                  ],
+                  "stroke_color": [
+                    0,
+                    0,
+                    0,
+                    1
+                  ],
+                  "stroke_width": -3,
+                  "shadow": {
+                    "color": [
+                      0,
+                      0,
+                      0,
+                      0.7
+                    ],
+                    "blur": 4,
+                    "x": 2,
+                    "y": -2
+                  },
+                  "alignment": "center"
+                }
+              }
+            ],
+            "position": {
+              "x": 0,
+              "y": -200
+            }
+          },
+          "expect": [
+            "one style run covers UTF-16 [6,11); Hello retains its previous color",
+            "readback.position x=0,y=-200 pixels"
+          ],
+          "capture": {
+            "style_operation": "operation_id"
+          }
+        },
+        {
+          "method": "v4.title.get",
+          "params": {
+            "clip_id": "${title_id}"
+          },
+          "expect": [
+            "same native field and full attributed span values are returned"
+          ]
+        }
+      ],
+      "visual_acceptance": [
+        "Viewer: world is yellow and Hello keeps its base color. Font, stroke, shadow, alignment and vertical position match the readback.",
+        "Export native FCPXML and inspect text/text-style runs and adjust-transform.",
+        "Save and reopen the fixture; verify clip_id, field text, all style runs and position persist."
+      ],
+      "undo_check": {
+        "method": "v4.history.undo",
+        "params": {
+          "target_operation_id": "${style_operation}",
+          "operation_id": "titles-undo-style"
+        },
+        "expect": [
+          "Only style/position revert; Hello world remains.",
+          "Redo with the native undo owner, then verify style readback and viewer again.",
+          "Undo text and insertion separately; unrelated primary clips retain their original identities and timing."
+        ]
+      }
+    },
+    {
+      "id": "native_caption_correction",
+      "fixture": "main",
+      "steps": [
+        {
+          "method": "v4.caption.list",
+          "params": {},
+          "expect": [
+            "Only FFAnchoredCaption objects appear; Motion titles are absent.",
+            "Each caption has stable clip_id, indexed blocks, rational timing and current role_id.",
+            "available_roles includes fixture ITT English and ITT Turkish roles."
+          ],
+          "capture": {
+            "caption_id": "readback.captions[0].clip_id",
+            "turkish_role_id": "readback.available_roles[language=tr].role_id"
+          }
+        },
+        {
+          "method": "v4.caption.set_text",
+          "params": {
+            "clip_id": "${caption_id}",
+            "block_index": 0,
+            "text": "Corrected caption"
+          },
+          "expect": [
+            "native block text exactly matches; untouched blocks retain their content"
+          ],
+          "capture": {
+            "caption_text_operation": "operation_id"
+          }
+        },
+        {
+          "method": "v4.caption.set_timing",
+          "params": {
+            "clip_id": "${caption_id}",
+            "start": {
+              "value": 60,
+              "timescale": 24
+            },
+            "duration": {
+              "value": 36,
+              "timescale": 24
+            }
+          },
+          "expect": [
+            "caption timeline interval [60/24,96/24); source start is not mistaken for timeline start"
+          ],
+          "capture": {
+            "caption_timing_operation": "operation_id"
+          }
+        },
+        {
+          "method": "v4.caption.set_role",
+          "params": {
+            "clip_id": "${caption_id}",
+            "role_id": "${turkish_role_id}"
+          },
+          "expect": [
+            "role_id matches chosen existing role; language tr and format ITT round-trip"
+          ],
+          "capture": {
+            "caption_role_operation": "operation_id"
+          }
+        },
+        {
+          "method": "v4.caption.list",
+          "params": {},
+          "expect": [
+            "text, timing and role are freshly read from the active native sequence"
+          ]
+        }
+      ],
+      "visual_acceptance": [
+        "Caption Viewer and Timeline Index show the corrected text, timing and Turkish ITT role.",
+        "Native FCPXML export preserves caption text, duration, offset and language/format role."
+      ],
+      "undo_check": {
+        "order": [
+          "caption_role_operation",
+          "caption_timing_operation",
+          "caption_text_operation"
+        ],
+        "method": "v4.history.undo",
+        "expect": [
+          "Each owned undo restores its own pre-change state; no other captions or title styles change.",
+          "Native redo returns each corrected state."
+        ]
+      }
+    },
+    {
+      "id": "cross_dissolve_exact_cut",
+      "fixture": "main",
+      "steps": [
+        {
+          "method": "v4.transition.set",
+          "params": {
+            "cut": {
+              "left_clip_id": "${fixture.left_clip_id}",
+              "right_clip_id": "${fixture.right_clip_id}"
+            },
+            "effectID": "FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265",
+            "duration": {
+              "value": 24,
+              "timescale": 24
+            },
+            "handle_policy": "fail"
+          },
+          "expect": [
+            "Cross Dissolve exists only between the two specified primary clip IDs.",
+            "duration=24/24; total project duration and all unrelated clip timings unchanged.",
+            "No preferences, selection or automatic dialog acceptance are changed."
+          ],
+          "capture": {
+            "transition_id": "readback.clip_id",
+            "transition_operation": "operation_id"
+          }
+        },
+        {
+          "method": "v4.transition.set",
+          "params": {
+            "cut": {
+              "left_clip_id": "${fixture.left_clip_id}",
+              "right_clip_id": "${fixture.right_clip_id}"
+            },
+            "effectID": "FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265",
+            "duration": {
+              "value": 12,
+              "timescale": 24
+            },
+            "handle_policy": "fail"
+          },
+          "expect": [
+            "Existing transition is updated, not duplicated; duration=12/24."
+          ],
+          "capture": {
+            "resize_operation": "operation_id",
+            "transition_id": "readback.clip_id"
+          }
+        },
+        {
+          "method": "v4.transition.remove",
+          "params": {
+            "cut": {
+              "left_clip_id": "${fixture.left_clip_id}",
+              "right_clip_id": "${fixture.right_clip_id}"
+            },
+            "transition_id": "${transition_id}"
+          },
+          "expect": [
+            "The guarded transition is removed; project duration and neighboring source trims are preserved."
+          ],
+          "capture": {
+            "remove_operation": "operation_id"
+          }
+        },
+        {
+          "method": "v4.transition.remove",
+          "params": {
+            "cut": {
+              "left_clip_id": "${fixture.left_clip_id}",
+              "right_clip_id": "${fixture.right_clip_id}"
+            }
+          },
+          "expect": [
+            "ok=true; applied=false; readback.removed=false"
+          ]
+        }
+      ],
+      "visual_acceptance": [
+        "Play the cut forward and backward, inspect the Cross Dissolve image blend and audio behavior.",
+        "Export native FCPXML; compare effect UID, transition duration/offset, neighboring source starts and total sequence duration."
+      ],
+      "undo_check": {
+        "method": "v4.history.undo",
+        "params": {
+          "target_operation_id": "${remove_operation}",
+          "operation_id": "titles-undo-transition-remove"
+        },
+        "expect": [
+          "Transition reappears at the same cut with the latest 12-frame duration.",
+          "Undo resize and insertion separately; redo restores the same verified states."
+        ]
+      }
+    },
+    {
+      "id": "explicit_handle_policies",
+      "fixture": "short_handles",
+      "steps": [
+        {
+          "method": "v4.transition.set",
+          "params": {
+            "cut": {
+              "left_clip_id": "${short_handles.left_clip_id}",
+              "right_clip_id": "${short_handles.right_clip_id}"
+            },
+            "effectID": "FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265",
+            "duration": {
+              "value": 24,
+              "timescale": 24
+            },
+            "handle_policy": "fail"
+          },
+          "expect": [
+            "INSUFFICIENT_HANDLES; applied=false; no native mutation or dialog"
+          ]
+        },
+        {
+          "method": "v4.transition.set",
+          "params": {
+            "cut": {
+              "left_clip_id": "${short_handles.left_clip_id}",
+              "right_clip_id": "${short_handles.right_clip_id}"
+            },
+            "effectID": "FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265",
+            "duration": {
+              "value": 24,
+              "timescale": 24
+            },
+            "handle_policy": "shorten"
+          },
+          "expect": [
+            "duration is at most 8/24; shortened=true; project duration unchanged"
+          ],
+          "capture": {
+            "short_transition": "readback.clip_id"
+          }
+        },
+        {
+          "method": "v4.transition.remove",
+          "params": {
+            "cut": {
+              "left_clip_id": "${short_handles.left_clip_id}",
+              "right_clip_id": "${short_handles.right_clip_id}"
+            },
+            "transition_id": "${short_transition}"
+          },
+          "expect": [
+            "Only the shortened transition is removed."
+          ]
+        },
+        {
+          "method": "v4.transition.set",
+          "params": {
+            "cut": {
+              "left_clip_id": "${short_handles.left_clip_id}",
+              "right_clip_id": "${short_handles.right_clip_id}"
+            },
+            "effectID": "FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265",
+            "duration": {
+              "value": 24,
+              "timescale": 24
+            },
+            "handle_policy": "freeze"
+          },
+          "expect": [
+            "native overlap mode 2 requested; duration=24/24 and project duration unchanged",
+            "Do not promote to live_verified until frozen-edge image behavior is inspected."
+          ],
+          "capture": {
+            "freeze_operation": "operation_id"
+          }
+        }
+      ],
+      "visual_acceptance": [
+        "Compare each edge frame against the native clip source, confirm frozen images only fill missing handles.",
+        "Verify no unintended retime sections or ripple trims were created."
+      ],
+      "undo_check": {
+        "method": "v4.history.undo",
+        "params": {
+          "target_operation_id": "${freeze_operation}",
+          "operation_id": "titles-undo-freeze"
+        },
+        "expect": [
+          "Transition and frozen-edge extension revert together.",
+          "Source trim ranges and complete pre-edit FCPXML are restored."
+        ]
+      }
+    },
+    {
+      "id": "native_generator_parameter_handoff",
+      "fixture": "main",
+      "steps": [
+        {
+          "method": "v4.generator.insert",
+          "params": {
+            "effectID": "${catalog.installed_custom_generator_effectID}",
+            "lane": 3,
+            "start": {
+              "value": 96,
+              "timescale": 24
+            },
+            "duration": {
+              "value": 48,
+              "timescale": 24
+            }
+          },
+          "expect": [
+            "native generator has persistent clip_id and separate runtime object_handle",
+            "lane=3, start=96/24, duration=48/24; no title text is written"
+          ],
+          "capture": {
+            "generator_id": "readback.clip_id",
+            "generator_handle": "readback.object_handle",
+            "generator_operation": "operation_id"
+          }
+        },
+        {
+          "integration": "Use the params workstream v4.object.inspect with the returned native clip identity or object_handle, following that workstream schema.",
+          "expect": [
+            "Effect parameter tree is accessible on the same native generator object.",
+            "No fabricated default color key or numeric parameter write occurs during insertion."
+          ]
+        }
+      ],
+      "visual_acceptance": [
+        "Viewer displays the actual installed generator.",
+        "Save/reopen and inspect parameters on the same persistent clip identity."
+      ],
+      "undo_check": {
+        "method": "v4.history.undo",
+        "params": {
+          "target_operation_id": "${generator_operation}",
+          "operation_id": "titles-undo-generator"
+        },
+        "expect": [
+          "Only this generator disappears; redo restores its timing and native parameter tree."
+        ]
+      }
+    },
+    {
+      "id": "invalid_targets_and_unknown_outcome",
+      "fixture": "main",
+      "steps": [
+        {
+          "method": "v4.title.insert",
+          "params": {
+            "effectID": ".../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti",
+            "lane": 2,
+            "start": {
+              "value": 24,
+              "timescale": 24
+            },
+            "duration": {
+              "value": 48,
+              "timescale": 24
+            }
+          },
+          "capture": {
+            "title_id": "readback.clip_id"
+          },
+          "expect": [
+            "Fresh fixture title for invalid-range preflight."
+          ]
+        },
+        {
+          "method": "v4.title.set_text",
+          "params": {
+            "clip_id": "${fixture.stale_clip_id}",
+            "field_index": 0,
+            "text": "Do not apply"
+          },
+          "expect": [
+            "CLIP_NOT_FOUND; applied=false; no undo group"
+          ]
+        },
+        {
+          "method": "v4.title.set_style",
+          "params": {
+            "clip_id": "${title_id}",
+            "field_index": 0,
+            "spans": [
+              {
+                "range": {
+                  "start": 1,
+                  "length": 999
+                },
+                "style": {
+                  "color": [
+                    1,
+                    0,
+                    0,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "expect": [
+            "INVALID_RANGE; applied=false; no changed text or styling"
+          ]
+        }
+      ],
+      "fault_injection": [
+        "Delay main-thread scheduling before execution: MAIN_THREAD_CANCELLED; applied=false; queued edit must never run later.",
+        "Delay an already executing native edit past the timeout: TIMEOUT_UNKNOWN; applied=null. Reconcile via core operation ID and fresh readback; never automatically repeat an insert.",
+        "Force readback mismatch: ok=false, observed readback retained, applied=true or null as appropriate.",
+        "Open a modal dialog: mutation returns MODAL_ACTIVE and leaves the dialog untouched."
+      ],
+      "undo_check": {
+        "expect": [
+          "Preflight failures create no owned undo entry.",
+          "Unknown operations are reconciled before any undo or repeat is attempted."
+        ]
+      }
+    }
+  ],
+  "fixture_setup": [
+    "Open exactly the disposable 30fps fixture library/project; no production library may be open.",
+    "The trimmed main AV clip starts at component-local 300/30s. Preinstall two Gaussian instances A/B in the same section (B after A), Letterbox and Colorize; discover every native parameter path and enum value.",
+    "Use a present intrinsic scale channel with two baseline keys at 360/30s and 390/30s, with the first outgoing segment S-curve. Use a different unkeyed Amount sample at 330/30s.",
+    "Preinstall an editable title with field 0 text Hello world, an English caption with block 0, an existing Turkish role and Music audio role, and a transition on a SECOND cut. The main left/right cut must be transition-free with sufficient handles.",
+    "Baseline gain is unanimated, fades are absent, channels enabled, role is not Music, and rate is 1x. Verify custom generator identity and all fixtures before removing template.",
+    "Repeated native XML exports must be exact except security-scoped bookmark bytes. Preserve raw XML; explicitly compare asset src, duration and format ID; any other instability stops testing.",
+    "Keep complete FCPXML before/after/undo and separate native frame/audio/save-reopen evidence. Scope here is readback/undo only."
+  ]
+}

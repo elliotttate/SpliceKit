@@ -1,0 +1,13 @@
+{
+  "schema": "splicekit.live-plan/1",
+  "id": "example-parameter-30",
+  "template": true,
+  "description": "Mock-only parameter mutation and complete semantic undo at 30 fps. Replace RPCs with the domain's registered contract.",
+  "fixture": {"library_name": "SpliceKit-Test-v4", "project": "SpliceKit-Test-30", "frame_duration": "1/30s"},
+  "steps": [{
+    "id": "opacity", "capability": "v4.parameter.set",
+    "apply": {"method": "v4.parameter.set", "params": {"property": "opacity", "value": 0.5, "expected_revision": {"$ref": "/baseline/revision"}}},
+    "readback": {"method": "v4.parameter.inspect", "params": {}, "expect": {"/state/opacity": 0.5}, "compare": ["/state"]},
+    "undo": {"method": "v4.operation.undo", "params": {"operation_id": {"$ref": "/apply/operation_id"}, "expected_revision": {"$ref": "/apply/revision_after"}}}
+  }]
+}

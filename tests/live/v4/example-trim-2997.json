@@ -1,0 +1,13 @@
+{
+  "schema": "splicekit.live-plan/1",
+  "id": "example-trim-2997",
+  "template": true,
+  "description": "Mock-only rational trim and linked-audio preservation at 30000/1001 fps. RPC names illustrate the plan format.",
+  "fixture": {"library_name": "SpliceKit-Test-v4", "project": "SpliceKit-Test-2997", "frame_duration": "1001/30000s"},
+  "steps": [{
+    "id": "trim-one-frame", "capability": "v4.timeline.trim",
+    "apply": {"method": "v4.timeline.trim", "params": {"duration": "89089/30000s", "expected_revision": {"$ref": "/baseline/revision"}}},
+    "readback": {"method": "v4.timeline.inspect", "params": {}, "expect": {"/state/duration": "89089/30000s", "/state/audio_linked": true}, "compare": ["/state"]},
+    "undo": {"method": "v4.operation.undo", "params": {"operation_id": {"$ref": "/apply/operation_id"}, "expected_revision": {"$ref": "/apply/revision_after"}}}
+  }]
+}

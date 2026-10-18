@@ -1,0 +1,4 @@
+# Python 3.12 wheels avoid building OTIO's C++ bindings on contributor machines.
+opentimelineio==0.18.1
+# CI checks out the adapter commit recorded in tests/fixtures/upstream_otio_fcpxml.
+# Its source plugin manifest is used directly (upstream packaging references a missing LICENSE).

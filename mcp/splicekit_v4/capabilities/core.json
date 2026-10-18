@@ -1,0 +1,1214 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "name": "v4.session.status",
+      "description": "Probe the current FCP session, build gate, library, sequence, modal state, dylib hash and durable ledger.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "native",
+      "evidence_level": "offline_tested",
+      "undo_kind": "none",
+      "readback_supported": true,
+      "method": "v4.session.status",
+      "category": "session",
+      "schema_version": 1,
+      "write_supported": false,
+      "read_supported": true,
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "Live native undo, persistence and visual/audio output are unverified."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "name": "v4.state.revision",
+      "description": "Read the active sequence concurrency token without dismissing dialogs.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "native",
+      "evidence_level": "offline_tested",
+      "undo_kind": "none",
+      "readback_supported": true,
+      "method": "v4.state.revision",
+      "category": "state",
+      "schema_version": 1,
+      "write_supported": false,
+      "read_supported": true,
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "Live native undo, persistence and visual/audio output are unverified."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "name": "v4.history.checkpoint",
+      "description": "Capture an observational native history and sequence checkpoint; does not create an undo entry.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "native",
+      "evidence_level": "offline_tested",
+      "undo_kind": "none",
+      "readback_supported": true,
+      "method": "v4.history.checkpoint",
+      "category": "history",
+      "schema_version": 1,
+      "write_supported": false,
+      "read_supported": true,
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "Live native undo, persistence and visual/audio output are unverified."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "name": "v4.operation.status",
+      "description": "Read a durable operation record and its last result without waiting for the FCP main thread.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "operation_id"
+        ]
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "native",
+      "evidence_level": "offline_tested",
+      "undo_kind": "none",
+      "readback_supported": true,
+      "method": "v4.operation.status",
+      "category": "operation",
+      "schema_version": 1,
+      "write_supported": false,
+      "read_supported": true,
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "Live native undo, persistence and visual/audio output are unverified."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "name": "v4.operation.reconcile",
+      "description": "Observe an operation with fresh native state; optionally record explicit client evidence for UNKNOWN without replay.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "resolution": {
+            "enum": [
+              "applied",
+              "not_applied"
+            ]
+          },
+          "evidence": {
+            "type": "object",
+            "minProperties": 1
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "operation_id"
+        ]
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "native",
+      "evidence_level": "offline_tested",
+      "undo_kind": "none",
+      "readback_supported": true,
+      "method": "v4.operation.reconcile",
+      "category": "operation",
+      "schema_version": 1,
+      "write_supported": false,
+      "read_supported": true,
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "Live native undo, persistence and visual/audio output are unverified."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "name": "v4.history.undo",
+      "description": "Undo only the current session operation that owns the unchanged top native group. Idempotent request IDs are supported.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target_operation_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "operation_id"
+            ]
+          },
+          {
+            "required": [
+              "target_operation_id"
+            ]
+          }
+        ],
+        "required": [
+          "operation_id",
+          "expected_revision"
+        ]
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "native",
+      "evidence_level": "offline_tested",
+      "undo_kind": "none",
+      "readback_supported": true,
+      "method": "v4.history.undo",
+      "category": "history",
+      "schema_version": 1,
+      "write_supported": true,
+      "read_supported": false,
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "Live native undo, persistence and visual/audio output are unverified."
+      ],
+      "atomicity": "owned_top_group_undo",
+      "operation_kind": "mutation"
+    },
+    {
+      "name": "v4.state.snapshot",
+      "description": "Export the active project through the existing native FCPXML exporter and return the entire unfiltered XML as semantic state. No project mutation; private temporary file removed after read.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "native",
+      "evidence_level": "offline_tested",
+      "undo_kind": "none",
+      "readback_supported": true,
+      "method": "v4.state.snapshot",
+      "category": "state",
+      "schema_version": 1,
+      "write_supported": false,
+      "read_supported": true,
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "Exact XML stability across repeated exports and undo requires live verification. No volatile fields are stripped. The observation is bounded at 8 MiB; it does not prove visual/audio output."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    }
+  ]
+}

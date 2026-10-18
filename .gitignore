@@ -64,3 +64,6 @@ edit-helper.yml
 
 # Claude Code per-project memory (never commit)
 .claude/
+
+# Machine-local live-runner safety latches; raw dated evidence is versioned.
+evidence/.quarantine-*.json

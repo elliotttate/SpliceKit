@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "issues",
+    "correction_plan"
+  ],
+  "properties": {
+    "issues": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "range",
+          "evidence_ref",
+          "severity",
+          "category",
+          "target_id",
+          "suggested_operation"
+        ],
+        "properties": {
+          "range": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "start",
+              "end"
+            ],
+            "properties": {
+              "start": {
+                "$ref": "#/$defs/time"
+              },
+              "end": {
+                "$ref": "#/$defs/time"
+              }
+            }
+          },
+          "evidence_ref": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "minor",
+              "major",
+              "critical"
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "suggested_operation": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "correction_plan": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "num",
+        "den"
+      ],
+      "properties": {
+        "num": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "den": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

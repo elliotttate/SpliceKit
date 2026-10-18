@@ -13,6 +13,7 @@
 //
 
 #import "SpliceKit.h"
+#import "SpliceKitV4Core.h"
 #import "SpliceKitSentry.h"
 #import "SpliceKitLogPanel.h"
 #import "SpliceKitTranscriptPanel.h"
@@ -26880,14 +26881,20 @@ void SpliceKit_registerPluginMethod(NSString *fullMethod,
                                      SpliceKitMethodHandler handler,
                                      NSDictionary *metadata) {
     SpliceKit_ensurePluginRegistryInit();
-    sPluginHandlers[fullMethod] = [handler copy];
-    if (metadata) sPluginMethodMeta[fullMethod] = metadata;
+    @synchronized (sPluginHandlers) {
+        sPluginHandlers[fullMethod] = [handler copy];
+        if (metadata) sPluginMethodMeta[fullMethod] = [metadata copy];
+        else if ([fullMethod hasPrefix:@"v4."]) [sPluginMethodMeta removeObjectForKey:fullMethod];
+    }
     SpliceKit_log(@"[Plugin] Registered method: %@", fullMethod);
 }
 
 void SpliceKit_unregisterPluginMethod(NSString *method) {
-    [sPluginHandlers removeObjectForKey:method];
-    [sPluginMethodMeta removeObjectForKey:method];
+    SpliceKit_ensurePluginRegistryInit();
+    @synchronized (sPluginHandlers) {
+        [sPluginHandlers removeObjectForKey:method];
+        [sPluginMethodMeta removeObjectForKey:method];
+    }
 }
 
 void SpliceKit_registerPluginManifest(NSString *pluginId, NSDictionary *manifest) {
@@ -26899,25 +26906,30 @@ void SpliceKit_registerPluginManifest(NSString *pluginId, NSDictionary *manifest
 // metadata with the built-in catalog.
 NSDictionary *SpliceKit_getPluginMetadataSnapshot(void) {
     SpliceKit_ensurePluginRegistryInit();
-    return [sPluginMethodMeta copy] ?: @{};
+    @synchronized (sPluginHandlers) { return [sPluginMethodMeta copy] ?: @{}; }
 }
 
 // plugin.listMethods — returns all registered plugin methods + metadata
 static NSDictionary *SpliceKit_handlePluginListMethods(NSDictionary *params) {
     SpliceKit_ensurePluginRegistryInit();
+    NSDictionary *handlerSnapshot, *metadataSnapshot;
+    @synchronized (sPluginHandlers) {
+        handlerSnapshot = [sPluginHandlers copy];
+        metadataSnapshot = [sPluginMethodMeta copy];
+    }
     NSMutableArray *methods = [NSMutableArray array];
-    for (NSString *name in sPluginMethodMeta) {
-        NSMutableDictionary *entry = [sPluginMethodMeta[name] mutableCopy] ?: [NSMutableDictionary dictionary];
+    for (NSString *name in metadataSnapshot) {
+        NSMutableDictionary *entry = [metadataSnapshot[name] mutableCopy] ?: [NSMutableDictionary dictionary];
         entry[@"name"] = name;
         [methods addObject:entry];
     }
     // Also include methods registered without metadata
-    for (NSString *name in sPluginHandlers) {
-        if (!sPluginMethodMeta[name]) {
+    for (NSString *name in handlerSnapshot) {
+        if (!metadataSnapshot[name]) {
             [methods addObject:@{@"name": name}];
         }
     }
-    return @{@"methods": methods, @"count": @(sPluginHandlers.count)};
+    return @{@"methods": methods, @"count": @(handlerSnapshot.count)};
 }
 
 // plugin.list — returns all loaded plugin manifests
@@ -27626,12 +27638,28 @@ NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         return @{@"error": @{@"code": @(-32600), @"message": @"Invalid Request: method required"}};
     }
 
+    // v4 owns admission, deadlines and the complete result envelope. Route it
+    // before legacy auto-dismiss/async behavior (and the legacy error adapter,
+    // which treats NSNull in envelope.error as a non-dictionary RPC error).
+    if ([method hasPrefix:@"v4."]) {
+        if (rawParams && ![rawParams isKindOfClass:NSDictionary.class])
+            return @{@"result": SpliceKitV4Error(@"", @"INVALID_ARGUMENT", @"v4 params must be an object", @NO, nil)};
+        SpliceKitV4RegisterMethods();
+        SpliceKitMethodHandler handler;
+        NSDictionary *metadata;
+        @synchronized (sPluginHandlers) {
+            handler = sPluginHandlers[method];
+            metadata = sPluginMethodMeta[method];
+        }
+        return @{@"result": SpliceKitV4Dispatch(method, params, handler, metadata)};
+    }
+
     SpliceKit_sentrySetLastRPCMethod(method);
 
     SpliceKit_installEffectDragSwizzlesNow();
 
     // Auto-dismiss known blocking dialogs before processing any request
-    SpliceKit_autoDismissBlockingDialogs();
+    if (!SpliceKitV4IsExecuting()) SpliceKit_autoDismissBlockingDialogs();
 
     // async=true in params: run this request on a worker queue, return a
     // correlation_id immediately, broadcast `command.completed` when done.
@@ -28205,7 +28233,8 @@ NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
     // Fallthrough: check plugin handler registry before returning "method not found"
     else {
         SpliceKit_ensurePluginRegistryInit();
-        SpliceKitMethodHandler pluginHandler = sPluginHandlers[method];
+        SpliceKitMethodHandler pluginHandler;
+        @synchronized (sPluginHandlers) { pluginHandler = sPluginHandlers[method]; }
         if (pluginHandler) {
             result = pluginHandler(params);
         } else {
@@ -28214,7 +28243,7 @@ NSDictionary *SpliceKit_handleRequest(NSDictionary *request) {
         }
     }
 
-    if (result[@"error"] && ![result[@"error"] isKindOfClass:[NSDictionary class]]) {
+    if (result[@"error"] && result[@"error"] != NSNull.null && ![result[@"error"] isKindOfClass:[NSDictionary class]]) {
         return @{@"error": @{@"code": @(-32000), @"message": result[@"error"]}};
     }
 
@@ -28348,6 +28377,7 @@ static void SpliceKit_handleClient(int clientFd) {
 //
 
 void SpliceKit_startControlServer(void) {
+    SpliceKitV4RegisterMethods();
     sClientQueue = dispatch_queue_create("com.splicekit.clients", DISPATCH_QUEUE_SERIAL);
     dispatch_queue_set_specific(sClientQueue, &sClientQueueSpecificKey,
                                 &sClientQueueSpecificKey, NULL);

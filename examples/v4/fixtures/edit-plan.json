@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "project_id": "fixture-project",
+  "sequence_id": "fixture-sequence",
+  "base_revision": "r0",
+  "frame_rate": {
+    "num": 24,
+    "den": 1
+  },
+  "scope": {
+    "target_ids": [
+      "clip-1",
+      "clip-2"
+    ],
+    "allow_ripple": false
+  },
+  "sources": [
+    {
+      "id": "source-1",
+      "duration": {
+        "num": 4,
+        "den": 1
+      },
+      "frame_rate": {
+        "num": 24,
+        "den": 1
+      },
+      "words": [
+        {
+          "id": "word-1",
+          "start": {
+            "num": 0,
+            "den": 1
+          },
+          "end": {
+            "num": 1,
+            "den": 1
+          }
+        },
+        {
+          "id": "word-2",
+          "start": {
+            "num": 1,
+            "den": 1
+          },
+          "end": {
+            "num": 2,
+            "den": 1
+          }
+        }
+      ]
+    }
+  ],
+  "operations": [
+    {
+      "id": "trim-1",
+      "kind": "cut",
+      "capability": "timeline.trim",
+      "args": {
+        "clip_id": "clip-1",
+        "source_id": "source-1",
+        "source_range": {
+          "start": {
+            "num": 0,
+            "den": 1
+          },
+          "end": {
+            "num": 2,
+            "den": 1
+          }
+        },
+        "word_ids": [
+          "word-1",
+          "word-2"
+        ]
+      }
+    },
+    {
+      "id": "opacity-1",
+      "kind": "parameter",
+      "capability": "parameter.set",
+      "args": {
+        "target_id": "clip-1",
+        "parameter_id": "opacity",
+        "value": 0.8
+      }
+    }
+  ]
+}

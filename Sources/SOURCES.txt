@@ -19,6 +19,11 @@ SpliceKitMediaExtensionGuard.m
 SpliceKitVP9.mm
 SpliceKitMKV.m
 SpliceKitServer.m
+SpliceKitV4Media.m
+SpliceKitV4Color.m
+SpliceKitV4Audio.m
+SpliceKitV4Retime.m
+SpliceKitV4Analysis.m
 SpliceKitBridgeMetadata.m
 SpliceKitAsync.m
 SpliceKitLogPanel.m
@@ -47,3 +52,14 @@ SpliceKitImmersivePreviewPanel.mm
 SpliceKitImmersivePreviewRPC.m
 SpliceKitHapticBridge.m
 SpliceKitHapticSnapEmitters.m
+SpliceKitV4Effects.m
+SpliceKitV4Parameters.m
+SpliceKitV4Keyframes.m
+SpliceKitV4TitlesSupport.m
+SpliceKitV4TitleStyles.m
+SpliceKitV4Titles.m
+SpliceKitV4Captions.m
+SpliceKitV4Transitions.m
+SpliceKitV4Result.m
+SpliceKitV4OperationLedger.m
+SpliceKitV4Core.m

@@ -1,0 +1,11 @@
+{
+  "schema": "splicekit.live-suite/1",
+  "plans": [
+    "agent.json",
+    "core.json",
+    "params.json",
+    "titles.json",
+    "media.json"
+  ],
+  "description": "One sequential disposable-fixture run: read-only discovery, core ledger/revision/owned undo, params, titles, media. Mock examples are excluded. Bind identities and remove every template fence before execution."
+}

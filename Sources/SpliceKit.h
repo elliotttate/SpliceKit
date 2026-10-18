@@ -14,6 +14,10 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef SPLICEKIT_VERSION
 #define SPLICEKIT_VERSION "3.1.148"
 #endif
@@ -372,5 +376,9 @@ NSDictionary *SpliceKit_handleStructureGenerateBlocks(NSDictionary *params);
 NSDictionary *SpliceKit_handleStructureGenerateCaptions(NSDictionary *params);
 NSDictionary *SpliceKit_handleStructureRemove(NSDictionary *params);
 NSDictionary *SpliceKit_handleStructureToggle(NSDictionary *params);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SpliceKit_h */

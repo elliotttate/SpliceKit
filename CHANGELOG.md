@@ -6,6 +6,31 @@ notarization ticket, and Sparkle signature live on the
 Sparkle users are notified automatically; manual download is available from the
 same page or via `appcast.xml`.
 
+## [4.0.0-beta] — Unreleased
+
+### Added
+- Opt-in v4 MCP discovery with seven bootstrap tools, 49 registered native RPCs,
+  four Python plan/review capabilities and typed, build-scoped schemas.
+- Durable operation IDs, a single native writer, revision preconditions, explicit
+  pending/UNKNOWN outcomes, native readback and owned top-group undo.
+- Typed effect parameters/keyframes, title text/style, native captions, connected
+  generators/transitions, audio/color/retime controls and blocked analysis admission.
+- Complete native FCPXML snapshots, a sequential 46-step live verification template,
+  compiled registry parity tests and consistent local/macOS CI offline verification.
+
+### Fixed
+- Supply all unconditional BRAW bridge exports when the optional SDK is absent.
+- Preserve explicit `freeze_extend=False` in transition requests and complete effect
+  and transition identifiers in MCP output.
+- Preserve C linkage for ObjC++ API clients and retain `error:null` in v4 results.
+
+### Limitations
+- Native functionality is offline-tested against static FCP 12.4 build 454072
+  evidence. Live undo, rendered/audio output and persistence remain unverified.
+- Analysis execution, restorable multi-step native checkpoints/source-state and
+  attested native viewer review are unavailable and fail closed. Packaging stays
+  at 3.3.9 until a separate release decision.
+
 ## [3.3.9] — 2026-08-29
 
 ### Added

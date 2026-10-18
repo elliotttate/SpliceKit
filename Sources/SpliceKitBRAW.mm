@@ -5588,6 +5588,29 @@ SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_ReadClipMetadata(
 
 #else
 
+SPLICEKIT_BRAW_EXTERN_C NSString *SpliceKitBRAWLookupPathForFormatDescription(CMFormatDescriptionRef format) {
+    (void)format;
+    return nil;
+}
+
+SPLICEKIT_BRAW_EXTERN_C BOOL SpliceKitBRAW_GetScaledDimensions(CFStringRef path, uint32_t scale,
+    uint32_t *width, uint32_t *height) {
+    (void)path; (void)scale;
+    if (width) *width = 0;
+    if (height) *height = 0;
+    return NO;
+}
+
+// Keep every unconditional caller linkable in builds without the optional SDK.
+SPLICEKIT_BRAW_EXTERN_C void SpliceKit_bootstrapBRAWAtLaunchPhase(NSString *phase) {
+    (void)phase;
+}
+
+SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWAVProbe(NSDictionary *params) {
+    (void)params;
+    return @{@"error": @"Blackmagic RAW SDK headers are not available"};
+}
+
 SPLICEKIT_BRAW_EXTERN_C NSDictionary *SpliceKit_handleBRAWProbe(NSDictionary *params) {
     (void)params;
     return @{

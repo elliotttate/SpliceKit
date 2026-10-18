@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "ok",
+    "operation_id",
+    "applied",
+    "readback",
+    "revision_before",
+    "revision_after",
+    "undo",
+    "evidence_level",
+    "warnings",
+    "error"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "operation_id": {
+      "type": "string"
+    },
+    "applied": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "readback": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "revision_before": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "revision_after": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "undo": {
+      "type": "object",
+      "required": [
+        "kind",
+        "label"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "native_group",
+            "none",
+            "unknown"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      }
+    },
+    "evidence_level": {
+      "enum": [
+        "static",
+        "offline_tested",
+        "live_verified"
+      ]
+    },
+    "warnings": {
+      "type": "array"
+    },
+    "error": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "status": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "error": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
+}

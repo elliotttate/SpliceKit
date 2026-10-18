@@ -1,0 +1,933 @@
+{
+  "schema": "splicekit.live-plan/1",
+  "id": "media",
+  "template": true,
+  "description": "Offline-authored integration template. Bind fixture identities, verify baseline prerequisites, and explicitly remove template before live use. Each mutation is an independent apply/readback/owned-undo cycle. No live result is claimed.",
+  "fixture": {
+    "library_name": "SpliceKit-Test-v4",
+    "project": "SpliceKit-Test-30",
+    "frame_duration": "1/30s",
+    "clip_id": "REPLACE_WITH_NATIVE_PERSISTENT_ID",
+    "effect_a": "REPLACE_WITH_NATIVE_GAUSSIAN_A_FILE_UUID",
+    "effect_b": "REPLACE_WITH_NATIVE_GAUSSIAN_B_FILE_UUID",
+    "gaussian_id": "REPLACE_WITH_CATALOG_EFFECT_ID",
+    "letterbox_id": "REPLACE_WITH_CATALOG_LETTERBOX_ID",
+    "colorize_id": "REPLACE_WITH_CATALOG_COLORIZE_ID",
+    "letterbox_instance": "REPLACE_WITH_LETTERBOX_FILE_UUID",
+    "colorize_instance": "REPLACE_WITH_COLORIZE_FILE_UUID",
+    "amount_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "scale_path": "/intrinsic/transform/channels/9999/100",
+    "enum_path": "/effects/REPLACE_INSTANCE/channels/9999/101",
+    "color_path": "/effects/REPLACE_INSTANCE/channels/9999/102",
+    "enum_value": 2,
+    "title_id": "REPLACE_WITH_NATIVE_TITLE_PERSISTENT_ID",
+    "caption_id": "REPLACE_WITH_NATIVE_CAPTION_PERSISTENT_ID",
+    "turkish_role_id": "REPLACE_WITH_NATIVE_CAPTION_ROLE_ID",
+    "left_clip_id": "REPLACE_WITH_LEFT_CLIP_ID",
+    "right_clip_id": "REPLACE_WITH_RIGHT_CLIP_ID",
+    "transition_left": "REPLACE_WITH_OTHER_LEFT_CLIP_ID",
+    "transition_right": "REPLACE_WITH_OTHER_RIGHT_CLIP_ID",
+    "transition_id": "REPLACE_WITH_EXISTING_TRANSITION_ID",
+    "generator_id": "REPLACE_WITH_INSTALLED_GENERATOR_EFFECT_ID",
+    "color_instance_id": "REPLACE_WITH_NATIVE_COLOR_UUID",
+    "color_parameter_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "music_role_uid": "REPLACE_WITH_NATIVE_AUDIO_ROLE_UID",
+    "sample_component_value": 330,
+    "component_start_value": 300,
+    "time": {
+      "value": 330,
+      "timescale": 30,
+      "space": "clip_local"
+    },
+    "key_time": {
+      "value": 360,
+      "timescale": 30,
+      "space": "clip_local"
+    }
+  },
+  "steps": [
+    {
+      "id": "gain-keyframe",
+      "capability": "v4.audio.set_gain",
+      "apply": {
+        "method": "v4.audio.set_gain",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "time": {
+            "value": {
+              "$ref": "/fixture/sample_component_value"
+            },
+            "timescale": 30,
+            "space": "clip_local"
+          },
+          "gain_db": -6,
+          "mode": "keyframe",
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.audio.inspect",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "time": {
+              "value": {
+                "$ref": "/fixture/sample_component_value"
+              },
+              "timescale": 30,
+              "space": "clip_local"
+            }
+          },
+          "expect": {
+            "/readback/has_keyframe": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "fade-in",
+      "capability": "v4.audio.fade",
+      "apply": {
+        "method": "v4.audio.fade",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "edge": "in",
+          "duration": {
+            "value": 15,
+            "timescale": 30
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.audio.inspect",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "time": {
+              "value": {
+                "$ref": "/fixture/sample_component_value"
+              },
+              "timescale": 30,
+              "space": "clip_local"
+            }
+          },
+          "expect": {
+            "/readback/fade_in_seconds": 0.5
+          }
+        }
+      ]
+    },
+    {
+      "id": "source-channel-enable",
+      "capability": "v4.audio.set_channel_map",
+      "apply": {
+        "method": "v4.audio.set_channel_map",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "enabled": [
+            true,
+            false
+          ],
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.audio.get_channel_map",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            }
+          },
+          "expect": {
+            "/readback/channels/1/enabled": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "existing-audio-role",
+      "capability": "v4.audio.set_role",
+      "apply": {
+        "method": "v4.audio.set_role",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "role_uid": {
+            "$ref": "/fixture/music_role_uid"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.audio.get_channel_map",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            }
+          },
+          "expect": {
+            "/readback/target_role_uid": {
+              "$ref": "/fixture/music_role_uid"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "constant-retime",
+      "capability": "v4.retime.set",
+      "apply": {
+        "method": "v4.retime.set",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "mode": "constant",
+          "rate": 2,
+          "ripple": true,
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.retime.inspect",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            }
+          },
+          "expect": {
+            "/readback/constant_rate": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "blocked-object_tracker",
+      "kind": "admission",
+      "capability": "v4.analysis.start",
+      "apply": {
+        "method": "v4.analysis.start",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "kind": "object_tracker",
+          "component_range": {
+            "start": {
+              "value": {
+                "$ref": "/fixture/component_start_value"
+              },
+              "timescale": 30
+            },
+            "duration": {
+              "value": 60,
+              "timescale": 30
+            }
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        },
+        "expect": {
+          "/ok": false,
+          "/applied": false,
+          "/readback/native_started": false,
+          "/readback/ready": false,
+          "/readback/state": "blocked",
+          "/error/code": "UNSUPPORTED_ANALYSIS_ADAPTER"
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": null
+    },
+    {
+      "id": "blocked-shape_mask",
+      "kind": "admission",
+      "capability": "v4.analysis.start",
+      "apply": {
+        "method": "v4.analysis.start",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "kind": "shape_mask",
+          "component_range": {
+            "start": {
+              "value": {
+                "$ref": "/fixture/component_start_value"
+              },
+              "timescale": 30
+            },
+            "duration": {
+              "value": 60,
+              "timescale": 30
+            }
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        },
+        "expect": {
+          "/ok": false,
+          "/applied": false,
+          "/readback/native_started": false,
+          "/readback/ready": false,
+          "/readback/state": "blocked",
+          "/error/code": "UNSUPPORTED_ANALYSIS_ADAPTER"
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": null
+    },
+    {
+      "id": "blocked-magnetic_mask",
+      "kind": "admission",
+      "capability": "v4.analysis.start",
+      "apply": {
+        "method": "v4.analysis.start",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "kind": "magnetic_mask",
+          "component_range": {
+            "start": {
+              "value": {
+                "$ref": "/fixture/component_start_value"
+              },
+              "timescale": 30
+            },
+            "duration": {
+              "value": 60,
+              "timescale": 30
+            }
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        },
+        "expect": {
+          "/ok": false,
+          "/applied": false,
+          "/readback/native_started": false,
+          "/readback/ready": false,
+          "/readback/state": "blocked",
+          "/error/code": "UNSUPPORTED_ANALYSIS_ADAPTER"
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": null
+    },
+    {
+      "id": "blocked-auto_mask",
+      "kind": "admission",
+      "capability": "v4.analysis.start",
+      "apply": {
+        "method": "v4.analysis.start",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "kind": "auto_mask",
+          "component_range": {
+            "start": {
+              "value": {
+                "$ref": "/fixture/component_start_value"
+              },
+              "timescale": 30
+            },
+            "duration": {
+              "value": 60,
+              "timescale": 30
+            }
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        },
+        "expect": {
+          "/ok": false,
+          "/applied": false,
+          "/readback/native_started": false,
+          "/readback/ready": false,
+          "/readback/state": "blocked",
+          "/error/code": "UNSUPPORTED_ANALYSIS_ADAPTER"
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": null
+    },
+    {
+      "id": "blocked-smart_conform",
+      "kind": "admission",
+      "capability": "v4.analysis.start",
+      "apply": {
+        "method": "v4.analysis.start",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "kind": "smart_conform",
+          "component_range": {
+            "start": {
+              "value": {
+                "$ref": "/fixture/component_start_value"
+              },
+              "timescale": 30
+            },
+            "duration": {
+              "value": 60,
+              "timescale": 30
+            }
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        },
+        "expect": {
+          "/ok": false,
+          "/applied": false,
+          "/readback/native_started": false,
+          "/readback/ready": false,
+          "/readback/state": "blocked",
+          "/error/code": "UNSUPPORTED_ANALYSIS_ADAPTER"
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": null
+    },
+    {
+      "id": "blocked-stabilizer",
+      "kind": "admission",
+      "capability": "v4.analysis.start",
+      "apply": {
+        "method": "v4.analysis.start",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "kind": "stabilizer",
+          "component_range": {
+            "start": {
+              "value": {
+                "$ref": "/fixture/component_start_value"
+              },
+              "timescale": 30
+            },
+            "duration": {
+              "value": 60,
+              "timescale": 30
+            }
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          }
+        },
+        "expect": {
+          "/ok": false,
+          "/applied": false,
+          "/readback/native_started": false,
+          "/readback/ready": false,
+          "/readback/state": "blocked",
+          "/error/code": "UNSUPPORTED_ANALYSIS_ADAPTER"
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": null
+    }
+  ],
+  "manual_cases": [
+    {
+      "method": "v4.color.inspect",
+      "steps": [
+        "Inspect a Board, Wheels, Curves, Hue-Sat and Custom LUT fixture instance at a nonzero clip-local time.",
+        "Compare native instance IDs and full discovered parameter trees with exported FCPXML."
+      ],
+      "expected_readback": [
+        "Exact correction instance and typed path tree; custom curve writes unsupported; preview metadata remains unknown until measured."
+      ],
+      "undo_check": "Read only: assert identical before/after native XML."
+    },
+    {
+      "method": "v4.color.apply_adjustment",
+      "steps": [
+        "Create each family using the full catalog effect_id; rediscover its fileUUID.",
+        "Bind exposure/saturation/wheel/LUT logical names to that exact instance tree. Write a typed value and inspect independently.",
+        "Attempt a custom Curves/Hue-Sat control-point write; require refusal with no state change."
+      ],
+      "expected_readback": [
+        "One new correction identity after creation; requested native values after adjustment; no sibling correction changed."
+      ],
+      "undo_check": "Owned undo must restore full effect order, identities and all parameter/keyframe data. Create and adjustment are separate undo cycles."
+    },
+    {
+      "method": "v4.audio.inspect",
+      "steps": [
+        "Use a trimmed and retimed AV fixture with native audio identifier 0.",
+        "Read two times with different automation values and compare to FCPXML."
+      ],
+      "expected_readback": [
+        "Native linear gain, converted dB, local time, exact keyframe count/presence, both fades, role UID and channel enable map."
+      ],
+      "undo_check": "Read only: no semantic or revision change."
+    },
+    {
+      "method": "v4.audio.set_gain",
+      "steps": [
+        "Set -6 dB constant on an unanimated fixture.",
+        "Insert a keyframe at component-local 11s; verify a different-time key survives.",
+        "Attempt constant write on animated gain; require refusal."
+      ],
+      "expected_readback": [
+        "Native linear gain near 0.501187233627; exact-time keyframe presence."
+      ],
+      "undo_check": "Compare full gain curve plus fades, routing, role and other clip state after owned undo; listen to a native mix excerpt separately."
+    },
+    {
+      "method": "v4.audio.fade",
+      "steps": [
+        "Set each edge to 15/30s; independently read native durations.",
+        "Set duration zero to remove one edge; ensure the other edge survives."
+      ],
+      "expected_readback": [
+        "Native duration and requested edge; no claimed fade-type enum mapping."
+      ],
+      "undo_check": "Owned undo restores both fade channels and gain animation. Verify native audio for clicks independently."
+    },
+    {
+      "method": "v4.audio.effect.add",
+      "steps": [
+        "Insert an installed audio effect using full effectID into the AV fixture.",
+        "Inspect both video and audio-component stacks."
+      ],
+      "expected_readback": [
+        "One exact new native instance, correct audio component and effect order."
+      ],
+      "undo_check": "Owned undo removes only that new instance; compare all effect state and channel layout."
+    },
+    {
+      "method": "v4.audio.effect.configure",
+      "steps": [
+        "Bind one EQ band frequency/Q/gain and compressor threshold/ratio to discovered paths.",
+        "Write at explicit component-local times; independently inspect each."
+      ],
+      "expected_readback": [
+        "Stored typed native values without inferred Hz/ms/dB scaling."
+      ],
+      "undo_check": "Owned undo restores complete AU parameter state, preset dirty flag and animation."
+    },
+    {
+      "method": "v4.audio.apply_preset",
+      "steps": [
+        "Use a factory preset ID independently discovered in a native fixture.",
+        "Apply to one of two identical compressor instances."
+      ],
+      "expected_readback": [
+        "The requested presetID on the targeted fileUUID; inspect all preset side effects separately."
+      ],
+      "undo_check": "Owned undo restores the complete AU state, including pre-existing parameter animation."
+    },
+    {
+      "method": "v4.audio.get_channel_map",
+      "steps": [
+        "Read a two-channel and a four-channel fixture.",
+        "Compare source indices/enabled flags and role UID to native exported state."
+      ],
+      "expected_readback": [
+        "Exactly one entry per source channel; no fabricated routing or stereo-group model."
+      ],
+      "undo_check": "Read only: no native mutation or undo entry."
+    },
+    {
+      "method": "v4.audio.set_channel_map",
+      "steps": [
+        "Disable one source channel; inspect the exact clip.",
+        "Reject wrong-length and nonboolean arrays before mutation."
+      ],
+      "expected_readback": [
+        "Only the requested existing source enable flags change; groups and routing unchanged."
+      ],
+      "undo_check": "Owned undo restores the entire original channel map and audible channel output."
+    },
+    {
+      "method": "v4.audio.set_role",
+      "steps": [
+        "With exactly one fixture library open, assign an existing audio role UID.",
+        "Attempt a video role and an ambiguous multi-library role; require refusal."
+      ],
+      "expected_readback": [
+        "Exact requested audio UID; video/caption roles and source-channel assignments unaffected."
+      ],
+      "undo_check": "Owned undo restores role/subrole graph and FCPXML role sources."
+    },
+    {
+      "method": "v4.audio.ducking.plan",
+      "steps": [
+        "Provide exact music/dialogue clip identities and -12 dB duck amount.",
+        "Inspect the plan and verify no native call/keyframe was submitted."
+      ],
+      "expected_readback": [
+        "state=planned, execution_supported=false, applied=false; dialogue activity and automation policy still required."
+      ],
+      "undo_check": "No undo action: native state and revision must remain unchanged."
+    },
+    {
+      "method": "v4.retime.inspect",
+      "steps": [
+        "Use trimmed constant, reverse, freeze, nonlinear ramp and nested-storyline fixtures.",
+        "Sample timeline boundaries, midpoints and each speed boundary with rational times."
+      ],
+      "expected_readback": [
+        "Native source/component/timeline relations; no fabricated unique inverse or complete curve export."
+      ],
+      "undo_check": "Read only: no timeline or effect changes."
+    },
+    {
+      "method": "v4.retime.set",
+      "steps": [
+        "Run constant 0.5x/2x with ripple true and false.",
+        "Run one reverse toggle, a hold at an explicit component time and to/from-zero ramps over explicit ranges.",
+        "Reject arbitrary piecewise arrays; inspect all neighboring clips after ripple."
+      ],
+      "expected_readback": [
+        "Stored rate, segment count, duration and native source/timeline samples."
+      ],
+      "undo_check": "Owned undo restores the complete retime curve, all affected neighbor ranges and connected AV sync; native playback visual acceptance separately."
+    },
+    {
+      "method": "v4.analysis.start",
+      "steps": [
+        "For all six kinds submit one exact clip and component range.",
+        "Assert UNSUPPORTED_ANALYSIS_ADAPTER and compare independent native state."
+      ],
+      "expected_readback": [
+        "state=blocked, native_started=false, ready=false; no task execution or fabricated mask geometry."
+      ],
+      "undo_check": "No native undo: admission must not change the project or native revision."
+    },
+    {
+      "method": "v4.analysis.status",
+      "steps": [
+        "Read a blocked admission before and after local cancellation.",
+        "Query an unknown job and after FCP process restart."
+      ],
+      "expected_readback": [
+        "Blocked/cancelled states remain not-ready; stale IDs fail UNKNOWN_JOB."
+      ],
+      "undo_check": "Read only: no project mutation."
+    },
+    {
+      "method": "v4.analysis.cancel",
+      "steps": [
+        "Cancel one blocked local admission twice.",
+        "Ensure unrelated global FCP analysis tasks are untouched."
+      ],
+      "expected_readback": [
+        "state=cancelled, native_started=false, ready=false, applied=false."
+      ],
+      "undo_check": "No native undo: only the local admission changes."
+    },
+    {
+      "method": "v4.analysis.result",
+      "steps": [
+        "Request a blocked and a cancelled admission result."
+      ],
+      "expected_readback": [
+        "ANALYSIS_NOT_READY and null result; no success inferred from idle/waiting flags."
+      ],
+      "undo_check": "Read only: no project mutation."
+    }
+  ],
+  "fixture_setup": [
+    "Open exactly the disposable 30fps fixture library/project; no production library may be open.",
+    "The trimmed main AV clip starts at component-local 300/30s. Preinstall two Gaussian instances A/B in the same section (B after A), Letterbox and Colorize; discover every native parameter path and enum value.",
+    "Use a present intrinsic scale channel with two baseline keys at 360/30s and 390/30s, with the first outgoing segment S-curve. Use a different unkeyed Amount sample at 330/30s.",
+    "Preinstall an editable title with field 0 text Hello world, an English caption with block 0, an existing Turkish role and Music audio role, and a transition on a SECOND cut. The main left/right cut must be transition-free with sufficient handles.",
+    "Baseline gain is unanimated, fades are absent, channels enabled, role is not Music, and rate is 1x. Verify custom generator identity and all fixtures before removing template.",
+    "Repeated native XML exports must be exact except security-scoped bookmark bytes. Preserve raw XML; explicitly compare asset src, duration and format ID; any other instability stops testing.",
+    "Keep complete FCPXML before/after/undo and separate native frame/audio/save-reopen evidence. Scope here is readback/undo only."
+  ]
+}

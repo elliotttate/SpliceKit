@@ -1,0 +1,33 @@
+{
+  "schema": "splicekit.live-plan/1",
+  "id": "baseline-preflight",
+  "description": "Read-only prerequisite for fixture binding: prove repeated complete native XML observations before any operation. No mutation or capability promotion.",
+  "fixture": {
+    "library_name": "SpliceKit-Test-v4",
+    "project": "SpliceKit-Test-30",
+    "frame_duration": "1/30s"
+  },
+  "steps": [{
+    "id": "session-baseline-stability",
+    "capability": "v4.session.status",
+    "kind": "read",
+    "apply": {
+      "method": "v4.session.status",
+      "params": {},
+      "expect": {
+        "/ok": true,
+        "/applied": false,
+        "/readback/fcp_build": "454072",
+        "/readback/writes_enabled": true,
+        "/readback/modal/present": false
+      }
+    },
+    "readback": {
+      "method": "v4.state.snapshot",
+      "params": {},
+      "expect": {"/readback/state": {"$ref": "/baseline/readback/state"}},
+      "compare": ["/readback/state", "/readback/comparison"],
+      "revision": "/revision_after"
+    }
+  }]
+}

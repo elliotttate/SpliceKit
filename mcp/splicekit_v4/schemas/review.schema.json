@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["project_id", "sequence_id", "expected_revision", "mode", "range"],
+  "properties": {
+    "project_id": {"type": "string", "minLength": 1},
+    "sequence_id": {"type": "string", "minLength": 1},
+    "expected_revision": {"type": "string", "minLength": 1},
+    "mode": {"enum": ["viewer_frame", "native_share"]},
+    "range": {"type": "object", "additionalProperties": false, "required": ["start", "end"], "properties": {"start": {"$ref": "#/$defs/time"}, "end": {"$ref": "#/$defs/time"}}},
+    "max_dimension": {"type": "integer", "minimum": 64, "maximum": 1280, "default": 640}
+  },
+  "$defs": {"time": {"type": "object", "additionalProperties": false, "required": ["num", "den"], "properties": {"num": {"type": "integer", "minimum": 0}, "den": {"type": "integer", "minimum": 1}}}}
+}

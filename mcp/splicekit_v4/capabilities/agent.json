@@ -1,0 +1,1852 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "schema_version": 1,
+      "name": "plan.validate",
+      "description": "Validate an EditPlan, exact source/word/frame boundaries and capability arguments without contacting FCP.",
+      "category": "plan",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plan"
+        ],
+        "properties": {
+          "plan": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "EditPlan v1 (half-open source and timeline ranges)",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "project_id",
+              "sequence_id",
+              "base_revision",
+              "frame_rate",
+              "scope",
+              "sources",
+              "operations"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "project_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sequence_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "base_revision": {
+                "type": "string",
+                "minLength": 1
+              },
+              "frame_rate": {
+                "$ref": "#/$defs/time"
+              },
+              "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "target_ids",
+                  "allow_ripple"
+                ],
+                "properties": {
+                  "target_ids": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "allow_ripple": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "duration",
+                    "frame_rate",
+                    "words"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "duration": {
+                      "$ref": "#/$defs/time"
+                    },
+                    "frame_rate": {
+                      "$ref": "#/$defs/time"
+                    },
+                    "words": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "start",
+                          "end"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "start": {
+                            "$ref": "#/$defs/time"
+                          },
+                          "end": {
+                            "$ref": "#/$defs/time"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "cut"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "clip_id",
+                            "source_id",
+                            "source_range",
+                            "word_ids"
+                          ],
+                          "properties": {
+                            "clip_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source_range": {
+                              "$ref": "#/$defs/range"
+                            },
+                            "word_ids": {
+                              "type": "array",
+                              "minItems": 1,
+                              "uniqueItems": true,
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "title"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "target_id",
+                            "text",
+                            "timeline_range"
+                          ],
+                          "properties": {
+                            "target_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "text": {
+                              "type": "string"
+                            },
+                            "timeline_range": {
+                              "$ref": "#/$defs/range"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "effect"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "target_id",
+                            "effect_id",
+                            "parameters"
+                          ],
+                          "properties": {
+                            "target_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "effect_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "parameters": {
+                              "type": "object"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "parameter"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "target_id",
+                            "parameter_id",
+                            "value"
+                          ],
+                          "properties": {
+                            "target_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "parameter_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "value": {}
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "transition"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "left_clip_id",
+                            "right_clip_id",
+                            "duration"
+                          ],
+                          "properties": {
+                            "left_clip_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "right_clip_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "duration": {
+                              "$ref": "#/$defs/time"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "$defs": {
+          "time": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "num",
+              "den"
+            ],
+            "properties": {
+              "num": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "den": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "range": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "start",
+              "end"
+            ],
+            "properties": {
+              "start": {
+                "$ref": "#/$defs/time"
+              },
+              "end": {
+                "$ref": "#/$defs/time"
+              }
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified",
+              "production"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "python",
+      "local_handler": "plan.validate",
+      "write_supported": false,
+      "readback_supported": true,
+      "undo_kind": "none",
+      "atomicity": "none",
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "*"
+      ],
+      "known_limitations": [
+        "Offline contract tests only; native integration requires build-scoped live verification."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "plan.preview_diff",
+      "description": "Preview ordered semantic changes and a plan hash; no host mutation.",
+      "category": "plan",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plan"
+        ],
+        "properties": {
+          "plan": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "EditPlan v1 (half-open source and timeline ranges)",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "project_id",
+              "sequence_id",
+              "base_revision",
+              "frame_rate",
+              "scope",
+              "sources",
+              "operations"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "project_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sequence_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "base_revision": {
+                "type": "string",
+                "minLength": 1
+              },
+              "frame_rate": {
+                "$ref": "#/$defs/time"
+              },
+              "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "target_ids",
+                  "allow_ripple"
+                ],
+                "properties": {
+                  "target_ids": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "allow_ripple": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "duration",
+                    "frame_rate",
+                    "words"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "duration": {
+                      "$ref": "#/$defs/time"
+                    },
+                    "frame_rate": {
+                      "$ref": "#/$defs/time"
+                    },
+                    "words": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "start",
+                          "end"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "start": {
+                            "$ref": "#/$defs/time"
+                          },
+                          "end": {
+                            "$ref": "#/$defs/time"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "cut"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "clip_id",
+                            "source_id",
+                            "source_range",
+                            "word_ids"
+                          ],
+                          "properties": {
+                            "clip_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source_range": {
+                              "$ref": "#/$defs/range"
+                            },
+                            "word_ids": {
+                              "type": "array",
+                              "minItems": 1,
+                              "uniqueItems": true,
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "title"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "target_id",
+                            "text",
+                            "timeline_range"
+                          ],
+                          "properties": {
+                            "target_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "text": {
+                              "type": "string"
+                            },
+                            "timeline_range": {
+                              "$ref": "#/$defs/range"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "effect"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "target_id",
+                            "effect_id",
+                            "parameters"
+                          ],
+                          "properties": {
+                            "target_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "effect_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "parameters": {
+                              "type": "object"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "parameter"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "target_id",
+                            "parameter_id",
+                            "value"
+                          ],
+                          "properties": {
+                            "target_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "parameter_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "value": {}
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "transition"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "left_clip_id",
+                            "right_clip_id",
+                            "duration"
+                          ],
+                          "properties": {
+                            "left_clip_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "right_clip_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "duration": {
+                              "$ref": "#/$defs/time"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "$defs": {
+          "time": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "num",
+              "den"
+            ],
+            "properties": {
+              "num": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "den": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "range": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "start",
+              "end"
+            ],
+            "properties": {
+              "start": {
+                "$ref": "#/$defs/time"
+              },
+              "end": {
+                "$ref": "#/$defs/time"
+              }
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified",
+              "production"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "python",
+      "local_handler": "plan.preview_diff",
+      "write_supported": false,
+      "readback_supported": true,
+      "undo_kind": "none",
+      "atomicity": "none",
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "*"
+      ],
+      "known_limitations": [
+        "Offline contract tests only; native integration requires build-scoped live verification."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "plan.apply",
+      "description": "Apply an EditPlan with a checkpoint, sequential readback, and scoped restoration on a known failure.",
+      "category": "plan",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plan",
+          "idempotency_key"
+        ],
+        "properties": {
+          "plan": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "EditPlan v1 (half-open source and timeline ranges)",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "project_id",
+              "sequence_id",
+              "base_revision",
+              "frame_rate",
+              "scope",
+              "sources",
+              "operations"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "project_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sequence_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "base_revision": {
+                "type": "string",
+                "minLength": 1
+              },
+              "frame_rate": {
+                "$ref": "#/$defs/time"
+              },
+              "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "target_ids",
+                  "allow_ripple"
+                ],
+                "properties": {
+                  "target_ids": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "allow_ripple": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "duration",
+                    "frame_rate",
+                    "words"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "duration": {
+                      "$ref": "#/$defs/time"
+                    },
+                    "frame_rate": {
+                      "$ref": "#/$defs/time"
+                    },
+                    "words": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "start",
+                          "end"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "start": {
+                            "$ref": "#/$defs/time"
+                          },
+                          "end": {
+                            "$ref": "#/$defs/time"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "cut"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "clip_id",
+                            "source_id",
+                            "source_range",
+                            "word_ids"
+                          ],
+                          "properties": {
+                            "clip_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source_range": {
+                              "$ref": "#/$defs/range"
+                            },
+                            "word_ids": {
+                              "type": "array",
+                              "minItems": 1,
+                              "uniqueItems": true,
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "title"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "target_id",
+                            "text",
+                            "timeline_range"
+                          ],
+                          "properties": {
+                            "target_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "text": {
+                              "type": "string"
+                            },
+                            "timeline_range": {
+                              "$ref": "#/$defs/range"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "effect"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "target_id",
+                            "effect_id",
+                            "parameters"
+                          ],
+                          "properties": {
+                            "target_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "effect_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "parameters": {
+                              "type": "object"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "parameter"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "target_id",
+                            "parameter_id",
+                            "value"
+                          ],
+                          "properties": {
+                            "target_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "parameter_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "value": {}
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "capability",
+                        "args"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "const": "transition"
+                        },
+                        "capability": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "required": [
+                            "left_clip_id",
+                            "right_clip_id",
+                            "duration"
+                          ],
+                          "properties": {
+                            "left_clip_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "right_clip_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "duration": {
+                              "$ref": "#/$defs/time"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "$defs": {
+          "time": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "num",
+              "den"
+            ],
+            "properties": {
+              "num": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "den": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "range": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "start",
+              "end"
+            ],
+            "properties": {
+              "start": {
+                "$ref": "#/$defs/time"
+              },
+              "end": {
+                "$ref": "#/$defs/time"
+              }
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified",
+              "production"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "python",
+      "local_handler": "plan.apply",
+      "write_supported": true,
+      "readback_supported": true,
+      "undo_kind": "none",
+      "atomicity": "checkpoint_compensated",
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "*"
+      ],
+      "known_limitations": [
+        "Offline contract tests only; native integration requires build-scoped live verification.",
+        "The integrated native beta provides observational checkpoints and owned top-group undo, but no history.restore or transcript/source state contract. Native plan.apply rejects before writing; only the offline fixture demonstrates compensation."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "review.capture",
+      "description": "Capture a short, revision-bound FCP viewer frame; native share remains a pending native contract.",
+      "category": "review",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request"
+        ],
+        "properties": {
+          "request": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "project_id",
+              "sequence_id",
+              "expected_revision",
+              "mode",
+              "range"
+            ],
+            "properties": {
+              "project_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sequence_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "expected_revision": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mode": {
+                "enum": [
+                  "viewer_frame",
+                  "native_share"
+                ]
+              },
+              "range": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "start",
+                  "end"
+                ],
+                "properties": {
+                  "start": {
+                    "$ref": "#/$defs/time"
+                  },
+                  "end": {
+                    "$ref": "#/$defs/time"
+                  }
+                }
+              },
+              "max_dimension": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 1280,
+                "default": 640
+              }
+            }
+          }
+        },
+        "$defs": {
+          "time": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "num",
+              "den"
+            ],
+            "properties": {
+              "num": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "den": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "required": [
+              "kind",
+              "label"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified",
+              "production"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ok": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "backend": "python",
+      "local_handler": "review.capture",
+      "write_supported": true,
+      "readback_supported": true,
+      "undo_kind": "none",
+      "atomicity": "none",
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "*"
+      ],
+      "known_limitations": [
+        "Offline contract tests only; native integration requires build-scoped live verification.",
+        "The integrated state probe does not attest project-viewer readiness/identity. Native review remains fenced until a verified state provider exists; native Share is unsupported."
+      ]
+    }
+  ]
+}

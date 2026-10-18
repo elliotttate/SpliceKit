@@ -123,6 +123,11 @@ MKV_LDFLAGS = -bundle $(CPP_LIBS)
 
 all: $(OUTPUT)
 
+.PHONY: test
+TEST_PYTHON ?= python3
+test:
+	PYTHONDONTWRITEBYTECODE=1 $(TEST_PYTHON) -m tests.run
+
 symbols: $(DSYM)
 
 tools: $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP)
@@ -267,18 +272,18 @@ $(BUILD_DIR)/obj/%.o: Sources/%.mm Sources/SpliceKit.h $(SENTRY_FRAMEWORK) | $(B
 	$(CC) $(ARCHS) $(MIN_VERSION) $(OBJCXX_FLAGS) $(DEBUG_FLAGS) $(VERSION_DEFINE) \
 		-I Sources -I $(LUA_DIR) -F $(SENTRY_FRAMEWORK_DIR) -c $< -o $@
 
-$(OUTPUT): $(OBJS) $(LUA_LIB) $(SENTRY_FRAMEWORK) | $(BUILD_DIR)
+$(OUTPUT): $(OBJS) $(LUA_LIB) $(SENTRY_FRAMEWORK) Makefile | $(BUILD_DIR)
 	$(CC) $(ARCHS) $(MIN_VERSION) $(FRAMEWORKS) $(LINKER_FLAGS) \
 		$(INSTALL_NAME) $(OBJS) $(LUA_LIB) $(SENTRY_FLAGS) $(CPP_LIBS) -o $(OUTPUT)
 	@# -undefined dynamic_lookup lets calls into FCP internals resolve at load time,
 	@# but it also silently permits unresolved SpliceKit_* symbols (missing .m files
 	@# not listed in SOURCES.txt). Those become NULL in the host and crash FCP with
 	@# pc=0 during init. Fail the build if any SpliceKit_ symbol is undefined.
-	@undef="$$(nm -u $(OUTPUT) | awk '/^_SpliceKit_/ {print $$NF}' | sort -u)"; \
+	@undef="$$(nm -u $(OUTPUT) | awk '/^_.*SpliceKit/ {print $$NF}' | sort -u)"; \
 	if [ -n "$$undef" ]; then \
 		echo "ERROR: undefined SpliceKit_* symbols in $(OUTPUT):" >&2; \
 		echo "$$undef" | sed 's/^/  /' >&2; \
-		echo "Add the missing .m file(s) to Sources/SOURCES.txt." >&2; \
+		echo "Check SOURCES.txt, C linkage, and optional-SDK fallbacks." >&2; \
 		rm -f $(OUTPUT); \
 		exit 1; \
 	fi
@@ -379,6 +384,24 @@ braw-prototype: $(BRAW_IMPORT_EXEC) $(BRAW_DECODER_EXEC) $(BRAW_CLI_BIN)
 
 braw-raw-processor: $(BRAW_RAWPROC_EXEC)
 	@echo "Staged: $(BRAW_RAWPROC_BUNDLE)"
+
+# Update only the injected framework on an existing patched copy. Unlike the
+# full developer deployment, this needs no optional codec SDK or helper rebuild.
+.PHONY: deploy-framework
+deploy-framework: $(OUTPUT)
+	@set -eu; \
+	app_path=$$(cd "$(MODDED_APP)" && pwd -P); \
+	case "$$app_path" in "$(HOME)/Applications/SpliceKit/"*.app) ;; \
+		*) echo "Refusing deployment outside ~/Applications/SpliceKit" >&2; exit 1 ;; esac; \
+	test "$(FW_DIR)" = "$(MODDED_APP)/Contents/Frameworks/SpliceKit.framework"; \
+	test -f "$(FW_DIR)/Versions/A/SpliceKit"; \
+	if pgrep -x 'Final Cut Pro' >/dev/null; then \
+		echo "Quit Final Cut Pro normally before deployment" >&2; exit 1; \
+	fi; \
+	cp "$(OUTPUT)" "$(FW_DIR)/Versions/A/SpliceKit"; \
+	codesign --force --options runtime --sign - "$(FW_DIR)"; \
+	codesign --force --options runtime --sign - --entitlements $(ENTITLEMENTS) "$(MODDED_APP)"; \
+	codesign --verify --verbose "$(MODDED_APP)"
 
 deploy: $(OUTPUT) $(SILENCE_DETECTOR) $(STRUCTURE_ANALYZER) $(MIXER_APP) braw-prototype vp9-prototype mkv-prototype
 	@echo "=== Deploying SpliceKit to modded FCP ==="

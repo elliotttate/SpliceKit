@@ -1,0 +1,431 @@
+{
+  "capabilities": [
+    {
+      "schema_version": 1,
+      "name": "state.read",
+      "description": "OFFLINE FIXTURE ONLY: state.read",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "output_schema": true,
+      "backend": "native-runtime",
+      "method": "v4.fixture.state.read",
+      "write_supported": false,
+      "undo_kind": "none",
+      "readback_supported": true,
+      "requires_fcp_build": [
+        "fixture-build"
+      ],
+      "evidence_level": "offline_tested",
+      "known_limitations": [
+        "Mock host only; never load this directory as the production registry."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "operation.status",
+      "description": "OFFLINE FIXTURE ONLY: operation.status",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "operation_id"
+        ]
+      },
+      "output_schema": true,
+      "backend": "native-runtime",
+      "method": "v4.fixture.operation.status",
+      "write_supported": false,
+      "undo_kind": "none",
+      "readback_supported": true,
+      "requires_fcp_build": [
+        "fixture-build"
+      ],
+      "evidence_level": "offline_tested",
+      "known_limitations": [
+        "Mock host only; never load this directory as the production registry."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "history.checkpoint",
+      "description": "OFFLINE FIXTURE ONLY: history.checkpoint",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sequence_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "project_id",
+          "sequence_id",
+          "expected_revision",
+          "label"
+        ]
+      },
+      "output_schema": true,
+      "backend": "native-runtime",
+      "method": "v4.fixture.history.checkpoint",
+      "write_supported": false,
+      "undo_kind": "none",
+      "readback_supported": true,
+      "requires_fcp_build": [
+        "fixture-build"
+      ],
+      "evidence_level": "offline_tested",
+      "known_limitations": [
+        "Mock host only; never load this directory as the production registry."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "history.restore",
+      "description": "OFFLINE FIXTURE ONLY: history.restore",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "checkpoint_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "checkpoint_id",
+          "expected_revision",
+          "operation_id",
+          "idempotency_key"
+        ]
+      },
+      "output_schema": true,
+      "backend": "native-runtime",
+      "method": "v4.fixture.history.restore",
+      "write_supported": true,
+      "undo_kind": "native_group",
+      "readback_supported": true,
+      "requires_fcp_build": [
+        "fixture-build"
+      ],
+      "evidence_level": "offline_tested",
+      "known_limitations": [
+        "Mock host only; never load this directory as the production registry."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "timeline.trim",
+      "description": "OFFLINE FIXTURE ONLY: timeline.trim",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "clip_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_range": {
+            "type": "object"
+          },
+          "word_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "clip_id",
+          "source_id",
+          "source_range",
+          "word_ids",
+          "expected_revision",
+          "operation_id",
+          "idempotency_key"
+        ]
+      },
+      "output_schema": true,
+      "backend": "native-runtime",
+      "method": "v4.fixture.timeline.trim",
+      "write_supported": true,
+      "undo_kind": "native_group",
+      "readback_supported": true,
+      "requires_fcp_build": [
+        "fixture-build"
+      ],
+      "evidence_level": "offline_tested",
+      "known_limitations": [
+        "Mock host only; never load this directory as the production registry."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "parameter.set",
+      "description": "OFFLINE FIXTURE ONLY: parameter.set",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parameter_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {},
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "target_id",
+          "parameter_id",
+          "value",
+          "expected_revision",
+          "operation_id",
+          "idempotency_key"
+        ]
+      },
+      "output_schema": true,
+      "backend": "native-runtime",
+      "method": "v4.fixture.parameter.set",
+      "write_supported": true,
+      "undo_kind": "native_group",
+      "readback_supported": true,
+      "requires_fcp_build": [
+        "fixture-build"
+      ],
+      "evidence_level": "offline_tested",
+      "known_limitations": [
+        "Mock host only; never load this directory as the production registry."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "title.set_text",
+      "description": "OFFLINE FIXTURE ONLY: title.set_text",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string"
+          },
+          "timeline_range": {
+            "type": "object"
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "target_id",
+          "text",
+          "timeline_range",
+          "expected_revision",
+          "operation_id",
+          "idempotency_key"
+        ]
+      },
+      "output_schema": true,
+      "backend": "native-runtime",
+      "method": "v4.fixture.title.set_text",
+      "write_supported": true,
+      "undo_kind": "native_group",
+      "readback_supported": true,
+      "requires_fcp_build": [
+        "fixture-build"
+      ],
+      "evidence_level": "offline_tested",
+      "known_limitations": [
+        "Mock host only; never load this directory as the production registry."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "effect.add",
+      "description": "OFFLINE FIXTURE ONLY: effect.add",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "effect_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parameters": {
+            "type": "object"
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "target_id",
+          "effect_id",
+          "parameters",
+          "expected_revision",
+          "operation_id",
+          "idempotency_key"
+        ]
+      },
+      "output_schema": true,
+      "backend": "native-runtime",
+      "method": "v4.fixture.effect.add",
+      "write_supported": true,
+      "undo_kind": "native_group",
+      "readback_supported": true,
+      "requires_fcp_build": [
+        "fixture-build"
+      ],
+      "evidence_level": "offline_tested",
+      "known_limitations": [
+        "Mock host only; never load this directory as the production registry."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "name": "transition.set",
+      "description": "OFFLINE FIXTURE ONLY: transition.set",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "left_clip_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "right_clip_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "duration": {
+            "type": "object"
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "left_clip_id",
+          "right_clip_id",
+          "duration",
+          "expected_revision",
+          "operation_id",
+          "idempotency_key"
+        ]
+      },
+      "output_schema": true,
+      "backend": "native-runtime",
+      "method": "v4.fixture.transition.set",
+      "write_supported": true,
+      "undo_kind": "native_group",
+      "readback_supported": true,
+      "requires_fcp_build": [
+        "fixture-build"
+      ],
+      "evidence_level": "offline_tested",
+      "known_limitations": [
+        "Mock host only; never load this directory as the production registry."
+      ]
+    }
+  ]
+}

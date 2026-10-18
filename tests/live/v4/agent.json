@@ -1,0 +1,604 @@
+{
+  "schema": "splicekit.live-plan/1",
+  "id": "agent",
+  "template": true,
+  "description": "Offline-authored integration template. Bind fixture identities, verify baseline prerequisites, and explicitly remove template before live use. Each mutation is an independent apply/readback/owned-undo cycle. No live result is claimed.",
+  "fixture": {
+    "library_name": "SpliceKit-Test-v4",
+    "project": "SpliceKit-Test-30",
+    "frame_duration": "1/30s",
+    "clip_id": "REPLACE_WITH_NATIVE_PERSISTENT_ID",
+    "effect_a": "REPLACE_WITH_NATIVE_GAUSSIAN_A_FILE_UUID",
+    "effect_b": "REPLACE_WITH_NATIVE_GAUSSIAN_B_FILE_UUID",
+    "gaussian_id": "REPLACE_WITH_CATALOG_EFFECT_ID",
+    "letterbox_id": "REPLACE_WITH_CATALOG_LETTERBOX_ID",
+    "colorize_id": "REPLACE_WITH_CATALOG_COLORIZE_ID",
+    "letterbox_instance": "REPLACE_WITH_LETTERBOX_FILE_UUID",
+    "colorize_instance": "REPLACE_WITH_COLORIZE_FILE_UUID",
+    "amount_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "scale_path": "/intrinsic/transform/channels/9999/100",
+    "enum_path": "/effects/REPLACE_INSTANCE/channels/9999/101",
+    "color_path": "/effects/REPLACE_INSTANCE/channels/9999/102",
+    "enum_value": 2,
+    "title_id": "REPLACE_WITH_NATIVE_TITLE_PERSISTENT_ID",
+    "caption_id": "REPLACE_WITH_NATIVE_CAPTION_PERSISTENT_ID",
+    "turkish_role_id": "REPLACE_WITH_NATIVE_CAPTION_ROLE_ID",
+    "left_clip_id": "REPLACE_WITH_LEFT_CLIP_ID",
+    "right_clip_id": "REPLACE_WITH_RIGHT_CLIP_ID",
+    "transition_left": "REPLACE_WITH_OTHER_LEFT_CLIP_ID",
+    "transition_right": "REPLACE_WITH_OTHER_RIGHT_CLIP_ID",
+    "transition_id": "REPLACE_WITH_EXISTING_TRANSITION_ID",
+    "generator_id": "REPLACE_WITH_INSTALLED_GENERATOR_EFFECT_ID",
+    "color_instance_id": "REPLACE_WITH_NATIVE_COLOR_UUID",
+    "color_parameter_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "music_role_uid": "REPLACE_WITH_NATIVE_AUDIO_ROLE_UID",
+    "sample_component_value": 330,
+    "component_start_value": 300,
+    "time": {
+      "value": 330,
+      "timescale": 30,
+      "space": "clip_local"
+    },
+    "key_time": {
+      "value": 360,
+      "timescale": 30,
+      "space": "clip_local"
+    }
+  },
+  "steps": [
+    {
+      "id": "session",
+      "capability": "v4.session.status",
+      "kind": "read",
+      "apply": {
+        "method": "v4.session.status",
+        "params": {},
+        "expect": {
+          "/ok": true,
+          "/applied": false,
+          "/readback/fcp_build": "454072",
+          "/readback/writes_enabled": true
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "revision",
+      "capability": "v4.state.revision",
+      "kind": "read",
+      "apply": {
+        "method": "v4.state.revision",
+        "params": {},
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "snapshot-stability",
+      "capability": "v4.state.snapshot",
+      "kind": "read",
+      "apply": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "checkpoint",
+      "capability": "v4.history.checkpoint",
+      "kind": "read",
+      "apply": {
+        "method": "v4.history.checkpoint",
+        "params": {},
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "catalog",
+      "capability": "v4.effect.catalog",
+      "kind": "read",
+      "apply": {
+        "method": "v4.effect.catalog",
+        "params": {
+          "query": "Gaussian",
+          "type": "filter",
+          "limit": 5
+        },
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "tree",
+      "capability": "v4.object.inspect",
+      "kind": "read",
+      "apply": {
+        "method": "v4.object.inspect",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "time": {
+            "$ref": "/fixture/time"
+          }
+        },
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "describe",
+      "capability": "v4.parameter.describe",
+      "kind": "read",
+      "apply": {
+        "method": "v4.parameter.describe",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            },
+            "effect_instance_id": {
+              "$ref": "/fixture/effect_a"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/amount_path"
+          }
+        },
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "parameter",
+      "capability": "v4.parameter.get",
+      "kind": "read",
+      "apply": {
+        "method": "v4.parameter.get",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            },
+            "effect_instance_id": {
+              "$ref": "/fixture/effect_a"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/amount_path"
+          },
+          "time": {
+            "$ref": "/fixture/time"
+          }
+        },
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "keys",
+      "capability": "v4.keyframe.list",
+      "kind": "read",
+      "apply": {
+        "method": "v4.keyframe.list",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/scale_path"
+          },
+          "time": {
+            "$ref": "/fixture/key_time"
+          }
+        },
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "title",
+      "capability": "v4.title.get",
+      "kind": "read",
+      "apply": {
+        "method": "v4.title.get",
+        "params": {
+          "clip_id": {
+            "$ref": "/fixture/title_id"
+          }
+        },
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "captions",
+      "capability": "v4.caption.list",
+      "kind": "read",
+      "apply": {
+        "method": "v4.caption.list",
+        "params": {},
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "audio",
+      "capability": "v4.audio.inspect",
+      "kind": "read",
+      "apply": {
+        "method": "v4.audio.inspect",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "time": {
+            "$ref": "/fixture/time"
+          }
+        },
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "channels",
+      "capability": "v4.audio.get_channel_map",
+      "kind": "read",
+      "apply": {
+        "method": "v4.audio.get_channel_map",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          }
+        },
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    },
+    {
+      "id": "retime",
+      "capability": "v4.retime.inspect",
+      "kind": "read",
+      "apply": {
+        "method": "v4.retime.inspect",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          }
+        },
+        "expect": {
+          "/ok": true,
+          "/applied": false
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/state": {
+            "$ref": "/baseline/readback/state"
+          }
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      }
+    }
+  ],
+  "manual_cases": [
+    {
+      "id": "bootstrap-toolsets",
+      "steps": [
+        "List tools in legacy, v4 and all modes.",
+        "Start v4 with bridge unavailable; confirm no startup RPC.",
+        "Call session_status; add merged manifests, restart and search/describe their capabilities."
+      ],
+      "expected_readback": [
+        "Legacy retains all 221 static tools; v4 exposes exactly seven; all includes both.",
+        "No raw_call, ObjC eval, Lua, plugin registration or legacy prompt/resource surface in v4.",
+        "Descriptor hash, exact FCP build, backend, evidence and limitations are visible."
+      ],
+      "undo_check": "Read-only case; no timeline changes."
+    },
+    {
+      "id": "plan-success-and-owned-restore",
+      "steps": [
+        "Read baseline identity/revision/hash and bounded source/word evidence.",
+        "Validate and preview an ordered cut/title/effect/parameter/transition plan; compare exact rational frame boundaries.",
+        "Apply with a unique idempotency key and record every native envelope/readback.",
+        "Repeat the same key, then attempt the key with changed arguments.",
+        "Restore the owned checkpoint through its discovered capability and read the baseline back."
+      ],
+      "expected_readback": [
+        "Every step targets the intended object, preserves linked audio/connected clips according to scope, and chains native revisions.",
+        "Repeated identity does not duplicate edits; changed payload conflicts.",
+        "Structural readback passes separately from visual/audio/persistence acceptance."
+      ],
+      "undo_check": "Native restore must match the complete baseline and reject a foreign/stale checkpoint; never issue generic undo."
+    },
+    {
+      "id": "failure-timeout-restart-and-human-edit",
+      "steps": [
+        "Inject a confirmed no-op failure in step two after step one succeeds.",
+        "Repeat on a NEW fixture with a timeout after dispatch.",
+        "Query operation_status and native ledger before any further write.",
+        "Restart MCP and query the same durable native operation identity.",
+        "Make an external edit between preflight and native application."
+      ],
+      "expected_readback": [
+        "Known failure restores only the owned checkpoint and verifies baseline.",
+        "UNKNOWN has applied:null, no automatic restore, no duplicate write and no backend switch.",
+        "Native durable ledger reconciles terminal outcome; a Python cache is explicitly not reconciliation.",
+        "Native final revision/target checks reject the external edit atomically."
+      ],
+      "undo_check": "Leave unresolved UNKNOWN fixture quarantined; do not retry or issue a second undo."
+    },
+    {
+      "id": "review-native-frame",
+      "steps": [
+        "At an aligned stopped playhead, capture a rendered normal project viewer frame at max dimension 640.",
+        "Compare PNG hash and sidecar binding with exact project/sequence/revision and actual one-frame coverage.",
+        "Repeat with browser viewer, second window, unavailable permission, playing timeline, delayed viewer and an external revision change."
+      ],
+      "expected_readback": [
+        "Only cropped normal project-viewer pixels are accepted; never largest/full-window/source fallback.",
+        "Width/height satisfy the bound; color/proxy truth is reported explicitly; audio is absent and motion unreviewed.",
+        "Stale identity, playhead or readiness rejects the artifact."
+      ],
+      "undo_check": "Capture performs no edit; state and playhead match baseline."
+    },
+    {
+      "id": "native-share-pending-contract",
+      "steps": [
+        "Request review.capture with mode native_share."
+      ],
+      "expected_readback": [
+        "NATIVE_SHARE_UNVERIFIED and no artifact; share.export is not dispatched.",
+        "Future job integration must validate file completion, range/dimensions/rate/audio via AVFoundation and restore temporary settings before promotion."
+      ],
+      "undo_check": "No share dialog or temporary range/preset change is initiated by the current implementation."
+    },
+    {
+      "id": "authorized-video-model-loop",
+      "steps": [
+        "With explicit model-call authorization, set GEMINI_API_KEY/GEMINI_MODEL and run --live on the isolated short fixture.",
+        "Review source media, apply a validated plan, return native evidence to Gemini, validate evidence-linked issues and a small correction plan.",
+        "Reject any correction with stale revision/identity, unsupported capability/target, or evidence range outside the captured artifact."
+      ],
+      "expected_readback": [
+        "No unsupported critique is applied; correction targets the exact reviewed revision.",
+        "Iteration limit is honored; remaining issues, audio/motion/persistence/user acceptance remain explicit.",
+        "A still-based loop is never reported as video/audio acceptance."
+      ],
+      "undo_check": "Restore the owned fixture checkpoint after review and verify baseline."
+    }
+  ],
+  "fixture_setup": [
+    "Open exactly the disposable 30fps fixture library/project; no production library may be open.",
+    "The trimmed main AV clip starts at component-local 300/30s. Preinstall two Gaussian instances A/B in the same section (B after A), Letterbox and Colorize; discover every native parameter path and enum value.",
+    "Use a present intrinsic scale channel with two baseline keys at 360/30s and 390/30s, with the first outgoing segment S-curve. Use a different unkeyed Amount sample at 330/30s.",
+    "Preinstall an editable title with field 0 text Hello world, an English caption with block 0, an existing Turkish role and Music audio role, and a transition on a SECOND cut. The main left/right cut must be transition-free with sufficient handles.",
+    "Baseline gain is unanimated, fades are absent, channels enabled, role is not Music, and rate is 1x. Verify custom generator identity and all fixtures before removing template.",
+    "Repeated native XML exports must be exact except security-scoped bookmark bytes. Preserve raw XML; explicitly compare asset src, duration and format ID; any other instability stops testing.",
+    "Keep complete FCPXML before/after/undo and separate native frame/audio/save-reopen evidence. Scope here is readback/undo only."
+  ]
+}

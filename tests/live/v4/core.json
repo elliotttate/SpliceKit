@@ -1,0 +1,388 @@
+{
+  "schema": "splicekit.live-plan/1",
+  "id": "core",
+  "template": true,
+  "description": "Offline-authored integration template. Bind fixture identities, verify baseline prerequisites, and explicitly remove template before live use. Each mutation is an independent apply/readback/owned-undo cycle. No live result is claimed.",
+  "fixture": {
+    "library_name": "SpliceKit-Test-v4",
+    "project": "SpliceKit-Test-30",
+    "frame_duration": "1/30s",
+    "clip_id": "REPLACE_WITH_NATIVE_PERSISTENT_ID",
+    "effect_a": "REPLACE_WITH_NATIVE_GAUSSIAN_A_FILE_UUID",
+    "effect_b": "REPLACE_WITH_NATIVE_GAUSSIAN_B_FILE_UUID",
+    "gaussian_id": "REPLACE_WITH_CATALOG_EFFECT_ID",
+    "letterbox_id": "REPLACE_WITH_CATALOG_LETTERBOX_ID",
+    "colorize_id": "REPLACE_WITH_CATALOG_COLORIZE_ID",
+    "letterbox_instance": "REPLACE_WITH_LETTERBOX_FILE_UUID",
+    "colorize_instance": "REPLACE_WITH_COLORIZE_FILE_UUID",
+    "amount_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "scale_path": "/intrinsic/transform/channels/9999/100",
+    "enum_path": "/effects/REPLACE_INSTANCE/channels/9999/101",
+    "color_path": "/effects/REPLACE_INSTANCE/channels/9999/102",
+    "enum_value": 2,
+    "title_id": "REPLACE_WITH_NATIVE_TITLE_PERSISTENT_ID",
+    "caption_id": "REPLACE_WITH_NATIVE_CAPTION_PERSISTENT_ID",
+    "turkish_role_id": "REPLACE_WITH_NATIVE_CAPTION_ROLE_ID",
+    "left_clip_id": "REPLACE_WITH_LEFT_CLIP_ID",
+    "right_clip_id": "REPLACE_WITH_RIGHT_CLIP_ID",
+    "transition_left": "REPLACE_WITH_OTHER_LEFT_CLIP_ID",
+    "transition_right": "REPLACE_WITH_OTHER_RIGHT_CLIP_ID",
+    "transition_id": "REPLACE_WITH_EXISTING_TRANSITION_ID",
+    "generator_id": "REPLACE_WITH_INSTALLED_GENERATOR_EFFECT_ID",
+    "color_instance_id": "REPLACE_WITH_NATIVE_COLOR_UUID",
+    "color_parameter_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "music_role_uid": "REPLACE_WITH_NATIVE_AUDIO_ROLE_UID",
+    "sample_component_value": 330,
+    "component_start_value": 300,
+    "time": {
+      "value": 330,
+      "timescale": 30,
+      "space": "clip_local"
+    },
+    "key_time": {
+      "value": 360,
+      "timescale": 30,
+      "space": "clip_local"
+    }
+  },
+  "steps": [
+    {
+      "id": "ledger-replay-revision-owned-undo",
+      "capability": "v4.parameter.set",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.parameter.set",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            },
+            "effect_instance_id": {
+              "$ref": "/fixture/effect_a"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/amount_path"
+          },
+          "time": {
+            "$ref": "/fixture/time"
+          },
+          "mode": "at_time",
+          "value": {
+            "type": "double",
+            "value": 0.3
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.operation.status",
+          "params": {
+            "operation_id": {
+              "$ref": "/apply/operation_id"
+            }
+          },
+          "expect": {
+            "/readback/state": "COMPLETED",
+            "/readback/result/operation_id": {
+              "$ref": "/apply/operation_id"
+            }
+          }
+        },
+        {
+          "method": "v4.parameter.set",
+          "params": {
+            "$ref": "/apply_request/params"
+          },
+          "expect": {
+            "/operation_id": {
+              "$ref": "/apply/operation_id"
+            },
+            "/revision_after": {
+              "$ref": "/apply/revision_after"
+            },
+            "/readback": {
+              "$ref": "/apply/readback"
+            }
+          }
+        },
+        {
+          "method": "v4.operation.reconcile",
+          "params": {
+            "operation_id": {
+              "$ref": "/apply/operation_id"
+            }
+          },
+          "expect": {
+            "/readback/state": "COMPLETED",
+            "/readback/reexecuted": false
+          }
+        },
+        {
+          "method": "v4.parameter.set",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              },
+              "effect_instance_id": {
+                "$ref": "/fixture/effect_a"
+              }
+            },
+            "parameter_path": {
+              "$ref": "/fixture/amount_path"
+            },
+            "time": {
+              "$ref": "/fixture/time"
+            },
+            "mode": "at_time",
+            "value": {
+              "type": "double",
+              "value": 0.3
+            },
+            "operation_id": {
+              "$ref": "/run/check_operation_id"
+            },
+            "expected_revision": {
+              "$ref": "/baseline/revision_after"
+            }
+          },
+          "expect": {
+            "/ok": false,
+            "/applied": false,
+            "/error/code": "REVISION_MISMATCH"
+          }
+        }
+      ]
+    }
+  ],
+  "manual_cases": [
+    {
+      "name": "session and build gate",
+      "rpc": "v4.session.status",
+      "steps": [
+        {
+          "method": "v4.session.status",
+          "params": {},
+          "expect": "ok=true; readback contains build=454072, version, 64-hex dylib_sha256, session_id, owning library/sequence, modal, writes_enabled, ledger summary."
+        },
+        {
+          "fixture_action": "Repeat against a disposable unsupported build with the default startup policy. Submit edit_request with a new operation_id.",
+          "expect": "UNSUPPORTED_BUILD, applied=false, unchanged domain readback."
+        }
+      ],
+      "undo_check": "No diagnostic read creates an undo entry."
+    },
+    {
+      "name": "independent revision and mismatch",
+      "rpc": "v4.state.revision",
+      "steps": [
+        {
+          "method": "v4.state.revision",
+          "params": {},
+          "save": "result.revision_after as R0",
+          "expect": "before=after=readback.revision; same session and sequence remain stable across repeated observations."
+        },
+        {
+          "fixture_action": "Send edit_request with operation_id=core-edit-1 and expected_revision=R0.",
+          "save": "result.revision_after as R1",
+          "expect": "applied=true, fresh domain readback, R1 differs from R0."
+        },
+        {
+          "method": "v4.state.revision",
+          "params": {},
+          "expect": "independent result.revision_after equals R1."
+        },
+        {
+          "fixture_action": "Send a different operation_id with stale expected_revision=R0.",
+          "expect": "REVISION_MISMATCH, applied=false, native state and undo stack unchanged."
+        },
+        {
+          "fixture_action": "Make a human edit and re-read revision.",
+          "expect": "revision changes; old expected_revision fails without mutation."
+        }
+      ],
+      "undo_check": "Use v4.history.undo on core-edit-1 only before any human edit; check baseline domain state independently."
+    },
+    {
+      "name": "checkpoint is observational",
+      "rpc": "v4.history.checkpoint",
+      "steps": [
+        {
+          "method": "v4.history.checkpoint",
+          "params": {},
+          "expect": "fresh owning sequence, revision and undo top are returned."
+        },
+        {
+          "fixture_action": "Repeat checkpoint without changing the host.",
+          "expect": "revision and undo top remain unchanged; no synthetic undo action is added."
+        }
+      ],
+      "undo_check": "Checkpoint itself has no undo group."
+    },
+    {
+      "name": "deadline, status, idempotency, and single writer",
+      "rpc": "v4.operation.status",
+      "steps": [
+        {
+          "fixture_action": "Submit a controlled slow native edit with operation_id=core-slow-1.",
+          "expect": "At 20s the client receives status=pending, operation_id=core-slow-1, applied=null."
+        },
+        {
+          "method": "v4.operation.status",
+          "params": {
+            "operation_id": "core-slow-1"
+          },
+          "expect": "Responds without waiting for the main thread. readback.state is QUEUED/RUNNING until settlement."
+        },
+        {
+          "fixture_action": "Concurrently submit the same ID+params from another connection, then a distinct edit.",
+          "expect": "The first edit applies once. The second edit starts only after the first native handler has really completed."
+        },
+        {
+          "method": "v4.operation.status",
+          "params": {
+            "operation_id": "core-slow-1"
+          },
+          "expect": "Eventually COMPLETED/FAILED/UNKNOWN, with the exact stored result. Independent native readback matches a completed result."
+        },
+        {
+          "fixture_action": "Reuse core-slow-1 with changed arguments.",
+          "expect": "IDEMPOTENCY_CONFLICT and no new native edit."
+        }
+      ],
+      "undo_check": "Exactly one top named group for a successful undoable slow edit; undo returns to the recorded baseline."
+    },
+    {
+      "name": "restart and conservative reconciliation",
+      "rpc": "v4.operation.reconcile",
+      "steps": [
+        {
+          "fixture_action": "In a disposable fixture, restart after reserving/starting a controlled slow edit. Save its ID and raw journal before restart.",
+          "expect": "Queued/running journal entries become UNKNOWN; never replay them automatically."
+        },
+        {
+          "method": "v4.operation.status",
+          "params": {
+            "operation_id": "$saved_id"
+          },
+          "expect": "readback.state=UNKNOWN; recovered historical session is visible."
+        },
+        {
+          "method": "v4.operation.reconcile",
+          "params": {
+            "operation_id": "$saved_id"
+          },
+          "expect": "Fresh native state is returned; state remains UNKNOWN and reexecuted=false."
+        },
+        {
+          "fixture_action": "Obtain domain-native/XML evidence and fresh v4 revision. Send resolution=applied or not_applied, evidence=<measured fields>, expected_revision=<fresh token>.",
+          "expect": "RECONCILED only with explicit evidence; warning says client attestation. No native edit runs."
+        },
+        {
+          "fixture_action": "Request undo for a pre-restart operation.",
+          "expect": "UNDO_NOT_OWNED; no other native group is touched."
+        }
+      ],
+      "undo_check": "Native ownership never survives FCP restart, even when a historical result survives."
+    },
+    {
+      "name": "owned undo and protected human history",
+      "rpc": "v4.history.undo",
+      "steps": [
+        {
+          "fixture_action": "Capture baseline and apply an undoable domain edit, operation_id=core-owned-1.",
+          "expect": "undo.kind=native_group with a unique label; verify fresh native state."
+        },
+        {
+          "method": "v4.history.undo",
+          "params": {
+            "target_operation_id": "core-owned-1",
+            "operation_id": "core-undo-1"
+          },
+          "expect": "applied=true; independent domain readback equals baseline."
+        },
+        {
+          "method": "v4.history.undo",
+          "params": {
+            "target_operation_id": "core-owned-1",
+            "operation_id": "core-undo-1"
+          },
+          "expect": "Exact cached result; no second undo."
+        },
+        {
+          "fixture_action": "Apply another edit and make a human edit above its group. Request v4 undo for the earlier operation.",
+          "expect": "UNDO_NOT_TOP; human edit and undo top remain intact."
+        }
+      ],
+      "undo_check": "Verify full native target values/structure after undo; do not treat action name or group creation as baseline proof."
+    },
+    {
+      "name": "modal safety across reads and writes",
+      "rpc": "v4.session.status / v4.state.revision",
+      "steps": [
+        {
+          "fixture_action": "Open a disposable sheet/dialog with a recognizable title, including the legacy video-properties dialog if reproducible.",
+          "expect": "Record visible title before issuing RPCs."
+        },
+        {
+          "method": "v4.state.revision",
+          "params": {},
+          "expect": "MODAL_PRESENT, applied=false, readback.modal.title matches; dialog remains open."
+        },
+        {
+          "fixture_action": "Issue a domain read that delegates to legacy RPCs, then a domain mutation.",
+          "expect": "Neither dismisses the dialog; mutation returns MODAL_PRESENT without applying."
+        },
+        {
+          "method": "v4.session.status",
+          "params": {},
+          "expect": "Diagnostic result includes modal.present=true and title without dismissal."
+        },
+        {
+          "fixture_action": "Close the dialog explicitly as a human, then obtain a fresh revision.",
+          "expect": "Normal native readback works again."
+        }
+      ],
+      "undo_check": "No rejected request adds or consumes an undo group."
+    }
+  ],
+  "fixture_setup": [
+    "Open exactly the disposable 30fps fixture library/project; no production library may be open.",
+    "The trimmed main AV clip starts at component-local 300/30s. Preinstall two Gaussian instances A/B in the same section (B after A), Letterbox and Colorize; discover every native parameter path and enum value.",
+    "Use a present intrinsic scale channel with two baseline keys at 360/30s and 390/30s, with the first outgoing segment S-curve. Use a different unkeyed Amount sample at 330/30s.",
+    "Preinstall an editable title with field 0 text Hello world, an English caption with block 0, an existing Turkish role and Music audio role, and a transition on a SECOND cut. The main left/right cut must be transition-free with sufficient handles.",
+    "Baseline gain is unanimated, fades are absent, channels enabled, role is not Music, and rate is 1x. Verify custom generator identity and all fixtures before removing template.",
+    "Repeated native XML exports must be exact except security-scoped bookmark bytes. Preserve raw XML; explicitly compare asset src, duration and format ID; any other instability stops testing.",
+    "Keep complete FCPXML before/after/undo and separate native frame/audio/save-reopen evidence. Scope here is readback/undo only."
+  ]
+}

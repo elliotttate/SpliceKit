@@ -1,0 +1,1347 @@
+{
+  "schema": "splicekit.live-plan/1",
+  "id": "params",
+  "template": true,
+  "description": "Offline-authored integration template. Bind fixture identities, verify baseline prerequisites, and explicitly remove template before live use. Each mutation is an independent apply/readback/owned-undo cycle. No live result is claimed.",
+  "fixture": {
+    "library_name": "SpliceKit-Test-v4",
+    "project": "SpliceKit-Test-30",
+    "frame_duration": "1/30s",
+    "clip_id": "REPLACE_WITH_NATIVE_PERSISTENT_ID",
+    "effect_a": "REPLACE_WITH_NATIVE_GAUSSIAN_A_FILE_UUID",
+    "effect_b": "REPLACE_WITH_NATIVE_GAUSSIAN_B_FILE_UUID",
+    "gaussian_id": "REPLACE_WITH_CATALOG_EFFECT_ID",
+    "letterbox_id": "REPLACE_WITH_CATALOG_LETTERBOX_ID",
+    "colorize_id": "REPLACE_WITH_CATALOG_COLORIZE_ID",
+    "letterbox_instance": "REPLACE_WITH_LETTERBOX_FILE_UUID",
+    "colorize_instance": "REPLACE_WITH_COLORIZE_FILE_UUID",
+    "amount_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "scale_path": "/intrinsic/transform/channels/9999/100",
+    "enum_path": "/effects/REPLACE_INSTANCE/channels/9999/101",
+    "color_path": "/effects/REPLACE_INSTANCE/channels/9999/102",
+    "enum_value": 2,
+    "title_id": "REPLACE_WITH_NATIVE_TITLE_PERSISTENT_ID",
+    "caption_id": "REPLACE_WITH_NATIVE_CAPTION_PERSISTENT_ID",
+    "turkish_role_id": "REPLACE_WITH_NATIVE_CAPTION_ROLE_ID",
+    "left_clip_id": "REPLACE_WITH_LEFT_CLIP_ID",
+    "right_clip_id": "REPLACE_WITH_RIGHT_CLIP_ID",
+    "transition_left": "REPLACE_WITH_OTHER_LEFT_CLIP_ID",
+    "transition_right": "REPLACE_WITH_OTHER_RIGHT_CLIP_ID",
+    "transition_id": "REPLACE_WITH_EXISTING_TRANSITION_ID",
+    "generator_id": "REPLACE_WITH_INSTALLED_GENERATOR_EFFECT_ID",
+    "color_instance_id": "REPLACE_WITH_NATIVE_COLOR_UUID",
+    "color_parameter_path": "/effects/REPLACE_INSTANCE/channels/9999/100",
+    "music_role_uid": "REPLACE_WITH_NATIVE_AUDIO_ROLE_UID",
+    "sample_component_value": 330,
+    "component_start_value": 300,
+    "time": {
+      "value": 330,
+      "timescale": 30,
+      "space": "clip_local"
+    },
+    "key_time": {
+      "value": 360,
+      "timescale": 30,
+      "space": "clip_local"
+    }
+  },
+  "steps": [
+    {
+      "id": "effect-add",
+      "capability": "v4.effect.add",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.effect.add",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "effect_id": {
+            "$ref": "/fixture/gaussian_id"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.object.inspect",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "time": {
+              "$ref": "/fixture/time"
+            }
+          },
+          "expect": {
+            "/readback/effects": {
+              "$ref": "/apply/readback/effects"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "effect-bypass-false",
+      "capability": "v4.effect.enable",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.effect.enable",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            },
+            "effect_instance_id": {
+              "$ref": "/fixture/effect_b"
+            }
+          },
+          "enabled": false,
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.object.inspect",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "time": {
+              "$ref": "/fixture/time"
+            }
+          },
+          "expect": {
+            "/readback/effects": {
+              "$ref": "/apply/readback/effects"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "effect-move",
+      "capability": "v4.effect.move",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.effect.move",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            },
+            "effect_instance_id": {
+              "$ref": "/fixture/effect_b"
+            }
+          },
+          "before_instance_id": {
+            "$ref": "/fixture/effect_a"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.object.inspect",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "time": {
+              "$ref": "/fixture/time"
+            }
+          },
+          "expect": {
+            "/readback/effects": {
+              "$ref": "/apply/readback/effects"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "effect-remove-exact",
+      "capability": "v4.effect.remove",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.effect.remove",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            },
+            "effect_instance_id": {
+              "$ref": "/fixture/effect_b"
+            }
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.object.inspect",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "time": {
+              "$ref": "/fixture/time"
+            }
+          },
+          "expect": {
+            "/readback/effects": {
+              "$ref": "/apply/readback/effects"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "parameter-set",
+      "capability": "v4.parameter.set",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.parameter.set",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            },
+            "effect_instance_id": {
+              "$ref": "/fixture/effect_a"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/amount_path"
+          },
+          "time": {
+            "$ref": "/fixture/time"
+          },
+          "mode": "at_time",
+          "value": {
+            "type": "double",
+            "value": 0.3
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.parameter.get",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              },
+              "effect_instance_id": {
+                "$ref": "/fixture/effect_a"
+              }
+            },
+            "parameter_path": {
+              "$ref": "/fixture/amount_path"
+            },
+            "time": {
+              "$ref": "/fixture/time"
+            }
+          },
+          "expect": {
+            "/readback/value": {
+              "$ref": "/apply_request/params/value"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "letterbox-enum",
+      "capability": "v4.parameter.set",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.parameter.set",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            },
+            "effect_instance_id": {
+              "$ref": "/fixture/letterbox_instance"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/enum_path"
+          },
+          "time": {
+            "$ref": "/fixture/time"
+          },
+          "mode": "constant",
+          "value": {
+            "type": "enum",
+            "value": {
+              "$ref": "/fixture/enum_value"
+            }
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.parameter.get",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              },
+              "effect_instance_id": {
+                "$ref": "/fixture/letterbox_instance"
+              }
+            },
+            "parameter_path": {
+              "$ref": "/fixture/enum_path"
+            },
+            "time": {
+              "$ref": "/fixture/time"
+            }
+          },
+          "expect": {
+            "/readback/value": {
+              "$ref": "/apply_request/params/value"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "colorize-rgba",
+      "capability": "v4.parameter.set",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.parameter.set",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            },
+            "effect_instance_id": {
+              "$ref": "/fixture/colorize_instance"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/color_path"
+          },
+          "time": {
+            "$ref": "/fixture/time"
+          },
+          "mode": "constant",
+          "value": {
+            "type": "color",
+            "value": {
+              "r": 0.2,
+              "g": 0.4,
+              "b": 1.1,
+              "a": 0.8,
+              "space": "native_curve"
+            }
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.parameter.get",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              },
+              "effect_instance_id": {
+                "$ref": "/fixture/colorize_instance"
+              }
+            },
+            "parameter_path": {
+              "$ref": "/fixture/color_path"
+            },
+            "time": {
+              "$ref": "/fixture/time"
+            }
+          },
+          "expect": {
+            "/readback/value": {
+              "$ref": "/apply_request/params/value"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "key-set",
+      "capability": "v4.keyframe.set",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.keyframe.set",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/scale_path"
+          },
+          "time": {
+            "$ref": "/fixture/time"
+          },
+          "value": {
+            "type": "double",
+            "value": 1.1
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.parameter.get",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "parameter_path": {
+              "$ref": "/fixture/scale_path"
+            },
+            "time": {
+              "$ref": "/fixture/time"
+            }
+          },
+          "expect": {
+            "/readback/value": {
+              "$ref": "/apply_request/params/value"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "key-delete",
+      "capability": "v4.keyframe.delete",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.keyframe.delete",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/scale_path"
+          },
+          "time": {
+            "$ref": "/fixture/key_time"
+          },
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.keyframe.list",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "parameter_path": {
+              "$ref": "/fixture/scale_path"
+            },
+            "time": {
+              "$ref": "/fixture/key_time"
+            }
+          },
+          "expect": {
+            "/readback/keyframes": {
+              "$ref": "/apply/readback/keyframes"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "interpolation-linear",
+      "capability": "v4.keyframe.set_interpolation",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.keyframe.set_interpolation",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/scale_path"
+          },
+          "time": {
+            "$ref": "/fixture/key_time"
+          },
+          "interpolation": "linear",
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.keyframe.list",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "parameter_path": {
+              "$ref": "/fixture/scale_path"
+            },
+            "time": {
+              "$ref": "/fixture/key_time"
+            }
+          },
+          "expect": {
+            "/readback/keyframes": {
+              "$ref": "/apply/readback/keyframes"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "interpolation-hold",
+      "capability": "v4.keyframe.set_interpolation",
+      "kind": "mutation",
+      "apply": {
+        "method": "v4.keyframe.set_interpolation",
+        "params": {
+          "target": {
+            "clip_id": {
+              "$ref": "/fixture/clip_id"
+            }
+          },
+          "parameter_path": {
+            "$ref": "/fixture/scale_path"
+          },
+          "time": {
+            "$ref": "/fixture/key_time"
+          },
+          "interpolation": "hold",
+          "operation_id": {
+            "$ref": "/run/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/baseline/revision_after"
+          }
+        }
+      },
+      "readback": {
+        "method": "v4.state.snapshot",
+        "params": {},
+        "expect": {
+          "/readback/comparison": "exact except security-scoped bookmark bytes"
+        },
+        "compare": [
+          "/readback/state",
+          "/readback/comparison"
+        ],
+        "revision": "/revision_after"
+      },
+      "undo": {
+        "method": "v4.history.undo",
+        "params": {
+          "operation_id": {
+            "$ref": "/apply/operation_id"
+          },
+          "expected_revision": {
+            "$ref": "/apply/revision_after"
+          }
+        }
+      },
+      "after_apply": [
+        {
+          "method": "v4.keyframe.list",
+          "params": {
+            "target": {
+              "clip_id": {
+                "$ref": "/fixture/clip_id"
+              }
+            },
+            "parameter_path": {
+              "$ref": "/fixture/scale_path"
+            },
+            "time": {
+              "$ref": "/fixture/key_time"
+            }
+          },
+          "expect": {
+            "/readback/keyframes": {
+              "$ref": "/apply/readback/keyframes"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "manual_cases": [
+    {
+      "id": "Gaussian_catalog_typed_value",
+      "fixture": "Gaussian built-in Motion filter on a trimmed disposable clip",
+      "steps": [
+        {
+          "method": "v4.effect.catalog",
+          "params": {
+            "query": "Gaussian",
+            "type": "filter",
+            "offset": 0,
+            "limit": 1
+          },
+          "expect": "Exact full effectID with ... prefix preserved; category/localized_name/stable_name/template_path/package_uuid/payload_available present. Page until next_offset is null; repeat page unchanged."
+        },
+        {
+          "method": "v4.effect.add",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "effect_id": "$catalog.effects[0].effectID"
+          },
+          "capture": "effect",
+          "expect": "applied true, new unique native fileUUID; exactly one extra instance, same original order."
+        },
+        {
+          "method": "v4.object.inspect",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$effect"
+            },
+            "time": "$time1"
+          },
+          "expect": "Stable numeric channel paths, full parent hierarchy, Gaussian published Amount/Horizontal/Vertical/Blur Boost bindings established through native seed export; no assumption that Amount UI 30 means native 30."
+        },
+        {
+          "method": "v4.parameter.describe",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$effect"
+            },
+            "parameter_path": "$amount_path"
+          },
+          "expect": "Metadata leaf directly at readback root; native type, separate data/UI limits, null for unknown unit, animatable, coordinate space, writable."
+        },
+        {
+          "method": "v4.parameter.get",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$effect"
+            },
+            "parameter_path": "$amount_path",
+            "time": "$time1"
+          },
+          "capture": "before",
+          "expect": "Read explicit 1001/30000, not time zero or playhead."
+        },
+        {
+          "method": "v4.parameter.set",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$effect"
+            },
+            "parameter_path": "$amount_path",
+            "time": "$time1",
+            "mode": "at_time",
+            "value": {
+              "type": "double",
+              "value": 0.3
+            }
+          },
+          "expect": "Same-time native readback verifies value and key; preserve unrelated values/keys. Compare native UI and exported seed key before treating 0.3 as calibrated Gaussian Amount."
+        }
+      ],
+      "undo_check": "Undo exactly the parameter write, inspect value/key inventory, then undo the effect insertion in separate owned groups. Rendered frame comparison is recorded separately."
+    },
+    {
+      "id": "Gaussian_duplicate_instance_lifecycle",
+      "fixture": "Two Gaussian instances with identical effectID and different native fileUUID",
+      "steps": [
+        {
+          "method": "v4.effect.add",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "effect_id": "$Gaussian_effectID"
+          },
+          "capture": "effect_b",
+          "expect": "Second exact instance, never reuse first instance identity."
+        },
+        {
+          "method": "v4.effect.enable",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$effect_b"
+            },
+            "enabled": false
+          },
+          "expect": "Only B bypassed; false preserved. Native state and exported enabled flag agree."
+        },
+        {
+          "method": "v4.effect.move",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$effect_b"
+            },
+            "before_instance_id": "$effect"
+          },
+          "expect": "Exact B precedes A in same native section; no cross-section movement. Repeat move to section end using null and validate insertion-index semantics."
+        },
+        {
+          "method": "v4.effect.remove",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$effect_b"
+            }
+          },
+          "expect": "Only B removed, A and all other instances retain order/values; stale B ID rejected on follow-up mutation."
+        }
+      ],
+      "undo_check": "Undo each operation separately; exact instance order, bypass state and parameters restored. Record whether fileUUID survives undo, redo and project reopen."
+    },
+    {
+      "id": "Letterbox_enum_color_and_geometry",
+      "fixture": "Built-in Letterbox on a disposable clip",
+      "steps": [
+        {
+          "method": "v4.effect.catalog",
+          "params": {
+            "query": "Letterbox",
+            "type": "filter"
+          },
+          "expect": "Full stable effect ID, no suffix truncation."
+        },
+        {
+          "method": "v4.effect.add",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "effect_id": "$Letterbox_effectID"
+          },
+          "capture": "letterbox",
+          "expect": "Exact instance returned."
+        },
+        {
+          "method": "v4.object.inspect",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$letterbox"
+            },
+            "time": "$time1"
+          },
+          "expect": "Expose actual Aspect Ratio/Offset/Border controls that the native folder publishes. Enum mapping comes from intValueForIndex, not ordinal inference. If a rig is double, preserve double type."
+        },
+        {
+          "method": "v4.parameter.set",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$letterbox"
+            },
+            "parameter_path": "$discovered_enum_path",
+            "time": "$time1",
+            "mode": "constant",
+            "value": {
+              "type": "enum",
+              "value": "$native_option.value"
+            }
+          },
+          "expect": "Correct remapped native option read back, or explicit unsupported/type mismatch if the published channel is not enum. Out-of-option integer must not mutate."
+        }
+      ],
+      "undo_check": "Undo restores enum/geometry without removing sibling effects. Viewer geometry and seed XML establish actual coordinates separately."
+    },
+    {
+      "id": "Colorize_native_RGBA",
+      "fixture": "Built-in Colorize with exposed native color channels",
+      "steps": [
+        {
+          "method": "v4.effect.catalog",
+          "params": {
+            "query": "Colorize",
+            "type": "filter"
+          },
+          "expect": "Find exact Motion template identity; inner FxPlug UUID is not substituted."
+        },
+        {
+          "method": "v4.effect.add",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "effect_id": "$Colorize_effectID"
+          },
+          "capture": "colorize",
+          "expect": "Unique exact instance."
+        },
+        {
+          "method": "v4.object.inspect",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$colorize"
+            },
+            "time": "$time1"
+          },
+          "expect": "Native color leaves discovered; no coercion of RGB(A) into double. Unknown display color-space metadata stays unknown."
+        },
+        {
+          "method": "v4.parameter.set",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$colorize"
+            },
+            "parameter_path": "$native_color_path",
+            "time": "$time1",
+            "mode": "constant",
+            "value": {
+              "type": "color",
+              "value": {
+                "r": 0.2,
+                "g": 0.4,
+                "b": 1.1,
+                "a": 0.8,
+                "space": "native_curve"
+              }
+            }
+          },
+          "expect": "Every native component read at the requested time; HDR value is not silently clipped to UI range. If no native color leaf exists, report unsupported instead of synthesizing a color model."
+        }
+      ],
+      "undo_check": "Native color tuple restored; native Viewer, project color space and exported parameter representation checked independently."
+    },
+    {
+      "id": "transform_scale_keyframe_CRUD",
+      "fixture": "Trimmed clip with present intrinsic transform, two existing scale keys and an unrelated animated opacity channel",
+      "steps": [
+        {
+          "method": "v4.object.inspect",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "time": "$time0"
+          },
+          "expect": "Copy stable binding /intrinsic/transform/scale/x; analogous y/z roots when present. No default intrinsic creation in a read-only call."
+        },
+        {
+          "method": "v4.keyframe.list",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": "$time0"
+          },
+          "capture": "keys_before",
+          "expect": "Native exact key times and typed values. Capture existing endpoints and interpolation codes."
+        },
+        {
+          "method": "v4.keyframe.set",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": "$time1",
+            "value": {
+              "type": "double",
+              "value": 1.1
+            }
+          },
+          "expect": "Key at exact rational time, same-time readback; existing endpoints and opacity curve unchanged."
+        },
+        {
+          "method": "v4.keyframe.set",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": "$time2",
+            "value": {
+              "type": "double",
+              "value": 1.2
+            }
+          },
+          "expect": "Second exact-time key; no float timestamp drift."
+        },
+        {
+          "method": "v4.keyframe.set_interpolation",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": "$time1",
+            "interpolation": "linear"
+          },
+          "expect": "Read native code 1 on outgoing segment; record midpoint value and Viewer frame."
+        },
+        {
+          "method": "v4.keyframe.set_interpolation",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": "$time1",
+            "interpolation": "hold"
+          },
+          "expect": "Read native code 0 and constant segment until next key."
+        },
+        {
+          "method": "v4.keyframe.set_interpolation",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": "$time1",
+            "interpolation": "ease_in_out"
+          },
+          "expect": "Read native code 21 and actual S-curve sample values. This is not a claim of FCP spatial Smooth tangent equivalence."
+        },
+        {
+          "method": "v4.keyframe.delete",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": "$time1"
+          },
+          "expect": "Only exact point removed; adjacent endpoints/interpolations and other channels unchanged. Repeated delete reports applied false."
+        },
+        {
+          "method": "v4.parameter.set",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": "$time2",
+            "mode": "constant",
+            "value": {
+              "type": "double",
+              "value": 1.0
+            }
+          },
+          "expect": "ANIMATED_PARAMETER before mutation; no implicit curve deletion."
+        }
+      ],
+      "undo_check": "Undo all edits one group at a time; exact original times/values/interpolation and unrelated animation restored; save/reopen fixture and compare."
+    },
+    {
+      "id": "intrinsic_crop_trim_KenBurns_distort_opacity_blend",
+      "fixture": "Disposable project with pre-existing crop/trim/Ken Burns, distort, compositing and gain intrinsic effects",
+      "steps": [
+        {
+          "method": "v4.object.inspect",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "time": "$time1"
+          },
+          "expect": "Expose crop mode, native edge and Ken Burns channels, four-corner tree, opacity, blend enum, gain under intrinsic roots. Distinct parameter IDs for same localized names. Preserve raw unit/coordinate metadata when uncalibrated."
+        },
+        {
+          "method": "v4.parameter.get",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$discovered_corner_or_scalar_path",
+            "time": "$time1"
+          },
+          "expect": "Native point2d/point3d or scalar child read; no assumed pixel/percent/origin transform."
+        },
+        {
+          "method": "v4.parameter.set",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$discovered_corner_or_scalar_path",
+            "time": "$time1",
+            "mode": "constant",
+            "value": "$typed_value_from_describe"
+          },
+          "expect": "Correct leaf and same-time typed readback; missing intrinsic, ambiguous path or unsupported custom curve rejects before mutation."
+        }
+      ],
+      "undo_check": "Compare full native intrinsic tree and seed XML after undo; Ken Burns endpoints and all other corners must be preserved."
+    },
+    {
+      "id": "time_identity_failure_boundaries",
+      "fixture": "Trimmed clip, connected clip, retimed clip, nested compound and localized application language",
+      "steps": [
+        {
+          "method": "v4.parameter.get",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": "$exact_timeline_time"
+          },
+          "expect": "Native containerToLocalTime mapping and explicit clip_local read return the same value. Validate reverse mapping on keyframe.list, nonzero source in-point, nested placement and retime."
+        },
+        {
+          "method": "v4.parameter.describe",
+          "params": {
+            "target": {
+              "clip_id": "$clip",
+              "effect_instance_id": "$another_clips_instance"
+            },
+            "parameter_path": "$copied_wrong_path"
+          },
+          "expect": "Reject foreign/stale instance; UI language changes labels without changing native path. Duplicate sibling channel IDs reject rather than choose by index."
+        },
+        {
+          "method": "v4.parameter.set",
+          "params": {
+            "target": {
+              "clip_id": "$clip"
+            },
+            "parameter_path": "$scale_x_path",
+            "time": {
+              "value": 1,
+              "timescale": 0,
+              "space": "clip_local"
+            },
+            "mode": "at_time",
+            "value": {
+              "type": "double",
+              "value": 1.1
+            }
+          },
+          "expect": "INVALID_TIME, applied false, no undo entry."
+        }
+      ],
+      "undo_check": "No undo changes for rejected requests. If native readback mismatches after an accepted setter, result must be ok false/applied true with state available for core reconciliation, never blind retry."
+    }
+  ],
+  "fixture_setup": [
+    "Open exactly the disposable 30fps fixture library/project; no production library may be open.",
+    "The trimmed main AV clip starts at component-local 300/30s. Preinstall two Gaussian instances A/B in the same section (B after A), Letterbox and Colorize; discover every native parameter path and enum value.",
+    "Use a present intrinsic scale channel with two baseline keys at 360/30s and 390/30s, with the first outgoing segment S-curve. Use a different unkeyed Amount sample at 330/30s.",
+    "Preinstall an editable title with field 0 text Hello world, an English caption with block 0, an existing Turkish role and Music audio role, and a transition on a SECOND cut. The main left/right cut must be transition-free with sufficient handles.",
+    "Baseline gain is unanimated, fades are absent, channels enabled, role is not Music, and rate is 1x. Verify custom generator identity and all fixtures before removing template.",
+    "Repeated native XML exports must be exact except security-scoped bookmark bytes. Preserve raw XML; explicitly compare asset src, duration and format ID; any other instability stops testing.",
+    "Keep complete FCPXML before/after/undo and separate native frame/audio/save-reopen evidence. Scope here is readback/undo only."
+  ]
+}

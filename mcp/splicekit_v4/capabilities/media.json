@@ -1,0 +1,3883 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "schema_version": 1,
+      "name": "v4.color.inspect",
+      "method": "v4.color.inspect",
+      "category": "color",
+      "description": "Inspect one exact correction instance using the shared parameter tree and disclose uncalibrated named controls.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "family": {
+            "enum": [
+              "board",
+              "wheels",
+              "curves",
+              "hue_sat",
+              "lut"
+            ]
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "timescale": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "space": {
+                "enum": [
+                  "clip_local",
+                  "timeline"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "timescale",
+              "space"
+            ],
+            "additionalProperties": false
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "target",
+          "family",
+          "time"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "v4.object.inspect",
+      "undo_kind": "none",
+      "read_supported": true,
+      "write_supported": false,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "family is a requested logical namespace, not a verified native family classifier.",
+        "Native preview color space and tonemap are not measured.",
+        "No built-in name-to-channel-ID calibration; bind paths from this exact instance."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.color.apply_adjustment",
+      "method": "v4.color.apply_adjustment",
+      "category": "color",
+      "description": "Create a correction by its full catalog ID, or apply named typed values through instance-discovered paths.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "timescale": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "space": {
+                "enum": [
+                  "clip_local",
+                  "timeline"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "timescale",
+              "space"
+            ],
+            "additionalProperties": false
+          },
+          "bindings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minProperties": 1
+          },
+          "adjustments": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "double",
+                        "angle"
+                      ]
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "int",
+                        "enum"
+                      ]
+                    },
+                    "value": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "bool"
+                    },
+                    "value": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "color"
+                    },
+                    "value": {
+                      "type": "object",
+                      "properties": {
+                        "r": {
+                          "type": "number"
+                        },
+                        "g": {
+                          "type": "number"
+                        },
+                        "b": {
+                          "type": "number"
+                        },
+                        "a": {
+                          "type": "number"
+                        },
+                        "space": {
+                          "const": "native_curve"
+                        }
+                      },
+                      "required": [
+                        "r",
+                        "g",
+                        "b",
+                        "a",
+                        "space"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "minProperties": 1,
+            "maxProperties": 64
+          },
+          "mode": {
+            "enum": [
+              "at_time",
+              "constant"
+            ]
+          },
+          "family": {
+            "enum": [
+              "board",
+              "wheels",
+              "curves",
+              "hue_sat",
+              "lut"
+            ]
+          },
+          "create_effect_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "required": [
+          "target",
+          "family",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "create_effect_id"
+            ],
+            "not": {
+              "required": [
+                "adjustments"
+              ]
+            }
+          },
+          {
+            "required": [
+              "time",
+              "bindings",
+              "adjustments"
+            ],
+            "not": {
+              "required": [
+                "create_effect_id"
+              ]
+            }
+          }
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "v4.effect.add + v4.parameter.describe/set",
+      "undo_kind": "native_group",
+      "read_supported": false,
+      "write_supported": true,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Creation and parameter writes are separate calls: inspect the newly created native instance first.",
+        "For adjustment calls target.effect_instance_id, time, bindings and adjustments are required.",
+        "Board/Wheels scalar or native-color and LUT string/mix/enum bindings only.",
+        "Curves/Hue-Sat point buffers, automatic LUT color-space mapping, and family calibration remain unsupported."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "mutation"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.inspect",
+      "method": "v4.audio.inspect",
+      "category": "audio",
+      "description": "Read native gain, exact-time keyframe presence and source-channel enable/role state.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "timescale": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "space": {
+                "enum": [
+                  "clip_local",
+                  "timeline"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "timescale",
+              "space"
+            ],
+            "additionalProperties": false
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "target",
+          "time"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "native_objc",
+      "undo_kind": "none",
+      "read_supported": true,
+      "write_supported": false,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Audio stack identifier 0 only; no compound/component fallback."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.set_gain",
+      "method": "v4.audio.set_gain",
+      "category": "audio",
+      "description": "Set absolute dB gain as a constant or an exact-time native keyframe, with linear-gain readback.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "timescale": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "space": {
+                "enum": [
+                  "clip_local",
+                  "timeline"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "timescale",
+              "space"
+            ],
+            "additionalProperties": false
+          },
+          "gain_db": {
+            "type": "number",
+            "minimum": -120,
+            "maximum": 36
+          },
+          "mode": {
+            "enum": [
+              "constant",
+              "keyframe"
+            ]
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "required": [
+          "target",
+          "time",
+          "gain_db",
+          "mode",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "native_objc",
+      "undo_kind": "native_group",
+      "read_supported": false,
+      "write_supported": true,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Constant writes reject any existing animation.",
+        "Native unit is linear amplitude, converted using 10^(dB/20).",
+        "Only audio identifier 0 is supported; other audio components are not silently selected."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "mutation"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.fade",
+      "method": "v4.audio.fade",
+      "category": "audio",
+      "description": "Set or remove one audio fade using a native float-duration setter and rational-time readback.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "edge": {
+            "enum": [
+              "in",
+              "out"
+            ]
+          },
+          "duration": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "timescale": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              }
+            },
+            "required": [
+              "value",
+              "timescale"
+            ],
+            "additionalProperties": false
+          },
+          "curve": {
+            "const": "native_default"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "required": [
+          "target",
+          "edge",
+          "duration",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "native_objc",
+      "undo_kind": "native_group",
+      "read_supported": false,
+      "write_supported": true,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Native default fade shape only; other fade-type enums are uncalibrated.",
+        "Native float precision and sample/frame quantization require live verification."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "mutation"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.effect.add",
+      "method": "v4.audio.effect.add",
+      "category": "audio",
+      "description": "Insert an exact catalog-verified audio effect and return its native instance identity.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "effect_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "required": [
+          "target",
+          "effect_id",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "v4.effect.add",
+      "undo_kind": "native_group",
+      "read_supported": false,
+      "write_supported": true,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Full effect ID only; native stack placement needs live audio-component validation."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "mutation"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.effect.configure",
+      "method": "v4.audio.effect.configure",
+      "category": "audio",
+      "description": "Configure EQ bands 1..8 or compressor controls through explicitly bound native parameter paths.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id",
+              "effect_instance_id"
+            ],
+            "additionalProperties": false
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "timescale": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "space": {
+                "enum": [
+                  "clip_local",
+                  "timeline"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "timescale",
+              "space"
+            ],
+            "additionalProperties": false
+          },
+          "bindings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minProperties": 1
+          },
+          "adjustments": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "double",
+                        "angle"
+                      ]
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "int",
+                        "enum"
+                      ]
+                    },
+                    "value": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "bool"
+                    },
+                    "value": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "color"
+                    },
+                    "value": {
+                      "type": "object",
+                      "properties": {
+                        "r": {
+                          "type": "number"
+                        },
+                        "g": {
+                          "type": "number"
+                        },
+                        "b": {
+                          "type": "number"
+                        },
+                        "a": {
+                          "type": "number"
+                        },
+                        "space": {
+                          "const": "native_curve"
+                        }
+                      },
+                      "required": [
+                        "r",
+                        "g",
+                        "b",
+                        "a",
+                        "space"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "minProperties": 1,
+            "maxProperties": 64
+          },
+          "mode": {
+            "enum": [
+              "at_time",
+              "constant"
+            ]
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "required": [
+          "target",
+          "time",
+          "bindings",
+          "adjustments",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "v4.parameter.describe/set",
+      "undo_kind": "native_group",
+      "read_supported": false,
+      "write_supported": true,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Band/frequency/Q/gain and compressor names require explicit native path bindings.",
+        "No assumed Hz, dB, milliseconds, ratio scaling or enum ordinal."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "mutation"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.apply_preset",
+      "method": "v4.audio.apply_preset",
+      "category": "audio",
+      "description": "Apply a caller-known native AU factory preset ID to one exact instance and read back presetID.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id",
+              "effect_instance_id"
+            ],
+            "additionalProperties": false
+          },
+          "factory_preset_id": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "required": [
+          "target",
+          "factory_preset_id",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "native_objc",
+      "undo_kind": "native_group",
+      "read_supported": false,
+      "write_supported": true,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Preset IDs must come from known native calibration; there is no preset catalog yet.",
+        "File presets and preset side-effect parameter diffs are not implemented."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "mutation"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.get_channel_map",
+      "method": "v4.audio.get_channel_map",
+      "category": "audio",
+      "description": "Read the existing native audio role UID and zero-based source-channel enable map.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "native_objc",
+      "undo_kind": "none",
+      "read_supported": true,
+      "write_supported": false,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Reports source enable flags, not a complete routing or stereo grouping model."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.set_channel_map",
+      "method": "v4.audio.set_channel_map",
+      "category": "audio",
+      "description": "Copy and replace the existing native source-channel enable map without changing routing or groups.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "enabled": {
+            "type": "array",
+            "items": {
+              "type": "boolean"
+            },
+            "minItems": 1,
+            "maxItems": 256
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "required": [
+          "target",
+          "enabled",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "native_objc",
+      "undo_kind": "native_group",
+      "read_supported": false,
+      "write_supported": true,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "One boolean per existing channel; no source-count, channel-routing or stereo-group changes.",
+        "Requires the clip to provide a native undo snapshot."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "mutation"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.set_role",
+      "method": "v4.audio.set_role",
+      "category": "audio",
+      "description": "Assign an existing native audio role UID using the sequence action and verify the stored UID.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "role_uid": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "required": [
+          "target",
+          "role_uid",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "native_objc",
+      "undo_kind": "native_group",
+      "read_supported": false,
+      "write_supported": true,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Role must resolve in exactly one open library and match the current audio role native type.",
+        "No new roles, localized name selection or channel-specific subrole reassignment."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "mutation"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.audio.ducking.plan",
+      "method": "v4.audio.ducking.plan",
+      "category": "audio",
+      "description": "Produce an explicit dialogue-driven ducking job specification without changing audio.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "dialogue_targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "clip_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "effect_instance_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "clip_id"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 64
+          },
+          "duck_db": {
+            "type": "number",
+            "minimum": -120,
+            "maximum": 0
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "target",
+          "dialogue_targets",
+          "duck_db"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "planning_only",
+      "undo_kind": "none",
+      "read_supported": true,
+      "write_supported": false,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "No native ducking or volume-keyframe generation is started.",
+        "Native sequence-support gate, dialogue activity detection and automation merge policy remain open."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.retime.inspect",
+      "method": "v4.retime.inspect",
+      "category": "retime",
+      "description": "Read native rate and segment count plus exact native source/component/timeline sample relations.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "timescale": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 2147483647
+                }
+              },
+              "required": [
+                "value",
+                "timescale"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 256
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "native_objc",
+      "undo_kind": "none",
+      "read_supported": true,
+      "write_supported": false,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Samples are a relation, not a complete curve or unique source-to-timeline inverse.",
+        "Holds/reverse can have multiple timeline matches; custom point buffers are not exported."
+      ],
+      "atomicity": "read_only",
+      "operation_kind": "read"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.retime.set",
+      "method": "v4.retime.set",
+      "category": "retime",
+      "description": "Apply constant speed, a reverse toggle, exact-time freeze, or a to/from-zero native ramp.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "mode": {
+            "enum": [
+              "constant",
+              "reverse",
+              "freeze",
+              "ramp"
+            ]
+          },
+          "rate": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "ripple": {
+            "type": "boolean"
+          },
+          "component_time": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "timescale": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              }
+            },
+            "required": [
+              "value",
+              "timescale"
+            ],
+            "additionalProperties": false
+          },
+          "duration": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "timescale": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              }
+            },
+            "required": [
+              "value",
+              "timescale"
+            ],
+            "additionalProperties": false
+          },
+          "direction": {
+            "enum": [
+              "to_zero",
+              "from_zero"
+            ]
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional client correlation; operation_id is the native durable idempotency key."
+          }
+        },
+        "required": [
+          "target",
+          "mode",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "mode": {
+                  "const": "constant"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "rate",
+                "ripple"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "freeze",
+                    "ramp"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "component_time",
+                "duration"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "mode": {
+                  "const": "ramp"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "direction"
+              ]
+            }
+          }
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "native_objc",
+      "undo_kind": "native_group",
+      "read_supported": false,
+      "write_supported": true,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Reverse is one toggle; the core operation_id must be reused for reconciliation, never retried as a new operation.",
+        "Arbitrary piecewise curves, ramp falloff values and optical flow analysis are not supported.",
+        "Samples confirm native state, not rendered motion quality."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "mutation"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.analysis.start",
+      "method": "v4.analysis.start",
+      "category": "analysis",
+      "description": "Validate and record a blocked analysis admission. No native task is started by this version.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "clip_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effect_instance_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clip_id"
+            ],
+            "additionalProperties": false
+          },
+          "kind": {
+            "enum": [
+              "object_tracker",
+              "shape_mask",
+              "magnetic_mask",
+              "auto_mask",
+              "smart_conform",
+              "stabilizer"
+            ]
+          },
+          "component_range": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "timescale": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  }
+                },
+                "required": [
+                  "value",
+                  "timescale"
+                ],
+                "additionalProperties": false
+              },
+              "duration": {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "timescale": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  }
+                },
+                "required": [
+                  "value",
+                  "timescale"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "start",
+              "duration"
+            ],
+            "additionalProperties": false
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "target",
+          "kind",
+          "component_range",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "blocked_admission",
+      "undo_kind": "none",
+      "read_supported": false,
+      "write_supported": false,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "Always returns UNSUPPORTED_ANALYSIS_ADAPTER with native_started=false and ready=false.",
+        "No unverified options dictionaries, control points, enum values or cancellation selectors are executed.",
+        "Local admission records are process-scoped and capped at 256."
+      ],
+      "atomicity": "One core-owned native undo group; partial failure is reported, not automatically rolled back.",
+      "operation_kind": "admission"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.analysis.status",
+      "method": "v4.analysis.status",
+      "category": "analysis",
+      "description": "Read a process-local analysis admission; blocked is never treated as completed.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "blocked_admission",
+      "undo_kind": "none",
+      "read_supported": true,
+      "write_supported": false,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "No native object-tracker/mask/Smart Conform/stabilizer execution adapter is implemented."
+      ],
+      "atomicity": "local_admission_only",
+      "operation_kind": "read"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.analysis.cancel",
+      "method": "v4.analysis.cancel",
+      "category": "analysis",
+      "description": "Cancel only a local blocked admission, without touching global native FCP tasks.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "job_id",
+          "operation_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "blocked_admission",
+      "undo_kind": "none",
+      "read_supported": false,
+      "write_supported": false,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "No native object-tracker/mask/Smart Conform/stabilizer execution adapter is implemented."
+      ],
+      "atomicity": "local_admission_only",
+      "operation_kind": "admission"
+    },
+    {
+      "schema_version": 1,
+      "name": "v4.analysis.result",
+      "method": "v4.analysis.result",
+      "category": "analysis",
+      "description": "Return ANALYSIS_NOT_READY; this version cannot produce a native analysis result.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected_revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "readback": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "native_group",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_level": {
+            "enum": [
+              "static",
+              "offline_tested",
+              "live_verified"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "operation_id",
+          "applied",
+          "readback",
+          "revision_before",
+          "revision_after",
+          "undo",
+          "evidence_level",
+          "warnings",
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "backend": "blocked_admission",
+      "undo_kind": "none",
+      "read_supported": true,
+      "write_supported": false,
+      "readback_supported": true,
+      "evidence_level": "offline_tested",
+      "requires_fcp_build": [
+        "454072"
+      ],
+      "known_limitations": [
+        "No live FCP acceptance; requires the integrated v4 core.",
+        "No native object-tracker/mask/Smart Conform/stabilizer execution adapter is implemented."
+      ],
+      "atomicity": "local_admission_only",
+      "operation_kind": "read"
+    }
+  ]
+}

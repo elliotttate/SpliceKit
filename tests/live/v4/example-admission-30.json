@@ -1,0 +1,11 @@
+{
+  "schema": "splicekit.live-plan/1",
+  "id": "example-admission-30", "template": true,
+  "description": "Mock-only blocked native analysis admission. Passing this plan proves rejection and unchanged state, never implemented analysis.",
+  "fixture": {"library_name": "SpliceKit-Test-v4", "project": "SpliceKit-Test-30", "frame_duration": "1/30s"},
+  "steps": [{
+    "id": "analysis-not-started", "kind": "admission", "capability": "v4.media.analyze",
+    "apply": {"method": "v4.media.analyze", "params": {}, "expect": {"/ok": false, "/applied": false, "/readback/native_started": false, "/readback/ready": false, "/error/code": "NOT_IMPLEMENTED"}},
+    "readback": {"method": "v4.timeline.inspect", "params": {}, "expect": {"/state": {"$ref": "/baseline/state"}}, "compare": ["/state"]}
+  }]
+}
