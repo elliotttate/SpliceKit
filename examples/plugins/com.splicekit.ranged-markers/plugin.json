@@ -1,7 +1,7 @@
 {
   "id": "com.splicekit.ranged-markers",
   "name": "Ranged & Colored Markers",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Markers with a real duration and custom colors, drawn on the FCP timeline",
   "author": "SpliceKit",
   "apiVersion": 1,

@@ -12,6 +12,20 @@ Native SpliceKit plugin that adds markers with a real duration and custom colors
   `setPosition:`) to tint the pin and draw an always-visible bar across the range.
   Without the plugin, markers show as normal pins with the tag in their name.
 
+## Using it in Final Cut Pro
+
+- **Mark ▸ Markers ▸ Add Ranged Marker** (⌃⌥M): adds a marker over the in/out
+  range, or 5 seconds from the playhead if no range is set.
+- **Right-click a marker**: Marker Color, Extend Marker Range to Playhead,
+  Set Marker Range to In/Out, Remove Marker Range.
+- **Mark ▸ Markers** has the same color and range items. They act on the
+  selected marker, else the marker under the playhead. Extend uses the closest
+  marker before the playhead, so you can add a marker, play, stop, and extend.
+- **Drag the handle** at the end of a range bar to resize it. The new length is
+  shown while dragging and snaps to whole frames.
+
+Every change is a normal FCP edit, so Cmd-Z undoes it.
+
 ## Build and install
 
 ```bash
@@ -36,4 +50,5 @@ with a unique path instead: `debug_load_plugin(action="load", path="/tmp/rm_<n>.
 
 - Only markers on primary storyline clips are handled by `add` and `list`.
 - Adding a named or colored marker makes two undo steps (add, then rename).
-- No drag handle yet for changing a range on the timeline.
+- Only the end of a range can be dragged; drag the pin itself to move a marker.
+- The ⌃⌥M shortcut is a menu shortcut and is not listed in FCP's Command Editor.
