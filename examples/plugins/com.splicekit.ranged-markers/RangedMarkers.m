@@ -53,6 +53,7 @@ static CGFloat sDragWidth;
 
 static double RMSeconds(RMTime t) { return t.timescale > 0 ? (double)t.value / t.timescale : 0; }
 static RMTime RMMakeTime(double s, int32_t ts) { return (RMTime){ (int64_t)llround(s * ts), ts, 1, 0 }; }
+static NSDictionary *RMRangeDict(RMTimeRange r) { return @{@"start": @(RMSeconds(r.start)), @"duration": @(RMSeconds(r.duration))}; }
 
 static id RMSend(id obj, NSString *selName) {
     SEL sel = NSSelectorFromString(selName);
@@ -96,27 +97,65 @@ static NSDictionary<NSString *, NSColor *> *RMPalette(void) {
     return palette;
 }
 
-// "[Red] Fix audio" -> color "red", title "Fix audio". Unknown tags are left alone.
-static NSString *RMParseColorTag(NSString *name, NSString **titleOut) {
+// Marker name tags: "[Red] Fix audio", "[Red 12.5s] Fix audio" or "[12.5s] Fix audio".
+// The optional duration stores a range longer than FCP allows on the marker's clip
+// (FCP limits a marker to the source media of the clip it is attached to).
+// Brackets containing anything else are treated as part of the title.
+// Returns the stored duration (0 if none); color and title are optional outputs.
+static double RMParseTag(NSString *name, NSString **titleOut, NSString **colorOut) {
     if (titleOut) *titleOut = name ?: @"";
-    if (![name hasPrefix:@"["]) return nil;
+    if (colorOut) *colorOut = nil;
+    if (![name hasPrefix:@"["]) return 0;
     NSRange close = [name rangeOfString:@"]"];
-    if (close.location == NSNotFound || close.location < 2) return nil;
-    NSString *tag = [[name substringWithRange:NSMakeRange(1, close.location - 1)] lowercaseString];
-    if (!RMPalette()[tag]) return nil;
+    if (close.location == NSNotFound || close.location < 2) return 0;
+    NSString *inner = [name substringWithRange:NSMakeRange(1, close.location - 1)];
+    NSString *color = nil;
+    double duration = 0;
+    for (NSString *token in [inner.lowercaseString componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet]) {
+        if (!token.length) continue;
+        if (RMPalette()[token] && !color) {
+            color = token;
+        } else if ([token hasSuffix:@"s"] && [[token substringToIndex:token.length - 1] doubleValue] > 0) {
+            duration = [[token substringToIndex:token.length - 1] doubleValue];
+        } else {
+            return 0; // not one of our tags
+        }
+    }
+    if (colorOut) *colorOut = color;
     if (titleOut) {
         *titleOut = [[name substringFromIndex:close.location + 1]
-                     stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                     stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
     }
-    return tag;
+    return duration;
 }
 
+static NSString *RMFormatName(NSString *title, NSString *color, double duration) {
+    NSMutableArray *tokens = [NSMutableArray array];
+    if (color.length && ![color isEqualToString:@"none"]) {
+        [tokens addObject:[[[color substringToIndex:1] uppercaseString] stringByAppendingString:[color substringFromIndex:1]]];
+    }
+    if (duration > 0) {
+        NSString *secs = [NSString stringWithFormat:@"%.3f", duration];
+        while ([secs hasSuffix:@"0"]) secs = [secs substringToIndex:secs.length - 1];
+        if ([secs hasSuffix:@"."]) secs = [secs substringToIndex:secs.length - 1];
+        [tokens addObject:[secs stringByAppendingString:@"s"]];
+    }
+    if (!tokens.count) return title ?: @"";
+    NSString *tag = [NSString stringWithFormat:@"[%@]", [tokens componentsJoinedByString:@" "]];
+    return title.length ? [NSString stringWithFormat:@"%@ %@", tag, title] : tag;
+}
+
+static NSString *RMParseColorTag(NSString *name, NSString **titleOut) {
+    NSString *color = nil;
+    RMParseTag(name, titleOut, &color);
+    return color;
+}
+
+// Replace the color, keeping the title and any stored duration.
 static NSString *RMNameWithColor(NSString *name, NSString *color) {
     NSString *title = nil;
-    RMParseColorTag(name, &title);
-    if (!color.length || [color isEqualToString:@"none"]) return title;
-    NSString *cap = [[[color substringToIndex:1] uppercaseString] stringByAppendingString:[color substringFromIndex:1]];
-    return title.length ? [NSString stringWithFormat:@"[%@] %@", cap, title] : [NSString stringWithFormat:@"[%@]", cap];
+    double duration = RMParseTag(name, &title, NULL);
+    return RMFormatName(title, color, duration);
 }
 
 // Colors FCP uses for its own marker types, for ranged markers with no tag.
@@ -143,11 +182,15 @@ static double RMFrameSeconds(id obj) {
     return 1.0 / 24.0;
 }
 
-// FCP's own one-frame markers are 1/48000s long, ours are >= 2 frames.
-static BOOL RMIsRanged(id marker, double *durationOut) {
+// FCP's own length for the marker (its one-frame markers are 1/48000s long).
+static double RMFCPDuration(id marker) {
     RMTime d;
-    if (!RMReadTime(marker, @"duration", &d)) return NO;
-    double secs = RMSeconds(d);
+    return RMReadTime(marker, @"duration", &d) ? RMSeconds(d) : 0;
+}
+
+// A marker's range is the longer of FCP's duration and a duration stored in its tag.
+static BOOL RMIsRanged(id marker, double *durationOut) {
+    double secs = MAX(RMFCPDuration(marker), RMParseTag(RMSend(marker, @"displayName"), NULL, NULL));
     if (durationOut) *durationOut = secs;
     return secs > RMFrameSeconds(marker) * 1.5;
 }
@@ -417,7 +460,15 @@ static NSDictionary *RMAdd(NSDictionary *params) {
         RMTime fd;
         if (RMReadTime(sequence, @"frameDuration", &fd)) ts = fd.timescale;
         double localStart = start + RMLocalOffset(sequence, item);
-        RMTimeRange range = { RMMakeTime(localStart, ts), RMMakeTime(duration, ts) };
+        // FCP won't let a marker run past its clip's source media; the rest goes in the tag.
+        double fcpDuration = duration;
+        RMTimeRange media;
+        if (RMReadRange(item, @"unclippedRange", &media)) {
+            double available = RMSeconds(media.start) + RMSeconds(media.duration) - localStart;
+            fcpDuration = MAX(frame, MIN(duration, floor(available / frame) * frame));
+        }
+        double tagDuration = duration > fcpDuration + frame / 2 ? duration : 0;
+        RMTimeRange range = { RMMakeTime(localStart, ts), RMMakeTime(fcpDuration, ts) };
 
         NSSet *before = [NSSet setWithArray:RMMarkersOnItem(item)];
         SEL addSel = NSSelectorFromString(@"actionAddMarkerToAnchoredObject:isToDo:isChapter:withRange:error:");
@@ -435,9 +486,9 @@ static NSDictionary *RMAdd(NSDictionary *params) {
             return @{@"error": [NSString stringWithFormat:@"Unknown color '%@'. Use one of: %@", color,
                                 [[RMPalette().allKeys sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "]]};
         }
-        if (marker && (name.length || color.length)) {
+        if (marker && (name.length || color.length || tagDuration > 0)) {
             NSString *base = name.length ? name : (RMSend(marker, @"displayName") ?: @"Marker");
-            RMRename(marker, RMNameWithColor(base, color), NULL);
+            RMRename(marker, RMFormatName(base, color, tagDuration), NULL);
         }
         RMRefreshAll();
         return marker ? @{@"status": @"ok", @"marker": RMDescribeMarker(sequence, item, marker)}
@@ -485,6 +536,70 @@ static NSDictionary *RMList(NSDictionary *params) {
         }
         [out sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"start" ascending:YES]]];
         return @{@"status": @"ok", @"markers": out, @"colors": [RMPalette().allKeys sortedArrayUsingSelector:@selector(compare:)]};
+    });
+}
+
+// rangedMarkers.debugMarkers — each marker's clip, used range and available media (development).
+static NSDictionary *RMDebugMarkers(NSDictionary *params) {
+    return RMOnMain(^NSDictionary *{
+        id sequence = RMActiveSequence();
+        NSMutableArray *out = [NSMutableArray array];
+        for (id item in RMSpineItems(sequence)) {
+            NSArray *markers = RMMarkersOnItem(item);
+            if (!markers.count) continue;
+            RMTimeRange seqRange = {0}, clipped = {0}, unclipped = {0};
+            RMItemRange(sequence, item, &seqRange);
+            RMReadRange(item, @"clippedRange", &clipped);
+            RMReadRange(item, @"unclippedRange", &unclipped);
+            NSMutableArray *names = [NSMutableArray array];
+            for (id m in markers) {
+                RMTime a = {0};
+                RMReadTime(m, @"targetAnchorTime", &a);
+                [names addObject:@{@"name": RMSend(m, @"displayName") ?: @"", @"localStart": @(RMSeconds(a))}];
+            }
+            [out addObject:@{
+                @"clip": RMSend(item, @"displayName") ?: NSStringFromClass([item class]),
+                @"class": NSStringFromClass([item class]),
+                @"sequenceRange": RMRangeDict(seqRange),
+                @"clippedRange": RMRangeDict(clipped),
+                @"unclippedRange": RMRangeDict(unclipped),
+                @"markers": names,
+            }];
+        }
+        return @{@"items": out};
+    });
+}
+
+static __weak id sLastMarkerEditor;
+static void RMAddDurationRow(id editor);
+static void RMActDurationCommitted(id self, SEL _cmd, NSTextField *field);
+
+static void RMDumpView(NSView *view, int depth, NSMutableArray *out) {
+    if (!view || depth > 6) return;
+    NSMutableDictionary *d = [@{
+        @"class": NSStringFromClass([view class]),
+        @"frame": NSStringFromRect(view.frame),
+        @"depth": @(depth),
+        @"hidden": @(view.hidden),
+    } mutableCopy];
+    if ([view isKindOfClass:[NSTextField class]]) d[@"string"] = [(NSTextField *)view stringValue] ?: @"";
+    if ([view isKindOfClass:[NSButton class]]) d[@"title"] = [(NSButton *)view title] ?: @"";
+    [out addObject:d];
+    for (NSView *sub in view.subviews) RMDumpView(sub, depth + 1, out);
+}
+
+// rangedMarkers.debugEditor — view tree of the open marker editor (development).
+static NSDictionary *RMDebugEditor(NSDictionary *params) {
+    return RMOnMain(^NSDictionary *{
+        id editor = sLastMarkerEditor;
+        NSView *view = RMSend(editor, @"view");
+        if (![view isKindOfClass:[NSView class]]) return @{@"error": @"No marker editor has been opened"};
+        NSMutableArray *out = [NSMutableArray array];
+        RMDumpView(view, 0, out);
+        if ([params[@"addRow"] boolValue]) RMAddDurationRow(editor);
+        NSView *tc = [editor valueForKey:@"timecodeField"];
+        return @{@"editorClass": NSStringFromClass([editor class]), @"windowClass": NSStringFromClass([view.window class]) ?: @"",
+                 @"timecodeField": tc ? NSStringFromRect(tc.frame) : @"", @"views": out};
     });
 }
 
@@ -557,26 +672,138 @@ static double RMMarkerSequenceStart(id sequence, id marker) {
     return RMSeconds(anchor) - RMLocalOffset(sequence, item);
 }
 
+// Seconds of source media available after localStart on the marker's clip. FCP won't
+// let a marker run past its clip's source media, however long the timeline range is.
+static double RMAvailableMedia(id sequence, id item, RMTime localStart) {
+    RMTimeRange media;
+    if (!item || !RMReadRange(item, @"unclippedRange", &media)) return INFINITY;
+    return RMSeconds(media.start) + RMSeconds(media.duration) - RMSeconds(localStart);
+}
+
 // Undoable range change via -[FFAnchoredSequence actionMoveMarker:toRange:error:].
 // localStart is in the marker's clip-local time; duration is snapped to whole frames.
+// FCP gets as much of the range as its clip's media allows; anything longer is
+// kept in the name tag ("[Red 12.5s] ...") so the full range still draws and survives.
 static BOOL RMMoveMarker(id marker, RMTime localStart, double seconds) {
     id sequence = RMActiveSequence();
     SEL sel = NSSelectorFromString(@"actionMoveMarker:toRange:error:");
     if (!sequence || ![sequence respondsToSelector:sel]) return NO;
     RMTime fd;
     if (!RMReadTime(sequence, @"frameDuration", &fd)) fd = (RMTime){1001, 24000, 1, 0};
-    int64_t frames = MAX(1, llround(seconds / RMSeconds(fd)));
-    RMTimeRange range = { localStart, { fd.value * frames, fd.timescale, 1, 0 } };
+    double frame = RMSeconds(fd);
+    int64_t frames = MAX(1, llround(seconds / frame));
+    double available = RMAvailableMedia(sequence, RMItemForMarker(sequence, marker), localStart);
+    int64_t fcpFrames = MAX(1, MIN(frames, (int64_t)floor(available / frame)));
+
+    RMTime anchor = {0};
+    RMReadTime(marker, @"targetAnchorTime", &anchor);
+    BOOL moving = fabs(RMSeconds(anchor) - RMSeconds(localStart)) > 1e-6;
+
+    RMTimeRange range = { localStart, { fd.value * fcpFrames, fd.timescale, 1, 0 } };
     NSError *err = nil;
     BOOL ok = ((BOOL (*)(id, SEL, id, RMTimeRange, NSError **))objc_msgSend)(sequence, sel, marker, range, &err);
-    if (!ok) NSLog(@"[RangedMarkers] move failed: %@", err.localizedDescription);
+    if (!ok) {
+        NSLog(@"[RangedMarkers] move failed: %@", err.localizedDescription);
+        if (moving) { RMRefreshAll(); return NO; }
+    }
+
+    // Keep the full length in the tag only when FCP couldn't store it.
+    double tagDuration = (!ok || fcpFrames < frames) && frames > 1 ? frames * frame : 0;
+    NSString *title = nil, *color = nil;
+    NSString *name = RMSend(marker, @"displayName");
+    double current = RMParseTag(name, &title, &color);
+    if (fabs(current - tagDuration) > frame / 2) RMRename(marker, RMFormatName(title, color, tagDuration), NULL);
     RMRefreshAll();
-    return ok;
+    return YES;
 }
 
 static BOOL RMSetMarkerDuration(id marker, double seconds) {
     RMTime anchor;
     return RMReadTime(marker, @"targetAnchorTime", &anchor) && RMMoveMarker(marker, anchor, seconds);
+}
+
+#pragma mark - Keeping ranges when FCP moves markers
+
+// FCP's own marker moves (dragging a pin, Nudge Marker Left/Right) rebuild the
+// marker one frame long. Snapshot every ranged marker before, restore after.
+static NSArray *RMSnapshotRanged(void) {
+    id sequence = RMActiveSequence();
+    NSMutableArray *out = [NSMutableArray array];
+    NSHashTable *seen = [NSHashTable weakObjectsHashTable];
+    for (id item in RMSpineItems(sequence)) {
+        for (id m in RMMarkersOnItem(item)) {
+            double duration = 0;
+            if ([seen containsObject:m] || !RMIsRanged(m, &duration)) continue;
+            [seen addObject:m];
+            [out addObject:@{@"marker": m, @"name": RMSend(m, @"displayName") ?: @"", @"duration": @(duration)}];
+        }
+    }
+    return out;
+}
+
+static void RMRestoreRanged(NSArray *snapshot) {
+    if (!snapshot.count) return;
+    id sequence = RMActiveSequence();
+    double frame = RMFrameSeconds(sequence);
+    NSHashTable *current = [NSHashTable weakObjectsHashTable];
+    for (id item in RMSpineItems(sequence)) for (id m in RMMarkersOnItem(item)) [current addObject:m];
+    NSHashTable *before = [NSHashTable weakObjectsHashTable];
+    for (NSDictionary *entry in snapshot) [before addObject:entry[@"marker"]];
+
+    for (NSDictionary *entry in snapshot) {
+        double wanted = [entry[@"duration"] doubleValue];
+        id marker = entry[@"marker"];
+        if (![current containsObject:marker]) {
+            // Moved to another clip: FCP made a new marker object with the same name.
+            marker = nil;
+            for (id m in current.allObjects) {
+                if (![before containsObject:m] && [RMSend(m, @"displayName") isEqualToString:entry[@"name"]] && !RMIsRanged(m, NULL)) {
+                    marker = m;
+                    break;
+                }
+            }
+        }
+        double now = 0;
+        RMIsRanged(marker, &now);
+        if (marker && fabs(now - wanted) > frame / 2) RMSetMarkerDuration(marker, wanted);
+    }
+}
+
+static BOOL (*sOrigTimelineMoveMarker)(id, SEL, id, id, id, RMTime);
+static void (*sOrigNudgeLeft)(id, SEL, id);
+static void (*sOrigNudgeRight)(id, SEL, id);
+
+static void RMRestoreSoon(NSArray *snapshot) {
+    RMRestoreRanged(snapshot);
+    // Some moves finish on a later runloop pass; check once more.
+    dispatch_async(dispatch_get_main_queue(), ^{ RMRestoreRanged(snapshot); });
+}
+
+static BOOL RMTimelineMoveMarker(id self, SEL _cmd, id view, id marker, id toItem, RMTime time) {
+    NSArray *snapshot = RMSnapshotRanged();
+    BOOL result = sOrigTimelineMoveMarker(self, _cmd, view, marker, toItem, time);
+    @try { RMRestoreSoon(snapshot); } @catch (NSException *e) { NSLog(@"[RangedMarkers] restore failed: %@", e.reason); }
+    return result;
+}
+
+static void RMNudgeLeft(id self, SEL _cmd, id sender) {
+    NSArray *snapshot = RMSnapshotRanged();
+    sOrigNudgeLeft(self, _cmd, sender);
+    @try { RMRestoreSoon(snapshot); } @catch (NSException *e) {}
+}
+
+static void RMNudgeRight(id self, SEL _cmd, id sender) {
+    NSArray *snapshot = RMSnapshotRanged();
+    sOrigNudgeRight(self, _cmd, sender);
+    @try { RMRestoreSoon(snapshot); } @catch (NSException *e) {}
+}
+
+static void RMInstallMoveHooks(void) {
+    Class tm = NSClassFromString(@"FFAnchoredTimelineModule");
+    if (!tm) return;
+    sOrigTimelineMoveMarker = (void *)RMHook(tm, NSSelectorFromString(@"timelineView:moveMarker:toItem:atTime:"), (IMP)RMTimelineMoveMarker);
+    sOrigNudgeLeft = (void *)RMHook(tm, NSSelectorFromString(@"nudgeMarkerLeft:"), (IMP)RMNudgeLeft);
+    sOrigNudgeRight = (void *)RMHook(tm, NSSelectorFromString(@"nudgeMarkerRight:"), (IMP)RMNudgeRight);
 }
 
 #pragma mark - Menus
@@ -691,6 +918,7 @@ static id RMMenuTarget(void) {
     class_addMethod(cls, NSSelectorFromString(@"rmRemoveRange:"), (IMP)RMActRemoveRange, "v@:@");
     class_addMethod(cls, NSSelectorFromString(@"rmAddRanged:"), (IMP)RMActAddRanged, "v@:@");
     class_addMethod(cls, @selector(validateMenuItem:), (IMP)RMValidateMenuItem, "B@:@");
+    class_addMethod(cls, NSSelectorFromString(@"rmDurationCommitted:"), (IMP)RMActDurationCommitted, "v@:@");
     objc_registerClassPair(cls);
     target = [cls new];
     return target;
@@ -897,6 +1125,186 @@ static void RMMouseMoved(id self, SEL _cmd, NSEvent *event) {
     } @catch (NSException *e) {}
 }
 
+#pragma mark - Duration field in the marker editor
+
+static const void *kDurationFieldKey = &kDurationFieldKey;
+static const void *kDurationEditorKey = &kDurationEditorKey;
+static const CGFloat kDurationRowHeight = 30;
+
+static NSString *RMFormatTimecode(double seconds, double frame) {
+    int fps = MAX(1, (int)llround(1.0 / frame));
+    int64_t frames = llround(seconds / frame);
+    int64_t secs = frames / fps;
+    return [NSString stringWithFormat:@"%02lld:%02lld:%02lld:%02lld",
+            secs / 3600, (secs / 60) % 60, secs % 60, frames % fps];
+}
+
+// "10", "2.5", "10s" -> seconds; "10:00", "1:02:12", "00:00:10:00" -> timecode read right to
+// left as HH:MM:SS:FF like FCP's own fields. Returns -1 for input it can't read.
+static double RMParseDurationInput(NSString *text, double frame) {
+    text = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet].lowercaseString;
+    if (!text.length) return 0;
+    if ([text hasSuffix:@"s"]) text = [text substringToIndex:text.length - 1];
+    NSCharacterSet *separators = [NSCharacterSet characterSetWithCharactersInString:@":;."];
+    if ([text rangeOfString:@":"].location == NSNotFound && [text rangeOfString:@";"].location == NSNotFound) {
+        NSScanner *scanner = [NSScanner scannerWithString:text];
+        double value;
+        return ([scanner scanDouble:&value] && scanner.atEnd && value >= 0) ? value : -1;
+    }
+    NSArray *parts = [text componentsSeparatedByCharactersInSet:separators];
+    if (parts.count > 4) return -1;
+    int64_t fields[4] = {0, 0, 0, 0}; // HH MM SS FF
+    for (NSUInteger i = 0; i < parts.count; i++) {
+        NSString *part = parts[parts.count - 1 - i];
+        NSScanner *scanner = [NSScanner scannerWithString:part];
+        long long v = 0;
+        if (part.length && (![scanner scanLongLong:&v] || !scanner.atEnd || v < 0)) return -1;
+        fields[3 - i] = v;
+    }
+    int fps = MAX(1, (int)llround(1.0 / frame));
+    int64_t frames = ((fields[0] * 3600 + fields[1] * 60 + fields[2]) * fps) + fields[3];
+    return frames * frame;
+}
+
+static id RMEditorMarker(id editor) {
+    id marker = RMSend(editor, @"marker");
+    return RMIsTimeMarker(marker) ? marker : nil;
+}
+
+static void RMRefreshDurationField(id editor) {
+    NSTextField *field = objc_getAssociatedObject(editor, kDurationFieldKey);
+    id marker = RMEditorMarker(editor);
+    if (!field || !marker) return;
+    double duration = 0;
+    field.stringValue = RMIsRanged(marker, &duration) ? RMFormatTimecode(duration, RMFrameSeconds(marker)) : @"";
+}
+
+static void RMActDurationCommitted(id self, SEL _cmd, NSTextField *field) {
+    id editor = objc_getAssociatedObject(field, kDurationEditorKey);
+    id marker = RMEditorMarker(editor);
+    if (!marker) return;
+    double frame = RMFrameSeconds(marker);
+    double seconds = RMParseDurationInput(field.stringValue, frame);
+    if (seconds < 0) { NSBeep(); RMRefreshDurationField(editor); return; }
+    double current = 0;
+    RMIsRanged(marker, &current);
+    double wanted = seconds < frame * 1.5 ? frame : seconds; // blank / 0 removes the range
+    if (fabs(wanted - MAX(current, frame)) < frame / 2) { RMRefreshDurationField(editor); return; }
+
+    NSTextField *nameField = [editor valueForKey:@"displayNameField"];
+    NSString *nameBefore = RMSend(marker, @"displayName") ?: @"";
+    if (!RMSetMarkerDuration(marker, wanted)) NSBeep();
+
+    // The duration may have added or removed a "[... 12.5s]" tag. Carry that into the
+    // name field so FCP's own save on Done doesn't write the old name back.
+    NSString *nameAfter = RMSend(marker, @"displayName") ?: @"";
+    if (nameField && ![nameAfter isEqualToString:nameBefore]) {
+        if ([nameField.stringValue isEqualToString:nameBefore]) {
+            nameField.stringValue = nameAfter;
+        } else {
+            NSString *title = nil, *color = nil;
+            RMParseTag(nameField.stringValue, &title, &color);
+            nameField.stringValue = RMFormatName(title, color, RMParseTag(nameAfter, NULL, NULL));
+        }
+    }
+    RMRefreshDurationField(editor);
+}
+
+// Adds "Duration: [00:00:08:00]" between the name field and the bottom row.
+static void RMAddDurationRow(id editor) {
+    if (objc_getAssociatedObject(editor, kDurationFieldKey)) { RMRefreshDurationField(editor); return; }
+    NSView *view = RMSend(editor, @"view");
+    NSTextField *nameField = [editor valueForKey:@"displayNameField"];
+    NSView *typeControl = [editor valueForKey:@"typeControl"];
+    NSTextField *timecode = [editor valueForKey:@"timecodeField"];
+    if (![view isKindOfClass:[NSView class]] || !nameField || !timecode) return;
+
+    // Move the name field and type buttons up one row; the new row takes the name's old spot.
+    CGFloat rowY = NSMinY(nameField.frame);
+    [nameField setFrameOrigin:NSMakePoint(NSMinX(nameField.frame), rowY + kDurationRowHeight)];
+    if (typeControl) [typeControl setFrameOrigin:NSMakePoint(NSMinX(typeControl.frame), NSMinY(typeControl.frame) + kDurationRowHeight)];
+
+    NSTextField *label = [NSTextField labelWithString:@"Duration:"];
+    label.font = timecode.font ?: [NSFont systemFontOfSize:12];
+    label.textColor = NSColor.secondaryLabelColor;
+    label.alignment = NSTextAlignmentRight;
+    label.frame = NSMakeRect(NSMinX(nameField.frame), rowY + 3, 64, 18);
+    label.tag = kMenuTag;
+
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(NSMaxX(label.frame) + 6, rowY, 116, 24)];
+    field.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
+    field.placeholderString = @"None";
+    field.toolTip = @"Marker range length. Type timecode (00:00:10:00 or 10:00) or seconds (10, 2.5). Leave empty to remove the range.";
+    field.bezelStyle = NSTextFieldRoundedBezel;
+    field.target = RMMenuTarget();
+    field.action = NSSelectorFromString(@"rmDurationCommitted:");
+    field.cell.sendsActionOnEndEditing = YES;
+    field.tag = kMenuTag;
+
+    NSTextField *hint = [NSTextField labelWithString:@"Empty = no range"];
+    hint.font = [NSFont systemFontOfSize:10];
+    hint.textColor = NSColor.tertiaryLabelColor;
+    hint.frame = NSMakeRect(NSMaxX(field.frame) + 8, rowY + 5, 140, 14);
+    hint.tag = kMenuTag;
+
+    [view addSubview:label];
+    [view addSubview:field];
+    [view addSubview:hint];
+    objc_setAssociatedObject(editor, kDurationFieldKey, field, OBJC_ASSOCIATION_RETAIN);
+    objc_setAssociatedObject(field, kDurationEditorKey, editor, OBJC_ASSOCIATION_ASSIGN);
+
+    // Grow the editor and its popover by one row.
+    NSSize size = view.frame.size;
+    size.height += kDurationRowHeight;
+    [view setFrameSize:size];
+    NSPopover *popover = nil;
+    @try { popover = [view.window valueForKey:@"_popover"]; } @catch (NSException *e) {}
+    if ([popover isKindOfClass:[NSPopover class]]) {
+        NSSize content = popover.contentSize;
+        content.height += kDurationRowHeight;
+        popover.contentSize = content;
+    } else if (view.window) {
+        NSRect frame = view.window.frame;
+        frame.size.height += kDurationRowHeight;
+        [view.window setFrame:frame display:YES];
+    }
+    RMRefreshDurationField(editor);
+}
+
+static void (*sOrigEditorSave)(id, SEL, id);
+static void (*sOrigEditorReflect)(id, SEL, id);
+
+// Done: commit a typed duration before FCP saves the name and closes the popover.
+static void RMEditorSave(id self, SEL _cmd, id sender) {
+    NSTextField *field = objc_getAssociatedObject(self, kDurationFieldKey);
+    @try {
+        if (field && field.currentEditor) [field.window makeFirstResponder:nil]; // fires the field's action
+    } @catch (NSException *e) {}
+    sOrigEditorSave(self, _cmd, sender);
+}
+
+static void RMEditorReflect(id self, SEL _cmd, id key) {
+    sOrigEditorReflect(self, _cmd, key);
+    NSTextField *field = objc_getAssociatedObject(self, kDurationFieldKey);
+    if (field && !field.currentEditor) RMRefreshDurationField(self);
+}
+
+static void (*sOrigEditorInstalled)(id, SEL, id);
+
+static void RMEditorInstalled(id self, SEL _cmd, id arg) {
+    sOrigEditorInstalled(self, _cmd, arg);
+    sLastMarkerEditor = self;
+    @try { RMAddDurationRow(self); } @catch (NSException *e) { NSLog(@"[RangedMarkers] duration row failed: %@", e.reason); }
+}
+
+static void (*sOrigEditorDidShow)(id, SEL);
+
+static void RMEditorDidShow(id self, SEL _cmd) {
+    sOrigEditorDidShow(self, _cmd);
+    sLastMarkerEditor = self;
+    @try { RMAddDurationRow(self); } @catch (NSException *e) { NSLog(@"[RangedMarkers] duration row failed: %@", e.reason); }
+}
+
 static void RMInstallUI(void) {
     Class markerLayer = NSClassFromString(@"TLKMarkerLayer");
     if (markerLayer) sOrigContextMenu = (void *)RMHook(markerLayer, NSSelectorFromString(@"contextMenu"), (IMP)RMContextMenu);
@@ -906,6 +1314,13 @@ static void RMInstallUI(void) {
         sOrigMouseDragged = (void *)RMHook(dispatcher, @selector(mouseDragged:), (IMP)RMMouseDragged);
         sOrigMouseUp = (void *)RMHook(dispatcher, @selector(mouseUp:), (IMP)RMMouseUp);
         sOrigMouseMoved = (void *)RMHook(dispatcher, @selector(mouseMoved:), (IMP)RMMouseMoved);
+    }
+    Class editor = NSClassFromString(@"FFMarkerEditorViewModule");
+    if (editor) {
+        sOrigEditorInstalled = (void *)RMHook(editor, NSSelectorFromString(@"moduleViewWasInstalled:"), (IMP)RMEditorInstalled);
+        sOrigEditorDidShow = (void *)RMHook(editor, NSSelectorFromString(@"windowDidShow"), (IMP)RMEditorDidShow);
+        sOrigEditorSave = (void *)RMHook(editor, NSSelectorFromString(@"save:"), (IMP)RMEditorSave);
+        sOrigEditorReflect = (void *)RMHook(editor, NSSelectorFromString(@"_reflectMarkerPropertiesInGUIWithChangedKey:"), (IMP)RMEditorReflect);
     }
     RMInstallMainMenu();
 }
@@ -937,12 +1352,19 @@ static void RMSetUp(void) {
     sRegister(@"rangedMarkers.refresh", ^NSDictionary *(NSDictionary *p) { return RMRefresh(p); }, @{
         @"description": @"Redraw ranged/colored marker overlays.",
         @"readOnly": @YES, @"pluginId": @"com.splicekit.ranged-markers", @"shortName": @"refresh"});
+    sRegister(@"rangedMarkers.debugMarkers", ^NSDictionary *(NSDictionary *p) { return RMDebugMarkers(p); }, @{
+        @"description": @"Development: each marker's clip, used range and available media.",
+        @"readOnly": @YES, @"pluginId": @"com.splicekit.ranged-markers", @"shortName": @"debugMarkers"});
+    sRegister(@"rangedMarkers.debugEditor", ^NSDictionary *(NSDictionary *p) { return RMDebugEditor(p); }, @{
+        @"description": @"Development: view tree of the open marker editor.",
+        @"readOnly": @YES, @"pluginId": @"com.splicekit.ranged-markers", @"shortName": @"debugEditor"});
     sRegister(@"rangedMarkers.debugLayers", ^NSDictionary *(NSDictionary *p) { return RMDebugLayers(p); }, @{
         @"description": @"Development: dump geometry of live timeline marker layers.",
         @"readOnly": @YES, @"pluginId": @"com.splicekit.ranged-markers", @"shortName": @"debugLayers"});
 
     dispatch_async(dispatch_get_main_queue(), ^{
         RMInstallHooks();
+        RMInstallMoveHooks();
         RMInstallUI();
         RMRefreshAll();
     });

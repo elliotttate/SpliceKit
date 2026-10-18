@@ -8,6 +8,9 @@ Native SpliceKit plugin that adds markers with a real duration and custom colors
   `duration="…"`.
 - **Colors** are stored as a tag at the start of the marker name, e.g.
   `[Red] Fix audio`. The palette is DaVinci Resolve's 16 marker colors plus orange.
+- **Long ranges:** FCP won't let a marker run past the source media of the clip
+  it's attached to. When a range needs more than that, FCP gets as much as fits
+  and the full length is kept in the tag, e.g. `[Red 12.5s] Fix audio`.
 - **Drawing** swizzles `TLKMarkerLayer` (`layoutSublayers`, `updateAppearance`,
   `setPosition:`) to tint the pin and draw an always-visible bar across the range.
   Without the plugin, markers show as normal pins with the tag in their name.
@@ -23,6 +26,11 @@ Native SpliceKit plugin that adds markers with a real duration and custom colors
   marker before the playhead, so you can add a marker, play, stop, and extend.
 - **Drag the handle** at the end of a range bar to resize it. The new length is
   shown while dragging and snaps to whole frames.
+- **Marker dialog** (double-click a marker) has a **Duration** field. Type
+  timecode (`00:00:10:00`, or `10:00` read right to left like FCP's fields) or
+  seconds (`10`, `2.5`); leave it empty to remove the range.
+- **Moving markers keeps their range.** FCP's own drag and Nudge Marker
+  Left/Right rebuild a marker one frame long; the plugin restores the length.
 
 Every change is a normal FCP edit, so Cmd-Z undoes it.
 
@@ -58,10 +66,13 @@ with a unique path instead: `debug_load_plugin(action="load", path="/tmp/rm_<n>.
 | `rangedMarkers.list` | — |
 | `rangedMarkers.refresh` | — |
 | `rangedMarkers.debugLayers` | — (development) |
+| `rangedMarkers.debugMarkers` | — (development: each marker's clip and media range) |
+| `rangedMarkers.debugEditor` | — (development: view tree of the open marker dialog) |
 
 ## Known limitations
 
 - Only markers on primary storyline clips are handled by `add` and `list`.
 - Adding a named or colored marker makes two undo steps (add, then rename).
+- Restoring a range after FCP moves a marker is its own undo step.
 - Only the end of a range can be dragged; drag the pin itself to move a marker.
 - The ⌃⌥M shortcut is a menu shortcut and is not listed in FCP's Command Editor.
