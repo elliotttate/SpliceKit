@@ -26,6 +26,19 @@ Native SpliceKit plugin that adds markers with a real duration and custom colors
 
 Every change is a normal FCP edit, so Cmd-Z undoes it.
 
+## FCPXML
+
+Ranged and colored markers need nothing custom in FCPXML:
+
+```xml
+<marker start="43380157/12000s" duration="404404/24000s" value="[Fuchsia] Marker 2"/>
+```
+
+Exporting and re-importing keeps the range, the color tag and plain markers
+unchanged (tested in FCP 12.3). Without the plugin, imported markers show as
+normal pins with the tag in their name. Other apps should keep the `duration`
+but will show the `[Color]` tag as part of the name.
+
 ## Build and install
 
 ```bash
