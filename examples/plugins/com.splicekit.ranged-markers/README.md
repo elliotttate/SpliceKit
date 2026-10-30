@@ -29,6 +29,10 @@ Native SpliceKit plugin that adds markers with a real duration and custom colors
 - **Marker dialog** (double-click a marker) has a **Duration** field. Type
   timecode (`00:00:10:00`, or `10:00` read right to left like FCP's fields) or
   seconds (`10`, `2.5`); leave it empty to remove the range.
+- **Deleting a ranged marker deletes all its copies.** Blading a clip gives every
+  piece its own copy of the clip's markers, and FCP shows a ranged marker's copy
+  on every piece its range overlaps. Deleting one (Delete key or dragging it off
+  the clip) also removes the copies in the other pieces, as one undo step.
 - **Moving markers keeps their range.** FCP's own drag and Nudge Marker
   Left/Right rebuild a marker one frame long; the plugin restores the length.
 

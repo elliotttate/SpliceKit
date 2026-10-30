@@ -555,7 +555,8 @@ static NSDictionary *RMDebugMarkers(NSDictionary *params) {
             for (id m in markers) {
                 RMTime a = {0};
                 RMReadTime(m, @"targetAnchorTime", &a);
-                [names addObject:@{@"name": RMSend(m, @"displayName") ?: @"", @"localStart": @(RMSeconds(a))}];
+                [names addObject:@{@"name": RMSend(m, @"displayName") ?: @"", @"localStart": @(RMSeconds(a)),
+                                   @"duration": @(RMFCPDuration(m)), @"id": [NSString stringWithFormat:@"%p", m]}];
             }
             [out addObject:@{
                 @"clip": RMSend(item, @"displayName") ?: NSStringFromClass([item class]),
@@ -804,6 +805,62 @@ static void RMInstallMoveHooks(void) {
     sOrigTimelineMoveMarker = (void *)RMHook(tm, NSSelectorFromString(@"timelineView:moveMarker:toItem:atTime:"), (IMP)RMTimelineMoveMarker);
     sOrigNudgeLeft = (void *)RMHook(tm, NSSelectorFromString(@"nudgeMarkerLeft:"), (IMP)RMNudgeLeft);
     sOrigNudgeRight = (void *)RMHook(tm, NSSelectorFromString(@"nudgeMarkerRight:"), (IMP)RMNudgeRight);
+}
+
+#pragma mark - Deleting every copy of a ranged marker
+
+// Blading a clip gives each piece its own copy of every marker on it. A one-frame
+// marker shows on one piece only, but FCP shows a ranged marker on every piece its
+// range overlaps, so deleting one copy (Delete key or dragging it off the clip)
+// leaves the others drawn on top of each other. Delete them all as one undo step.
+static BOOL (*sOrigRemoveMarker)(id, SEL, id, NSError **);
+static BOOL sRemovingCopies;
+
+static NSArray *RMMarkerCopies(id sequence, id marker) {
+    id item = RMItemForMarker(sequence, marker);
+    NSString *name = RMSend(marker, @"displayName") ?: @"";
+    NSString *clip = RMSend(item, @"displayName") ?: @"";
+    RMTime anchor;
+    if (!item || !RMReadTime(marker, @"targetAnchorTime", &anchor)) return @[];
+    NSMutableArray *out = [NSMutableArray array];
+    for (id other in RMSpineItems(sequence)) {
+        if (other == item || [other class] != [item class] || ![(RMSend(other, @"displayName") ?: @"") isEqualToString:clip]) continue;
+        for (id m in RMMarkersOnItem(other)) {
+            RMTime a;
+            if (m != marker && [(RMSend(m, @"displayName") ?: @"") isEqualToString:name] &&
+                RMReadTime(m, @"targetAnchorTime", &a) && fabs(RMSeconds(a) - RMSeconds(anchor)) < 1e-6) [out addObject:m];
+        }
+    }
+    return out;
+}
+
+static NSUndoManager *RMUndoManager(void) {
+    id library = RMSend(RMSend(NSApp, @"delegate"), @"_targetLibrary");
+    id um = RMSend(RMSend(library, @"libraryDocument"), @"undoManager");
+    return [um isKindOfClass:[NSUndoManager class]] ? um : nil;
+}
+
+static BOOL RMRemoveMarker(id self, SEL _cmd, id marker, NSError **err) {
+    NSArray *copies = nil;
+    @try {
+        if (!sRemovingCopies && RMIsTimeMarker(marker) && RMIsRanged(marker, NULL)) copies = RMMarkerCopies(self, marker);
+    } @catch (NSException *e) { NSLog(@"[RangedMarkers] finding marker copies failed: %@", e.reason); }
+    if (!copies.count) return sOrigRemoveMarker(self, _cmd, marker, err);
+
+    NSUndoManager *um = RMUndoManager();
+    [um beginUndoGrouping];
+    sRemovingCopies = YES;
+    BOOL ok = sOrigRemoveMarker(self, _cmd, marker, err);
+    if (ok) for (id m in copies) sOrigRemoveMarker(self, _cmd, m, NULL);
+    sRemovingCopies = NO;
+    [um endUndoGrouping];
+    RMRefreshAll();
+    return ok;
+}
+
+static void RMInstallDeleteHook(void) {
+    Class seq = NSClassFromString(@"FFAnchoredSequence");
+    if (seq) sOrigRemoveMarker = (void *)RMHook(seq, NSSelectorFromString(@"actionRemoveMarker:error:"), (IMP)RMRemoveMarker);
 }
 
 #pragma mark - Menus
@@ -1365,6 +1422,7 @@ static void RMSetUp(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         RMInstallHooks();
         RMInstallMoveHooks();
+        RMInstallDeleteHook();
         RMInstallUI();
         RMRefreshAll();
     });
