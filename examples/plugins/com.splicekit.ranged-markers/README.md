@@ -33,6 +33,9 @@ Native SpliceKit plugin that adds markers with a real duration and custom colors
   piece its own copy of the clip's markers, and FCP shows a ranged marker's copy
   on every piece its range overlaps. Deleting one (Delete key or dragging it off
   the clip) also removes the copies in the other pieces, as one undo step.
+- **Add Marker (M) works inside a range.** Final Cut normally selects the
+  marker under the playhead instead of adding one, and counts a ranged marker
+  anywhere along its range. Ranged markers no longer count, so markers can overlap.
 - **Moving markers keeps their range.** FCP's own drag and Nudge Marker
   Left/Right rebuild a marker one frame long; the plugin restores the length.
 

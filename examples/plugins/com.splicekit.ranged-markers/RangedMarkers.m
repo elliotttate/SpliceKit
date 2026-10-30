@@ -863,6 +863,43 @@ static void RMInstallDeleteHook(void) {
     if (seq) sOrigRemoveMarker = (void *)RMHook(seq, NSSelectorFromString(@"actionRemoveMarker:error:"), (IMP)RMRemoveMarker);
 }
 
+#pragma mark - Adding markers inside a range
+
+// Pressing M where a marker already is selects that marker instead of adding one.
+// FCP asks +[FFAnchoredObject timeMarkersForItem:inTimeRange:] for markers in the
+// playhead's frame, which includes a ranged marker anywhere in its range. While
+// adding, leave ranged markers out so new markers can go inside (or on) a range.
+static id (*sOrigTimeMarkersForItem)(id, SEL, id, RMTimeRange);
+static void (*sOrigAddMarker)(id, SEL, BOOL, BOOL, BOOL);
+static BOOL sAddingMarker;
+
+static id RMTimeMarkersForItem(id self, SEL _cmd, id item, RMTimeRange range) {
+    id markers = sOrigTimeMarkersForItem(self, _cmd, item, range);
+    if (!sAddingMarker || ![markers isKindOfClass:[NSSet class]]) return markers;
+    @try {
+        NSMutableSet *out = [NSMutableSet set];
+        for (id m in markers) if (!RMIsTimeMarker(m) || !RMIsRanged(m, NULL)) [out addObject:m];
+        return out;
+    } @catch (NSException *e) {
+        NSLog(@"[RangedMarkers] filtering markers at playhead failed: %@", e.reason);
+        return markers;
+    }
+}
+
+static void RMAddMarker(id self, SEL _cmd, BOOL alwaysEdit, BOOL todo, BOOL chapter) {
+    sAddingMarker = YES;
+    @try { sOrigAddMarker(self, _cmd, alwaysEdit, todo, chapter); }
+    @finally { sAddingMarker = NO; }
+}
+
+static void RMInstallAddHooks(void) {
+    Class tm = NSClassFromString(@"FFAnchoredTimelineModule");
+    Class anchored = NSClassFromString(@"FFAnchoredObject");
+    if (!tm || !anchored) return;
+    sOrigTimeMarkersForItem = (void *)RMHook(object_getClass(anchored), NSSelectorFromString(@"timeMarkersForItem:inTimeRange:"), (IMP)RMTimeMarkersForItem);
+    sOrigAddMarker = (void *)RMHook(tm, NSSelectorFromString(@"addMarkerAndAlwaysEdit:isToDo:isChapter:"), (IMP)RMAddMarker);
+}
+
 #pragma mark - Menus
 
 static NSArray<NSString *> *RMColorOrder(void) {
@@ -1423,6 +1460,7 @@ static void RMSetUp(void) {
         RMInstallHooks();
         RMInstallMoveHooks();
         RMInstallDeleteHook();
+        RMInstallAddHooks();
         RMInstallUI();
         RMRefreshAll();
     });
