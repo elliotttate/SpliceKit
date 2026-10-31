@@ -11,8 +11,10 @@ Native SpliceKit plugin that adds markers with a real duration and custom colors
 - **Long ranges:** FCP won't let a marker run past the source media of the clip
   it's attached to. When a range needs more than that, FCP gets as much as fits
   and the full length is kept in the tag, e.g. `[Red 12.5s] Fix audio`.
-- **Drawing** swizzles `TLKMarkerLayer` (`layoutSublayers`, `updateAppearance`,
-  `setPosition:`) to tint the pin and draw an always-visible bar across the range.
+- **Drawing** swizzles `TLKMarkerLayer` (timeline) and `FFMarkerLayer` (browser
+  filmstrips) to tint the pin and draw an always-visible bar across the range.
+- **Browser clips** are their own small `FFAnchoredSequence`s, so edits to a
+  browser marker go through that sequence's undoable actions, not the project's.
   Without the plugin, markers show as normal pins with the tag in their name.
 
 ## Using it in Final Cut Pro
@@ -38,6 +40,19 @@ Native SpliceKit plugin that adds markers with a real duration and custom colors
   anywhere along its range. Ranged markers no longer count, so markers can overlap.
 - **Moving markers keeps their range.** FCP's own drag and Nudge Marker
   Left/Right rebuild a marker one frame long; the plugin restores the length.
+
+- **Browser clips work too.** Colors, range bars, the right-click items, the
+  Duration field and dragging the range handle work on markers in the browser's
+  filmstrips. With the browser focused, the Mark ▸ Markers items act on the
+  browser: Add Ranged Marker uses the range selected inside a clip (or 5 seconds
+  from the browser playhead), and Extend and Set Range use the browser playhead
+  and selection. Edits go to the clip in the event, so they show wherever the
+  clip is used next.
+- **Drag a browser marker's pin to move it.** Final Cut Pro can't drag markers in
+  the browser, so the plugin does: the marker moves along its clip, keeping its
+  range, snapped to whole frames, as one undo step. This works for every marker
+  in the browser, not only ranged or colored ones. Clicking and double-clicking a
+  pin work as before.
 
 Every change is a normal FCP edit, so Cmd-Z undoes it.
 
@@ -75,10 +90,14 @@ with a unique path instead: `debug_load_plugin(action="load", path="/tmp/rm_<n>.
 | `rangedMarkers.debugLayers` | — (development) |
 | `rangedMarkers.debugMarkers` | — (development: each marker's clip and media range) |
 | `rangedMarkers.debugEditor` | — (development: view tree of the open marker dialog) |
+| `rangedMarkers.debugBrowser` | — (development: browser marker layers, playhead and selection) |
 
 ## Known limitations
 
-- Only markers on primary storyline clips are handled by `add` and `list`.
+- Only markers on primary storyline clips are handled by `add` and `list`
+  (browser markers are reached through the menus, the editor and `setColor`).
+- In the browser, a range bar is drawn from its pin in the filmstrip row the marker starts in;
+  when a clip wraps onto several rows, the bar may stop at the end of that row (untested).
 - Adding a named or colored marker makes two undo steps (add, then rename).
 - Restoring a range after FCP moves a marker is its own undo step.
 - Only the end of a range can be dragged; drag the pin itself to move a marker.

@@ -266,6 +266,157 @@ static NSDictionary *RMDescribeMarker(id sequence, id item, id marker) {
     return d;
 }
 
+#pragma mark - Browser clips
+
+// Browser (event) clips are small FFAnchoredSequences whose primaryObject holds the
+// clip's markers, in the clip's own time. FCP's marker actions work on them the same
+// way as on a project, so every edit goes to the sequence that owns the marker.
+static id RMItemForMarker(id sequence, id marker);
+static double RMPlayheadForMarker(id marker);
+static double RMLayerSecondsPerPixel(CALayer *layer);
+
+
+// Browser marker layers seen so far (weak), for redrawing and hit testing.
+static NSHashTable *sBrowserMarkerLayers;
+// Browser marker layer -> the filmstrip chunk (one row of a clip) it sits in.
+static NSMapTable *sChunkForLayer;
+
+static Class RMBrowserViewClass(void) { return NSClassFromString(@"FFOrganizerFilmstripView"); }
+
+static BOOL RMIsBrowserMarkerLayer(CALayer *layer) {
+    Class cls = NSClassFromString(@"FFMarkerLayer");
+    return cls && [layer isKindOfClass:cls];
+}
+
+// Timeline marker layers carry the marker as representedObject, browser ones as marker.
+static id RMLayerMarker(CALayer *layer) {
+    id marker = RMSend(layer, @"representedObject");
+    if (!RMIsTimeMarker(marker)) marker = RMSend(layer, @"marker");
+    return RMIsTimeMarker(marker) ? marker : nil;
+}
+
+// The clip holding the marker: a primary storyline clip, or a browser clip.
+static id RMMarkerItem(id marker) {
+    id item = RMItemForMarker(RMActiveSequence(), marker);
+    if (item) return item;
+    id parent = RMSend(marker, @"parentItem");
+    return [RMMarkersOnItem(parent) containsObject:marker] ? parent : nil;
+}
+
+// The sequence whose actions edit the marker: the open project or the browser clip's own.
+static id RMMarkerSequence(id marker) {
+    id active = RMActiveSequence();
+    if (!marker || RMItemForMarker(active, marker)) return active;
+    return RMSend(RMMarkerItem(marker), @"sequence") ?: active;
+}
+
+static BOOL RMIsInBrowser(id marker) {
+    return marker && RMMarkerSequence(marker) != RMActiveSequence();
+}
+
+static NSArray<NSView *> *RMBrowserViews(void) {
+    NSMutableArray *out = [NSMutableArray array];
+    Class cls = RMBrowserViewClass();
+    if (!cls) return out;
+    __block __weak void (^weakWalk)(NSView *);
+    void (^walk)(NSView *) = ^(NSView *view) {
+        if ([view isKindOfClass:cls]) { [out addObject:view]; return; }
+        for (NSView *sub in view.subviews) weakWalk(sub);
+    };
+    weakWalk = walk;
+    for (NSWindow *window in NSApp.windows) if (window.isVisible) walk(window.contentView);
+    return out;
+}
+
+// The browser filmstrip view if it has keyboard focus.
+static NSView *RMFocusedBrowserView(void) {
+    id responder = NSApp.keyWindow.firstResponder;
+    Class cls = RMBrowserViewClass();
+    return (cls && [responder isKindOfClass:cls]) ? responder : nil;
+}
+
+static NSView *RMBrowserView(void) {
+    return RMFocusedBrowserView() ?: RMBrowserViews().firstObject;
+}
+
+static CALayer *RMChunkLayer(id chunk) {
+    SEL has = NSSelectorFromString(@"hasLayer");
+    if (![chunk respondsToSelector:has] || !((BOOL (*)(id, SEL))objc_msgSend)(chunk, has)) return nil;
+    return RMSend(chunk, @"layer");
+}
+
+static id RMChunkForMarkerLayer(CALayer *layer) {
+    CALayer *parent = layer.superlayer;
+    if (!parent) return nil;
+    id chunk = [sChunkForLayer objectForKey:layer];
+    if (chunk && RMChunkLayer(chunk) == parent) return chunk;
+    for (NSView *view in RMBrowserViews()) {
+        id layout = nil;
+        @try { layout = [view valueForKey:@"_layout"]; } @catch (NSException *e) {}
+        for (id container in RMSend(layout, @"chunkContainerArray")) {
+            for (id c in RMSend(container, @"chunkArray")) {
+                if (RMChunkLayer(c) != parent) continue;
+                [sChunkForLayer setObject:c forKey:layer];
+                return c;
+            }
+        }
+    }
+    return nil;
+}
+
+// A chunk draws its filmstrip linearly: filmstripRange spans the filmstrip frame.
+static double RMChunkSecondsPerPixel(id chunk) {
+    CALayer *layer = RMChunkLayer(chunk);
+    SEL sel = NSSelectorFromString(@"visibleFilmstripFrameInSpaceOfLayer:");
+    RMTimeRange range;
+    if (!layer || ![chunk respondsToSelector:sel] || !RMReadRange(chunk, @"filmstripRange", &range)) return 0;
+    CGRect frame = ((CGRect (*)(id, SEL, id))objc_msgSend)(chunk, sel, layer);
+    return frame.size.width > 0 ? RMSeconds(range.duration) / frame.size.width : 0;
+}
+
+static id RMBrowserClipSequence(id rangeObject) {
+    return RMSend(RMSend(rangeObject, @"object"), @"sequence");
+}
+
+// The browser playhead in the clip time of the browser clip owning sequence.
+static BOOL RMBrowserPlayhead(NSView *view, id sequence, double *seconds) {
+    RMTime t;
+    if (!sequence || RMBrowserClipSequence(RMSend(view, @"persistentPlayheadRangeOfMedia")) != sequence) return NO;
+    if (!RMReadTime(view, @"persistentPlayheadTime", &t)) return NO;
+    *seconds = RMSeconds(t);
+    return YES;
+}
+
+// The browser's selected range (a FigTimeRangeAndObject), on sequence's clip if given.
+static id RMBrowserSelectionObject(NSView *view, id sequence) {
+    NSArray *selection = nil;
+    @try { selection = [view valueForKey:@"_selection"]; } @catch (NSException *e) {}
+    if (![selection isKindOfClass:[NSArray class]]) return nil;
+    for (id ro in selection) {
+        RMTimeRange r;
+        if (RMReadRange(ro, @"range", &r) && (!sequence || RMBrowserClipSequence(ro) == sequence)) return ro;
+    }
+    return nil;
+}
+
+// Clicking a clip selects all of it; only a range picked inside it counts as in/out.
+static BOOL RMIsWholeClipSelection(id ro) {
+    RMTimeRange r, clip;
+    if (!RMReadRange(ro, @"range", &r) || !RMReadRange(RMSend(ro, @"object"), @"clippedRange", &clip)) return NO;
+    return fabs(RMSeconds(r.start) - RMSeconds(clip.start)) < 1e-3 && fabs(RMSeconds(r.duration) - RMSeconds(clip.duration)) < 1e-3;
+}
+
+static id RMBrowserHighlightedMarker(NSView *view) {
+    id marker = nil;
+    @try { marker = [view valueForKey:@"_highlightedMarker"]; } @catch (NSException *e) {}
+    return RMIsTimeMarker(marker) ? marker : nil;
+}
+
+static BOOL RMLayerIsInView(CALayer *layer, NSView *view) {
+    for (CALayer *l = layer; l; l = l.superlayer) if (l == view.layer) return YES;
+    return NO;
+}
+
 #pragma mark - Drawing
 
 static id RMTimelineView(CALayer *layer) {
@@ -279,12 +430,20 @@ static CALayer *RMSublayerNamed(CALayer *layer, NSString *name) {
     return nil;
 }
 
+// Seconds per pixel where the marker layer is drawn (timeline or browser filmstrip).
+static double RMLayerSecondsPerPixel(CALayer *layer) {
+    if (RMIsBrowserMarkerLayer(layer)) return RMChunkSecondsPerPixel(RMChunkForMarkerLayer(layer));
+    RMTime tpp;
+    return RMReadTime(RMTimelineView(layer), @"timePerPixel", &tpp) ? RMSeconds(tpp) : 0;
+}
+
 static void RMUpdateMarkerLayer(CALayer *layer) {
     @try {
-        id marker = RMSend(layer, @"representedObject");
+        id marker = RMLayerMarker(layer);
         CALayer *bar = RMSublayerNamed(layer, kBarLayerName);
         CALayer *tint = RMSublayerNamed(layer, kTintLayerName);
-        if (!RMIsTimeMarker(marker)) { [bar removeFromSuperlayer]; [tint removeFromSuperlayer]; return; }
+        if (!marker) { [bar removeFromSuperlayer]; [tint removeFromSuperlayer]; return; }
+        if (RMIsBrowserMarkerLayer(layer)) [sBrowserMarkerLayers addObject:layer];
 
         NSString *colorName = RMParseColorTag(RMSend(marker, @"displayName"), NULL);
         NSColor *color = colorName ? RMPalette()[colorName] : RMDefaultColor(marker);
@@ -315,9 +474,8 @@ static void RMUpdateMarkerLayer(CALayer *layer) {
         }
 
         // Ranged markers: an always-visible bar from the marker's start to its end.
-        id view = ranged ? RMTimelineView(layer) : nil;
-        RMTime tpp;
-        if (ranged && view && RMReadTime(view, @"timePerPixel", &tpp) && RMSeconds(tpp) > 0) {
+        double spp = ranged ? RMLayerSecondsPerPixel(layer) : 0;
+        if (spp > 0) {
             if (!bar) {
                 bar = [CALayer layer];
                 bar.name = kBarLayerName;
@@ -325,7 +483,7 @@ static void RMUpdateMarkerLayer(CALayer *layer) {
                 [layer addSublayer:bar];
             }
             // While the end handle is being dragged, the drag owns the width.
-            CGFloat width = (layer == sDragLayer) ? sDragWidth : MAX(1.0, duration / RMSeconds(tpp));
+            CGFloat width = (layer == sDragLayer) ? sDragWidth : MAX(1.0, duration / spp);
             CGFloat height = MAX(3.0, round(layer.bounds.size.height * 0.4));
             CGFloat x = round(layer.bounds.size.width / 2.0);
             bar.frame = CGRectMake(x, 0, width, height);
@@ -361,9 +519,22 @@ static void RMVisitMarkerLayers(CALayer *root, void (^block)(CALayer *)) {
     for (CALayer *sub in [root.sublayers copy]) RMVisitMarkerLayers(sub, block);
 }
 
+// Browser marker layers drawn before the plugin loaded; later ones arrive via the hooks.
+static void RMDiscoverBrowserMarkerLayers(void) {
+    Class cls = NSClassFromString(@"FFMarkerLayer");
+    __block __weak void (^weakVisit)(CALayer *);
+    void (^visit)(CALayer *) = ^(CALayer *layer) {
+        if ([layer isKindOfClass:cls]) { RMUpdateMarkerLayer(layer); return; }
+        for (CALayer *sub in [layer.sublayers copy]) weakVisit(sub);
+    };
+    weakVisit = visit;
+    if (cls) for (NSView *view in RMBrowserViews()) visit(view.layer);
+}
+
 static void RMRefreshAll(void) {
     id view = RMSend(sGetTimelineModule ? sGetTimelineModule() : nil, @"timelineView");
     if ([view isKindOfClass:[NSView class]]) RMVisitMarkerLayers([(NSView *)view layer], ^(CALayer *l) { RMUpdateMarkerLayer(l); });
+    for (CALayer *l in sBrowserMarkerLayers.allObjects) if (l.superlayer) RMUpdateMarkerLayer(l);
 }
 
 #pragma mark - Swizzling (safe across hot reloads)
@@ -403,6 +574,42 @@ static void RMInstallHooks(void) {
     sOrigSetPosition = (void *)RMHook(cls, @selector(setPosition:), (IMP)RMSetPosition);
 }
 
+// Browser filmstrip markers (FFMarkerLayer, one per marker in each filmstrip chunk).
+static void (*sOrigBrowserLayout)(id, SEL);
+static void (*sOrigBrowserSetPosition)(id, SEL, CGPoint);
+static void (*sOrigBrowserUpdateImage)(id, SEL);
+static void (*sOrigChunkUpdateMarkers)(id, SEL, RMTimeRange);
+
+static void RMBrowserLayout(id self, SEL _cmd) { sOrigBrowserLayout(self, _cmd); RMUpdateMarkerLayer(self); }
+static void RMBrowserSetPosition(id self, SEL _cmd, CGPoint p) { sOrigBrowserSetPosition(self, _cmd, p); RMUpdateMarkerLayer(self); }
+static void RMBrowserUpdateImage(id self, SEL _cmd) { sOrigBrowserUpdateImage(self, _cmd); RMUpdateMarkerLayer(self); }
+
+static void RMChunkUpdateMarkers(id self, SEL _cmd, RMTimeRange range) {
+    sOrigChunkUpdateMarkers(self, _cmd, range);
+    @try {
+        for (CALayer *l in RMSend(self, @"markerLayers")) {
+            if (![l isKindOfClass:[CALayer class]]) continue;
+            [sChunkForLayer setObject:self forKey:l];
+            RMUpdateMarkerLayer(l);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RangedMarkers] browser markers failed: %@", e.reason);
+    }
+}
+
+static void RMInstallBrowserHooks(void) {
+    sBrowserMarkerLayers = [NSHashTable weakObjectsHashTable];
+    sChunkForLayer = [NSMapTable weakToWeakObjectsMapTable];
+    Class layer = NSClassFromString(@"FFMarkerLayer");
+    if (layer) {
+        sOrigBrowserLayout = (void *)RMHook(layer, @selector(layoutSublayers), (IMP)RMBrowserLayout);
+        sOrigBrowserSetPosition = (void *)RMHook(layer, @selector(setPosition:), (IMP)RMBrowserSetPosition);
+        sOrigBrowserUpdateImage = (void *)RMHook(layer, NSSelectorFromString(@"_updateImageFromMarkerProperties"), (IMP)RMBrowserUpdateImage);
+    }
+    Class chunk = NSClassFromString(@"FFOrganizerFilmstripChunk");
+    if (chunk) sOrigChunkUpdateMarkers = (void *)RMHook(chunk, NSSelectorFromString(@"updateMarkersInRange:"), (IMP)RMChunkUpdateMarkers);
+}
+
 #pragma mark - RPC methods
 
 static NSDictionary *RMOnMain(NSDictionary *(^block)(void)) {
@@ -415,6 +622,8 @@ static NSDictionary *RMOnMain(NSDictionary *(^block)(void)) {
 }
 
 static id RMSelectedMarker(void) {
+    NSView *browser = RMFocusedBrowserView();
+    if (browser) return RMBrowserHighlightedMarker(browser);
     id selected = RMSend(sGetTimelineModule ? sGetTimelineModule() : nil, @"selectedItems");
     if ([selected respondsToSelector:@selector(countByEnumeratingWithState:objects:count:)]) {
         for (id obj in selected) if (RMIsTimeMarker(obj)) return obj;
@@ -424,10 +633,54 @@ static id RMSelectedMarker(void) {
 
 // Undoable rename. The action lives on FFAnchoredSequence, not the timeline module.
 static BOOL RMRename(id marker, NSString *name, NSError **err) {
-    id sequence = RMActiveSequence();
+    id sequence = RMMarkerSequence(marker);
     SEL sel = NSSelectorFromString(@"actionChangeMarkerDisplayName:marker:error:");
     if (![sequence respondsToSelector:sel]) return NO;
     return ((BOOL (*)(id, SEL, id, id, NSError **))objc_msgSend)(sequence, sel, name, marker, err);
+}
+
+// Adds a marker over [localStart, localStart + duration) in item's own time with
+// sequence's undoable action. Returns the new marker, or nil with *error set.
+static id RMAddMarkerToItem(id sequence, id item, double localStart, double duration, NSDictionary *params, NSString **error) {
+    NSString *name = params[@"name"];
+    NSString *color = [params[@"color"] lowercaseString];
+    if (color.length && ![color isEqualToString:@"none"] && !RMPalette()[color]) {
+        *error = [NSString stringWithFormat:@"Unknown color '%@'. Use one of: %@", color,
+                  [[RMPalette().allKeys sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "]];
+        return nil;
+    }
+    NSString *kind = params[@"kind"] ?: @"standard";
+    double frame = RMFrameSeconds(sequence);
+    int32_t ts = 24000;
+    RMTime fd;
+    if (RMReadTime(sequence, @"frameDuration", &fd)) ts = fd.timescale;
+    // FCP won't let a marker run past its clip's source media; the rest goes in the tag.
+    double fcpDuration = duration;
+    RMTimeRange media;
+    if (RMReadRange(item, @"unclippedRange", &media)) {
+        double available = RMSeconds(media.start) + RMSeconds(media.duration) - localStart;
+        fcpDuration = MAX(frame, MIN(duration, floor(available / frame) * frame));
+    }
+    double tagDuration = duration > fcpDuration + frame / 2 ? duration : 0;
+    RMTimeRange range = { RMMakeTime(localStart, ts), RMMakeTime(fcpDuration, ts) };
+
+    NSSet *before = [NSSet setWithArray:RMMarkersOnItem(item)];
+    SEL addSel = NSSelectorFromString(@"actionAddMarkerToAnchoredObject:isToDo:isChapter:withRange:error:");
+    if (![sequence respondsToSelector:addSel]) { *error = @"FCP can't add markers here"; return nil; }
+    NSError *err = nil;
+    BOOL ok = ((BOOL (*)(id, SEL, id, BOOL, BOOL, RMTimeRange, NSError **))objc_msgSend)(
+        sequence, addSel, item, [kind isEqualToString:@"todo"], [kind isEqualToString:@"chapter"], range, &err);
+    if (!ok) { *error = err.localizedDescription ?: @"FCP refused to add the marker"; return nil; }
+
+    id marker = nil;
+    for (id m in RMMarkersOnItem(item)) if (![before containsObject:m]) marker = m;
+    if (marker && (name.length || color.length || tagDuration > 0)) {
+        NSString *base = name.length ? name : (RMSend(marker, @"displayName") ?: @"Marker");
+        RMRename(marker, RMFormatName(base, color, tagDuration), NULL);
+    }
+    RMRefreshAll();
+    if (!marker) *error = nil;
+    return marker;
 }
 
 // rangedMarkers.add {start, end | duration, name?, color?, kind?}
@@ -455,42 +708,9 @@ static NSDictionary *RMAdd(NSDictionary *params) {
         id item = RMSpineItemAtTime(sequence, start);
         if (!item) return @{@"error": [NSString stringWithFormat:@"No clip at %.3fs on the primary storyline", start]};
 
-        NSString *kind = params[@"kind"] ?: @"standard";
-        int32_t ts = 24000;
-        RMTime fd;
-        if (RMReadTime(sequence, @"frameDuration", &fd)) ts = fd.timescale;
-        double localStart = start + RMLocalOffset(sequence, item);
-        // FCP won't let a marker run past its clip's source media; the rest goes in the tag.
-        double fcpDuration = duration;
-        RMTimeRange media;
-        if (RMReadRange(item, @"unclippedRange", &media)) {
-            double available = RMSeconds(media.start) + RMSeconds(media.duration) - localStart;
-            fcpDuration = MAX(frame, MIN(duration, floor(available / frame) * frame));
-        }
-        double tagDuration = duration > fcpDuration + frame / 2 ? duration : 0;
-        RMTimeRange range = { RMMakeTime(localStart, ts), RMMakeTime(fcpDuration, ts) };
-
-        NSSet *before = [NSSet setWithArray:RMMarkersOnItem(item)];
-        SEL addSel = NSSelectorFromString(@"actionAddMarkerToAnchoredObject:isToDo:isChapter:withRange:error:");
-        NSError *err = nil;
-        BOOL ok = ((BOOL (*)(id, SEL, id, BOOL, BOOL, RMTimeRange, NSError **))objc_msgSend)(
-            sequence, addSel, item, [kind isEqualToString:@"todo"], [kind isEqualToString:@"chapter"], range, &err);
-        if (!ok) return @{@"error": err.localizedDescription ?: @"FCP refused to add the marker"};
-
-        id marker = nil;
-        for (id m in RMMarkersOnItem(item)) if (![before containsObject:m]) marker = m;
-
-        NSString *name = params[@"name"];
-        NSString *color = [params[@"color"] lowercaseString];
-        if (color.length && ![color isEqualToString:@"none"] && !RMPalette()[color]) {
-            return @{@"error": [NSString stringWithFormat:@"Unknown color '%@'. Use one of: %@", color,
-                                [[RMPalette().allKeys sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "]]};
-        }
-        if (marker && (name.length || color.length || tagDuration > 0)) {
-            NSString *base = name.length ? name : (RMSend(marker, @"displayName") ?: @"Marker");
-            RMRename(marker, RMFormatName(base, color, tagDuration), NULL);
-        }
-        RMRefreshAll();
+        NSString *error = nil;
+        id marker = RMAddMarkerToItem(sequence, item, start + RMLocalOffset(sequence, item), duration, params, &error);
+        if (error) return @{@"error": error};
         return marker ? @{@"status": @"ok", @"marker": RMDescribeMarker(sequence, item, marker)}
                       : @{@"status": @"ok", @"note": @"Marker added but could not be read back"};
     });
@@ -605,7 +825,7 @@ static NSDictionary *RMDebugEditor(NSDictionary *params) {
 }
 
 static NSDictionary *RMRefresh(NSDictionary *params) {
-    return RMOnMain(^NSDictionary *{ RMRefreshAll(); return @{@"status": @"ok"}; });
+    return RMOnMain(^NSDictionary *{ RMDiscoverBrowserMarkerLayers(); RMRefreshAll(); return @{@"status": @"ok"}; });
 }
 
 // rangedMarkers.debugLayers — geometry of live marker layers, for development.
@@ -634,6 +854,36 @@ static NSDictionary *RMDebugLayers(NSDictionary *params) {
             });
         }
         return @{@"timePerPixel": @(RMSeconds(tpp)), @"layers": out};
+    });
+}
+
+// rangedMarkers.debugBrowser — browser marker layers, playhead and selection (development).
+static NSDictionary *RMDebugBrowser(NSDictionary *params) {
+    return RMOnMain(^NSDictionary *{
+        NSMutableArray *layers = [NSMutableArray array];
+        for (CALayer *l in sBrowserMarkerLayers.allObjects) {
+            id m = RMLayerMarker(l);
+            RMTime a = {0};
+            RMReadTime(m, @"targetAnchorTime", &a);
+            [layers addObject:@{@"marker": RMSend(m, @"displayName") ?: @"", @"localStart": @(RMSeconds(a)),
+                                @"duration": @(RMFCPDuration(m)), @"frame": NSStringFromRect(NSRectFromCGRect(l.frame)),
+                                @"attached": @(l.superlayer != nil), @"hasChunk": @(RMChunkForMarkerLayer(l) != nil),
+                                @"secondsPerPixel": @(RMLayerSecondsPerPixel(l)), @"inBrowser": @(RMIsInBrowser(m)),
+                                @"playhead": @(RMPlayheadForMarker(m)), @"hasContents": @(l.contents != nil)}];
+        }
+        NSView *view = RMBrowserView();
+        id highlighted = nil;
+        @try { highlighted = [view valueForKey:@"_highlightedMarker"]; } @catch (NSException *e) {}
+        RMTime t = {0};
+        RMReadTime(view, @"persistentPlayheadTime", &t);
+        id ro = RMSend(view, @"persistentPlayheadRangeOfMedia");
+        id sel = RMBrowserSelectionObject(view, nil);
+        RMTimeRange sr = {0};
+        RMReadRange(sel, @"range", &sr);
+        return @{@"layers": layers, @"focused": @(RMFocusedBrowserView() != nil), @"hasView": @(view != nil),
+                 @"highlighted": RMSend(highlighted, @"displayName") ?: [NSNull null],
+                 @"playheadTime": @(RMSeconds(t)), @"playheadClip": RMSend(RMSend(ro, @"object"), @"displayName") ?: [NSNull null],
+                 @"selection": sel ? RMRangeDict(sr) : [NSNull null], @"selectionIsWholeClip": @(RMIsWholeClipSelection(sel))};
     });
 }
 
@@ -673,6 +923,35 @@ static double RMMarkerSequenceStart(id sequence, id marker) {
     return RMSeconds(anchor) - RMLocalOffset(sequence, item);
 }
 
+// The playhead in the marker's clip time: the timeline playhead for project markers,
+// the browser playhead for markers on browser clips. -1 if it isn't on that clip.
+static double RMPlayheadForMarker(id marker) {
+    id sequence = RMMarkerSequence(marker);
+    if (sequence == RMActiveSequence()) {
+        id item = RMItemForMarker(sequence, marker);
+        double playhead = RMPlayheadSeconds();
+        return (item && playhead >= 0) ? playhead + RMLocalOffset(sequence, item) : -1;
+    }
+    double seconds;
+    return RMBrowserPlayhead(RMBrowserView(), sequence, &seconds) ? seconds : -1;
+}
+
+// The in/out range (timeline) or selected range (browser) in the marker's clip time.
+static BOOL RMInOutForMarker(id marker, double *localStart, double *duration) {
+    id sequence = RMMarkerSequence(marker);
+    if (sequence == RMActiveSequence()) {
+        id item = RMItemForMarker(sequence, marker);
+        if (!item || !RMInOutRange(localStart, duration)) return NO;
+        *localStart += RMLocalOffset(sequence, item);
+        return YES;
+    }
+    RMTimeRange r;
+    if (!RMReadRange(RMBrowserSelectionObject(RMBrowserView(), sequence), @"range", &r) || RMSeconds(r.duration) <= 0) return NO;
+    *localStart = RMSeconds(r.start);
+    *duration = RMSeconds(r.duration);
+    return YES;
+}
+
 // Seconds of source media available after localStart on the marker's clip. FCP won't
 // let a marker run past its clip's source media, however long the timeline range is.
 static double RMAvailableMedia(id sequence, id item, RMTime localStart) {
@@ -686,14 +965,14 @@ static double RMAvailableMedia(id sequence, id item, RMTime localStart) {
 // FCP gets as much of the range as its clip's media allows; anything longer is
 // kept in the name tag ("[Red 12.5s] ...") so the full range still draws and survives.
 static BOOL RMMoveMarker(id marker, RMTime localStart, double seconds) {
-    id sequence = RMActiveSequence();
+    id sequence = RMMarkerSequence(marker);
     SEL sel = NSSelectorFromString(@"actionMoveMarker:toRange:error:");
     if (!sequence || ![sequence respondsToSelector:sel]) return NO;
     RMTime fd;
     if (!RMReadTime(sequence, @"frameDuration", &fd)) fd = (RMTime){1001, 24000, 1, 0};
     double frame = RMSeconds(fd);
     int64_t frames = MAX(1, llround(seconds / frame));
-    double available = RMAvailableMedia(sequence, RMItemForMarker(sequence, marker), localStart);
+    double available = RMAvailableMedia(sequence, RMMarkerItem(marker), localStart);
     int64_t fcpFrames = MAX(1, MIN(frames, (int64_t)floor(available / frame)));
 
     RMTime anchor = {0};
@@ -799,7 +1078,42 @@ static void RMNudgeRight(id self, SEL _cmd, id sender) {
     @try { RMRestoreSoon(snapshot); } @catch (NSException *e) {}
 }
 
+// The browser moves markers (dragging a pin, nudging) through its module with a
+// one-frame range object. Keep the marker's length instead, as far as its media allows.
+static BOOL (*sOrigBrowserMoveMarker)(id, SEL, id, id, NSError **);
+
+static BOOL RMBrowserMoveMarker(id self, SEL _cmd, id marker, id rangeObject, NSError **err) {
+    double wanted = 0;
+    @try {
+        RMTimeRange r;
+        double frame = RMIsTimeMarker(marker) ? RMFrameSeconds(marker) : 0;
+        SEL copySel = NSSelectorFromString(@"copyWithRange:");
+        if (frame > 0 && RMIsRanged(marker, &wanted) && RMReadRange(rangeObject, @"range", &r) &&
+            RMSeconds(r.duration) < frame * 1.5 && [rangeObject respondsToSelector:copySel]) {
+            double available = RMAvailableMedia(RMMarkerSequence(marker), RMMarkerItem(marker), r.start);
+            int64_t frames = MAX(1, MIN(llround(RMFCPDuration(marker) / frame), (int64_t)floor(available / frame)));
+            r.duration = RMMakeTime(frames * frame, r.start.timescale);
+            typedef id (*RMCopyFn)(id, SEL, RMTimeRange) __attribute__((ns_returns_retained));
+            rangeObject = ((RMCopyFn)objc_msgSend)(rangeObject, copySel, r);
+        } else {
+            wanted = 0;
+        }
+    } @catch (NSException *e) {
+        wanted = 0;
+    }
+    BOOL ok = sOrigBrowserMoveMarker(self, _cmd, marker, rangeObject, err);
+    if (ok && wanted > 0) {
+        // Clamped by the media at the new spot: RMSetMarkerDuration keeps the rest in the tag.
+        double now = 0;
+        RMIsRanged(marker, &now);
+        if (fabs(now - wanted) > RMFrameSeconds(marker) / 2) RMSetMarkerDuration(marker, wanted);
+    }
+    return ok;
+}
+
 static void RMInstallMoveHooks(void) {
+    Class organizer = NSClassFromString(@"FFOrganizerFilmstripModule");
+    if (organizer) sOrigBrowserMoveMarker = (void *)RMHook(organizer, NSSelectorFromString(@"actionMoveMarker:toRange:error:"), (IMP)RMBrowserMoveMarker);
     Class tm = NSClassFromString(@"FFAnchoredTimelineModule");
     if (!tm) return;
     sOrigTimelineMoveMarker = (void *)RMHook(tm, NSSelectorFromString(@"timelineView:moveMarker:toItem:atTime:"), (IMP)RMTimelineMoveMarker);
@@ -892,7 +1206,18 @@ static void RMAddMarker(id self, SEL _cmd, BOOL alwaysEdit, BOOL todo, BOOL chap
     @finally { sAddingMarker = NO; }
 }
 
+// The browser's Add Marker takes an extra isMoment flag.
+static void (*sOrigBrowserAddMarker)(id, SEL, BOOL, BOOL, BOOL, BOOL);
+
+static void RMBrowserAddMarker(id self, SEL _cmd, BOOL alwaysEdit, BOOL todo, BOOL chapter, BOOL moment) {
+    sAddingMarker = YES;
+    @try { sOrigBrowserAddMarker(self, _cmd, alwaysEdit, todo, chapter, moment); }
+    @finally { sAddingMarker = NO; }
+}
+
 static void RMInstallAddHooks(void) {
+    Class organizer = NSClassFromString(@"FFOrganizerFilmstripModule");
+    if (organizer) sOrigBrowserAddMarker = (void *)RMHook(organizer, NSSelectorFromString(@"addMarkerAndAlwaysEdit:isToDo:isChapter:isMoment:"), (IMP)RMBrowserAddMarker);
     Class tm = NSClassFromString(@"FFAnchoredTimelineModule");
     Class anchored = NSClassFromString(@"FFAnchoredObject");
     if (!tm || !anchored) return;
@@ -917,7 +1242,33 @@ static NSImage *RMSwatch(NSColor *color) {
 
 // Marker under the playhead (its range covers the playhead), or with
 // beforePlayhead, the closest marker starting at or before the playhead.
+static BOOL RMMarkerMatchesPlayhead(id marker, double start, double playhead, double frame, BOOL beforePlayhead) {
+    double duration = 0;
+    RMIsRanged(marker, &duration);
+    return beforePlayhead ? start <= playhead + frame / 2
+                          : start <= playhead + frame / 2 && playhead < start + MAX(duration, frame);
+}
+
+// The same, on the browser clip under the browser playhead (all in clip time).
+static id RMBrowserMarkerNearPlayhead(NSView *view, BOOL beforePlayhead) {
+    id sequence = RMBrowserClipSequence(RMSend(view, @"persistentPlayheadRangeOfMedia"));
+    double playhead;
+    if (!RMBrowserPlayhead(view, sequence, &playhead)) return nil;
+    double frame = RMFrameSeconds(sequence);
+    id best = nil;
+    double bestStart = -INFINITY;
+    for (id m in RMMarkersOnItem(RMSend(sequence, @"primaryObject"))) {
+        RMTime anchor;
+        if (!RMReadTime(m, @"targetAnchorTime", &anchor)) continue;
+        double start = RMSeconds(anchor);
+        if (RMMarkerMatchesPlayhead(m, start, playhead, frame, beforePlayhead) && start > bestStart) { best = m; bestStart = start; }
+    }
+    return best;
+}
+
 static id RMMarkerNearPlayhead(BOOL beforePlayhead) {
+    NSView *browser = RMFocusedBrowserView();
+    if (browser) return RMBrowserMarkerNearPlayhead(browser, beforePlayhead);
     id sequence = RMActiveSequence();
     double playhead = RMPlayheadSeconds();
     double frame = RMFrameSeconds(sequence);
@@ -930,11 +1281,7 @@ static id RMMarkerNearPlayhead(BOOL beforePlayhead) {
         for (id m in RMMarkersOnItem(item)) {
             double start = RMMarkerSequenceStart(sequence, m);
             if (start < itemStart - 0.001 || start >= itemEnd) continue; // copy on another blade piece
-            double duration = 0;
-            RMIsRanged(m, &duration);
-            BOOL matches = beforePlayhead ? start <= playhead + frame / 2
-                                          : start <= playhead + frame / 2 && playhead < start + MAX(duration, frame);
-            if (matches && start > bestStart) { best = m; bestStart = start; }
+            if (RMMarkerMatchesPlayhead(m, start, playhead, frame, beforePlayhead) && start > bestStart) { best = m; bestStart = start; }
         }
     }
     return best;
@@ -959,32 +1306,53 @@ static void RMActSetColor(id self, SEL _cmd, NSMenuItem *sender) {
 
 static void RMActExtendToPlayhead(id self, SEL _cmd, NSMenuItem *sender) {
     id marker = RMMenuMarker(sender);
-    id sequence = RMActiveSequence();
-    double start = marker ? RMMarkerSequenceStart(sequence, marker) : -1;
-    double playhead = RMPlayheadSeconds();
-    if (start < 0 || playhead <= start + RMFrameSeconds(sequence) || !RMSetMarkerDuration(marker, playhead - start)) NSBeep();
+    RMTime anchor;
+    double playhead = marker ? RMPlayheadForMarker(marker) : -1;
+    if (!marker || playhead < 0 || !RMReadTime(marker, @"targetAnchorTime", &anchor) ||
+        playhead <= RMSeconds(anchor) + RMFrameSeconds(marker) || !RMSetMarkerDuration(marker, playhead - RMSeconds(anchor))) NSBeep();
 }
 
 static void RMActUseInOut(id self, SEL _cmd, NSMenuItem *sender) {
     id marker = RMMenuMarker(sender);
-    id sequence = RMActiveSequence();
-    id item = marker ? RMItemForMarker(sequence, marker) : nil;
     double start, duration;
     RMTime anchor, fd;
-    if (!item || !RMInOutRange(&start, &duration) || !RMReadTime(marker, @"targetAnchorTime", &anchor)) { NSBeep(); return; }
-    int32_t ts = RMReadTime(sequence, @"frameDuration", &fd) ? fd.timescale : anchor.timescale;
-    if (!RMMoveMarker(marker, RMMakeTime(start + RMLocalOffset(sequence, item), ts), duration)) NSBeep();
+    if (!marker || !RMInOutForMarker(marker, &start, &duration) || !RMReadTime(marker, @"targetAnchorTime", &anchor)) { NSBeep(); return; }
+    int32_t ts = RMReadTime(RMMarkerSequence(marker), @"frameDuration", &fd) ? fd.timescale : anchor.timescale;
+    if (!RMMoveMarker(marker, RMMakeTime(start, ts), duration)) NSBeep();
 }
 
 static void RMActRemoveRange(id self, SEL _cmd, NSMenuItem *sender) {
     id marker = RMMenuMarker(sender);
-    if (!marker || !RMSetMarkerDuration(marker, RMFrameSeconds(RMActiveSequence()))) NSBeep();
+    if (!marker || !RMSetMarkerDuration(marker, RMFrameSeconds(RMMarkerSequence(marker)))) NSBeep();
 }
 
 static NSDictionary *RMAdd(NSDictionary *params);
 
+// In the browser: the range selected in a clip, else 5s from the browser playhead.
+static void RMAddRangedInBrowser(NSView *view) {
+    id ro = RMBrowserSelectionObject(view, nil);
+    RMTimeRange r;
+    id sequence = nil;
+    double start = 0, duration = 0;
+    if (ro && !RMIsWholeClipSelection(ro) && RMReadRange(ro, @"range", &r) && RMSeconds(r.duration) > 0) {
+        sequence = RMBrowserClipSequence(ro);
+        start = RMSeconds(r.start);
+        duration = RMSeconds(r.duration);
+    } else {
+        sequence = RMBrowserClipSequence(RMSend(view, @"persistentPlayheadRangeOfMedia"));
+        if (!RMBrowserPlayhead(view, sequence, &start)) sequence = nil;
+        duration = 5.0;
+    }
+    NSString *error = nil;
+    if (!sequence || duration < RMFrameSeconds(sequence) * 2) error = @"Select a range in a browser clip or put the playhead on one";
+    else RMAddMarkerToItem(sequence, RMSend(sequence, @"primaryObject"), start, duration, @{}, &error);
+    if (error) { NSLog(@"[RangedMarkers] %@", error); NSBeep(); }
+}
+
 // Mark > Markers > Add Ranged Marker: the in/out range if set, else 5s from the playhead.
 static void RMActAddRanged(id self, SEL _cmd, NSMenuItem *sender) {
+    NSView *browser = RMFocusedBrowserView();
+    if (browser) { RMAddRangedInBrowser(browser); return; }
     double start, duration;
     if (!RMInOutRange(&start, &duration)) {
         start = RMPlayheadSeconds();
@@ -995,7 +1363,7 @@ static void RMActAddRanged(id self, SEL _cmd, NSMenuItem *sender) {
 }
 
 static BOOL RMValidateMenuItem(id self, SEL _cmd, NSMenuItem *item) {
-    if (item.action == NSSelectorFromString(@"rmAddRanged:")) return RMActiveSequence() != nil;
+    if (item.action == NSSelectorFromString(@"rmAddRanged:")) return RMActiveSequence() != nil || RMFocusedBrowserView() != nil;
     return RMMenuMarker(item) != nil;
 }
 
@@ -1107,9 +1475,57 @@ static id RMContextMenu(id self, SEL _cmd) {
     return menu;
 }
 
+// Browser marker layer whose pin or range bar is under the event.
+static CALayer *RMBrowserMarkerLayerAt(NSEvent *event, NSView *view) {
+    NSPoint p = [view convertPoint:event.locationInWindow fromView:nil];
+    for (CALayer *layer in sBrowserMarkerLayers.allObjects) {
+        if (layer.hidden || !RMLayerIsInView(layer, view)) continue;
+        CALayer *bar = RMSublayerNamed(layer, kBarLayerName);
+        if (CGRectContainsPoint(CGRectInset(layer.bounds, -1, -1), [view.layer convertPoint:p toLayer:layer]) ||
+            (bar && CGRectContainsPoint(CGRectInset(bar.bounds, 0, -2), [view.layer convertPoint:p toLayer:bar]))) return layer;
+    }
+    return nil;
+}
+
+// The browser builds and pops up its context menu inside -rightMouseDown:. Note the
+// marker under the click there, and add our items to the menu as it pops up.
+static id sRightClickMarker;
+static void (*sOrigBrowserRightMouseDown)(id, SEL, NSEvent *);
+static void (*sOrigPopUpContextMenu)(id, SEL, NSMenu *, NSEvent *, NSView *);
+static BOOL (*sOrigPopUpMenu)(id, SEL, NSMenuItem *, NSPoint, NSView *);
+
+static void RMAddRightClickItems(NSMenu *menu) {
+    id marker = sRightClickMarker;
+    sRightClickMarker = nil;
+    if (!marker || !menu) return;
+    @try {
+        RMRemoveOurItems(menu);
+        RMAppendMarkerItems(menu, marker);
+    } @catch (NSException *e) {
+        NSLog(@"[RangedMarkers] browser context menu failed: %@", e.reason);
+    }
+}
+
+static void RMBrowserRightMouseDown(id self, SEL _cmd, NSEvent *event) {
+    @try { sRightClickMarker = RMLayerMarker(RMBrowserMarkerLayerAt(event, self)); } @catch (NSException *e) {}
+    @try { sOrigBrowserRightMouseDown(self, _cmd, event); }
+    @finally { sRightClickMarker = nil; }
+}
+
+static void RMPopUpContextMenu(id self, SEL _cmd, NSMenu *menu, NSEvent *event, NSView *view) {
+    RMAddRightClickItems(menu);
+    sOrigPopUpContextMenu(self, _cmd, menu, event, view);
+}
+
+static BOOL RMPopUpMenu(id self, SEL _cmd, NSMenuItem *item, NSPoint location, NSView *view) {
+    RMAddRightClickItems(self);
+    return sOrigPopUpMenu(self, _cmd, item, location, view);
+}
+
 #pragma mark - Dragging the range end
 
 static id sDragMarker;
+static NSView *sDragView;
 static CGFloat sDragStartX, sDragStartWidth;
 static double sDragTPP, sDragFrame;
 static NSString *const kLabelLayerName = @"skRangedMarkerLabel";
@@ -1119,19 +1535,24 @@ static NSView *RMActiveTimelineView(void) {
     return [view isKindOfClass:[NSView class]] ? view : nil;
 }
 
-// Marker layer whose range handle is under the event, if any.
+// Marker layer (timeline or browser view) whose range handle is under the event, if any.
 static CALayer *RMHandleHit(NSEvent *event, NSView *view, CGFloat *viewX) {
     if (!view || event.window != view.window) return nil;
     NSPoint p = [view convertPoint:event.locationInWindow fromView:nil];
     if (viewX) *viewX = p.x;
     __block CALayer *hit = nil;
-    RMVisitMarkerLayers(view.layer, ^(CALayer *layer) {
+    void (^test)(CALayer *) = ^(CALayer *layer) {
         CALayer *bar = hit ? nil : RMSublayerNamed(layer, kBarLayerName);
         if (!bar) return;
         CGPoint lp = [view.layer convertPoint:p toLayer:bar];
         CGSize size = bar.bounds.size;
         if (lp.x >= size.width - 7 && lp.x <= size.width + 5 && lp.y >= -6 && lp.y <= size.height + 6) hit = layer;
-    });
+    };
+    if ([view isKindOfClass:RMBrowserViewClass()]) {
+        for (CALayer *layer in sBrowserMarkerLayers.allObjects) if (RMLayerIsInView(layer, view)) test(layer);
+    } else {
+        RMVisitMarkerLayers(view.layer, test);
+    }
     return hit;
 }
 
@@ -1155,38 +1576,32 @@ static void RMShowDragLabel(CALayer *bar, double seconds) {
     label.frame = CGRectMake(bar.bounds.size.width + 6, -3, 56, 14);
 }
 
-static void (*sOrigMouseDown)(id, SEL, NSEvent *);
-static void (*sOrigMouseDragged)(id, SEL, NSEvent *);
-static void (*sOrigMouseUp)(id, SEL, NSEvent *);
-static void (*sOrigMouseMoved)(id, SEL, NSEvent *);
-
-static void RMMouseDown(id self, SEL _cmd, NSEvent *event) {
+// Returns YES when the mouse down starts a range drag (FCP must not see the event).
+static BOOL RMBeginRangeDrag(NSEvent *event, NSView *view) {
     @try {
-        NSView *view = RMActiveTimelineView();
         CGFloat x = 0;
         CALayer *layer = (event.clickCount == 1) ? RMHandleHit(event, view, &x) : nil;
-        id marker = RMSend(layer, @"representedObject");
-        RMTime tpp;
-        if (layer && RMIsTimeMarker(marker) && RMReadTime(view, @"timePerPixel", &tpp)) {
-            sDragLayer = layer;
-            sDragMarker = marker;
-            sDragStartX = x;
-            sDragStartWidth = sDragWidth = RMSublayerNamed(layer, kBarLayerName).bounds.size.width;
-            sDragTPP = RMSeconds(tpp);
-            sDragFrame = RMFrameSeconds(marker);
-            [[NSCursor resizeLeftRightCursor] set];
-            return; // swallow: FCP must not start its own marker drag
-        }
+        id marker = RMLayerMarker(layer);
+        double spp = layer ? RMLayerSecondsPerPixel(layer) : 0;
+        if (!marker || spp <= 0) return NO;
+        sDragLayer = layer;
+        sDragMarker = marker;
+        sDragView = view;
+        sDragStartX = x;
+        sDragStartWidth = sDragWidth = RMSublayerNamed(layer, kBarLayerName).bounds.size.width;
+        sDragTPP = spp;
+        sDragFrame = RMFrameSeconds(marker);
+        [[NSCursor resizeLeftRightCursor] set];
+        return YES;
     } @catch (NSException *e) {
         sDragLayer = nil;
+        return NO;
     }
-    sOrigMouseDown(self, _cmd, event);
 }
 
-static void RMMouseDragged(id self, SEL _cmd, NSEvent *event) {
-    if (!sDragLayer) { sOrigMouseDragged(self, _cmd, event); return; }
-    NSView *view = RMActiveTimelineView();
-    CGFloat x = [view convertPoint:event.locationInWindow fromView:nil].x;
+static BOOL RMContinueRangeDrag(NSEvent *event) {
+    if (!sDragLayer) return NO;
+    CGFloat x = [sDragView convertPoint:event.locationInWindow fromView:nil].x;
     double seconds = MAX(2, llround((sDragStartWidth + (x - sDragStartX)) * sDragTPP / sDragFrame)) * sDragFrame;
     sDragWidth = seconds / sDragTPP;
     RMUpdateMarkerLayer(sDragLayer);
@@ -1196,27 +1611,186 @@ static void RMMouseDragged(id self, SEL _cmd, NSEvent *event) {
     RMShowDragLabel(bar, seconds);
     [CATransaction commit];
     [[NSCursor resizeLeftRightCursor] set];
+    return YES;
 }
 
-static void RMMouseUp(id self, SEL _cmd, NSEvent *event) {
-    if (!sDragLayer) { sOrigMouseUp(self, _cmd, event); return; }
+static BOOL RMEndRangeDrag(NSEvent *event) {
+    if (!sDragLayer) return NO;
     CALayer *layer = sDragLayer;
     id marker = sDragMarker;
     double seconds = sDragWidth * sDragTPP;
     BOOL changed = fabs(sDragWidth - sDragStartWidth) >= 0.5;
     sDragLayer = nil;
     sDragMarker = nil;
+    sDragView = nil;
     [RMSublayerNamed(RMSublayerNamed(layer, kBarLayerName), kLabelLayerName) removeFromSuperlayer];
     if (changed) RMSetMarkerDuration(marker, seconds);
     RMUpdateMarkerLayer(layer);
     [[NSCursor arrowCursor] set];
+    return YES;
 }
 
+static void RMUpdateHandleCursor(NSEvent *event, NSView *view) {
+    @try {
+        if (!sDragLayer && RMHandleHit(event, view, NULL)) [[NSCursor resizeLeftRightCursor] set];
+    } @catch (NSException *e) {}
+}
+
+// Timeline: TLKEventDispatcher handles the timeline view's mouse events.
+static void (*sOrigMouseDown)(id, SEL, NSEvent *);
+static void (*sOrigMouseDragged)(id, SEL, NSEvent *);
+static void (*sOrigMouseUp)(id, SEL, NSEvent *);
+static void (*sOrigMouseMoved)(id, SEL, NSEvent *);
+
+static void RMMouseDown(id self, SEL _cmd, NSEvent *event) {
+    if (!RMBeginRangeDrag(event, RMActiveTimelineView())) sOrigMouseDown(self, _cmd, event);
+}
+static void RMMouseDragged(id self, SEL _cmd, NSEvent *event) {
+    if (!RMContinueRangeDrag(event)) sOrigMouseDragged(self, _cmd, event);
+}
+static void RMMouseUp(id self, SEL _cmd, NSEvent *event) {
+    if (!RMEndRangeDrag(event)) sOrigMouseUp(self, _cmd, event);
+}
 static void RMMouseMoved(id self, SEL _cmd, NSEvent *event) {
     sOrigMouseMoved(self, _cmd, event);
-    @try {
-        if (!sDragLayer && RMHandleHit(event, RMActiveTimelineView(), NULL)) [[NSCursor resizeLeftRightCursor] set];
-    } @catch (NSException *e) {}
+    RMUpdateHandleCursor(event, RMActiveTimelineView());
+}
+
+#pragma mark - Dragging browser markers
+
+// FCP's browser can't drag markers at all, so the plugin moves them: dragging a pin
+// moves the marker (and its range) along its clip, as one undoable edit. FCP doesn't
+// see a press on a pin until it is released without moving; then it gets the press
+// and release as usual, so clicking and double-clicking a marker work as before.
+static CALayer *sMoveLayer;
+static NSEvent *sMoveDownEvent;
+static CGFloat sMoveStartX;
+static BOOL sMoveActive;
+
+// Browser marker layer whose pin (not its range bar) is under the event.
+static CALayer *RMBrowserPinAt(NSEvent *event, NSView *view) {
+    NSPoint p = [view convertPoint:event.locationInWindow fromView:nil];
+    for (CALayer *layer in sBrowserMarkerLayers.allObjects) {
+        if (layer.hidden || !RMLayerIsInView(layer, view)) continue;
+        if (CGRectContainsPoint(CGRectInset(layer.bounds, -1, -1), [view.layer convertPoint:p toLayer:layer])) return layer;
+    }
+    return nil;
+}
+
+static BOOL RMBeginPinPress(NSEvent *event, NSView *view) {
+    if (event.clickCount != 1 || event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagOption | NSEventModifierFlagControl)) return NO;
+    CALayer *layer = nil;
+    @try { layer = RMBrowserPinAt(event, view); } @catch (NSException *e) {}
+    if (!RMLayerMarker(layer) || RMLayerSecondsPerPixel(layer) <= 0) return NO;
+    sMoveLayer = layer;
+    sMoveDownEvent = event;
+    sMoveStartX = [view convertPoint:event.locationInWindow fromView:nil].x;
+    sMoveActive = NO;
+    return YES;
+}
+
+static BOOL RMContinuePinMove(NSEvent *event, NSView *view) {
+    if (!sMoveLayer) return NO;
+    CGFloat dx = [view convertPoint:event.locationInWindow fromView:nil].x - sMoveStartX;
+    if (!sMoveActive && fabs(dx) < 3) return YES;
+    sMoveActive = YES;
+    double spp = RMLayerSecondsPerPixel(sMoveLayer), frame = RMFrameSeconds(RMLayerMarker(sMoveLayer));
+    CGFloat snapped = spp > 0 ? llround(dx * spp / frame) * frame / spp : dx;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    sMoveLayer.transform = CATransform3DMakeTranslation(snapped, 0, 0);
+    [CATransaction commit];
+    [[NSCursor closedHandCursor] set];
+    return YES;
+}
+
+// Moves marker to start at localStart in its clip, keeping its length.
+static BOOL RMMoveMarkerStart(id marker, double localStart) {
+    double duration = 0;
+    id sequence = RMMarkerSequence(marker);
+    int32_t ts = 24000;
+    RMTime fd, d;
+    if (RMReadTime(sequence, @"frameDuration", &fd)) ts = fd.timescale;
+    if (RMIsRanged(marker, &duration)) return RMMoveMarker(marker, RMMakeTime(localStart, ts), duration);
+    // One-frame markers keep FCP's own (sub-frame) length.
+    SEL sel = NSSelectorFromString(@"actionMoveMarker:toRange:error:");
+    if (![sequence respondsToSelector:sel] || !RMReadTime(marker, @"duration", &d)) return NO;
+    RMTimeRange range = { RMMakeTime(localStart, ts), d };
+    NSError *err = nil;
+    BOOL ok = ((BOOL (*)(id, SEL, id, RMTimeRange, NSError **))objc_msgSend)(sequence, sel, marker, range, &err);
+    if (!ok) NSLog(@"[RangedMarkers] move failed: %@", err.localizedDescription);
+    RMRefreshAll();
+    return ok;
+}
+
+// Returns NO if no pin press was pending. *wasClick says FCP should now get the press.
+static BOOL RMEndPinPress(NSEvent *event, NSView *view, BOOL *wasClick) {
+    if (!sMoveLayer) return NO;
+    CALayer *layer = sMoveLayer;
+    BOOL moved = sMoveActive;
+    sMoveLayer = nil;
+    sMoveActive = NO;
+    *wasClick = !moved;
+    if (!moved) return YES;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    layer.transform = CATransform3DIdentity;
+    [CATransaction commit];
+    [[NSCursor arrowCursor] set];
+
+    id marker = RMLayerMarker(layer);
+    double spp = RMLayerSecondsPerPixel(layer), frame = RMFrameSeconds(marker);
+    CGFloat dx = [view convertPoint:event.locationInWindow fromView:nil].x - sMoveStartX;
+    RMTime anchor;
+    RMTimeRange clip;
+    if (!marker || spp <= 0 || !RMReadTime(marker, @"targetAnchorTime", &anchor)) { NSBeep(); return YES; }
+    double start = RMSeconds(anchor) + llround(dx * spp / frame) * frame;
+    // Keep the marker on its clip.
+    if (RMReadRange(RMMarkerItem(marker), @"clippedRange", &clip)) {
+        double clipStart = RMSeconds(clip.start), clipEnd = clipStart + RMSeconds(clip.duration);
+        start = MAX(clipStart, MIN(start, floor((clipEnd - clipStart) / frame - 1) * frame + clipStart));
+    }
+    if (fabs(start - RMSeconds(anchor)) >= frame / 2 && !RMMoveMarkerStart(marker, start)) NSBeep();
+    return YES;
+}
+
+// Browser: the filmstrip view handles its own mouse events.
+static void (*sOrigBrowserMouseDown)(id, SEL, NSEvent *);
+static void (*sOrigBrowserMouseDragged)(id, SEL, NSEvent *);
+static void (*sOrigBrowserMouseUp)(id, SEL, NSEvent *);
+static void (*sOrigBrowserMouseMoved)(id, SEL, NSEvent *);
+
+static void RMBrowserMouseDown(id self, SEL _cmd, NSEvent *event) {
+    if (RMBeginRangeDrag(event, self) || RMBeginPinPress(event, self)) return;
+    sOrigBrowserMouseDown(self, _cmd, event);
+}
+static void RMBrowserMouseDragged(id self, SEL _cmd, NSEvent *event) {
+    if (RMContinueRangeDrag(event) || RMContinuePinMove(event, self)) return;
+    sOrigBrowserMouseDragged(self, _cmd, event);
+}
+
+// A pin press that never moved is a click: give FCP the press, then the release.
+static void RMBrowserMouseUpWith(id self, SEL _cmd, NSEvent *event, void (*origUp)(id, SEL, NSEvent *)) {
+    if (RMEndRangeDrag(event)) return;
+    NSEvent *down = sMoveDownEvent;
+    BOOL wasClick = NO;
+    BOOL pinPress = RMEndPinPress(event, self, &wasClick);
+    sMoveDownEvent = nil;
+    if (pinPress && !wasClick) return;
+    if (pinPress && down) sOrigBrowserMouseDown(self, @selector(mouseDown:), down);
+    origUp(self, _cmd, event);
+}
+static void RMBrowserMouseUp(id self, SEL _cmd, NSEvent *event) {
+    RMBrowserMouseUpWith(self, _cmd, event, sOrigBrowserMouseUp);
+}
+// FCP's browser is FFOrganizerFilmstripViewPro, which has its own -mouseUp:.
+static void (*sOrigBrowserProMouseUp)(id, SEL, NSEvent *);
+static void RMBrowserProMouseUp(id self, SEL _cmd, NSEvent *event) {
+    RMBrowserMouseUpWith(self, _cmd, event, sOrigBrowserProMouseUp);
+}
+static void RMBrowserMouseMoved(id self, SEL _cmd, NSEvent *event) {
+    sOrigBrowserMouseMoved(self, _cmd, event);
+    RMUpdateHandleCursor(event, self);
 }
 
 #pragma mark - Duration field in the marker editor
@@ -1409,6 +1983,18 @@ static void RMInstallUI(void) {
         sOrigMouseUp = (void *)RMHook(dispatcher, @selector(mouseUp:), (IMP)RMMouseUp);
         sOrigMouseMoved = (void *)RMHook(dispatcher, @selector(mouseMoved:), (IMP)RMMouseMoved);
     }
+    Class browser = RMBrowserViewClass();
+    if (browser) {
+        sOrigBrowserRightMouseDown = (void *)RMHook(browser, @selector(rightMouseDown:), (IMP)RMBrowserRightMouseDown);
+        sOrigPopUpContextMenu = (void *)RMHook(object_getClass([NSMenu class]), @selector(popUpContextMenu:withEvent:forView:), (IMP)RMPopUpContextMenu);
+        sOrigPopUpMenu = (void *)RMHook([NSMenu class], @selector(popUpMenuPositioningItem:atLocation:inView:), (IMP)RMPopUpMenu);
+        sOrigBrowserMouseDown = (void *)RMHook(browser, @selector(mouseDown:), (IMP)RMBrowserMouseDown);
+        sOrigBrowserMouseDragged = (void *)RMHook(browser, @selector(mouseDragged:), (IMP)RMBrowserMouseDragged);
+        sOrigBrowserMouseUp = (void *)RMHook(browser, @selector(mouseUp:), (IMP)RMBrowserMouseUp);
+        sOrigBrowserMouseMoved = (void *)RMHook(browser, @selector(mouseMoved:), (IMP)RMBrowserMouseMoved);
+        Class pro = NSClassFromString(@"FFOrganizerFilmstripViewPro");
+        if (pro) sOrigBrowserProMouseUp = (void *)RMHook(pro, @selector(mouseUp:), (IMP)RMBrowserProMouseUp);
+    }
     Class editor = NSClassFromString(@"FFMarkerEditorViewModule");
     if (editor) {
         sOrigEditorInstalled = (void *)RMHook(editor, NSSelectorFromString(@"moduleViewWasInstalled:"), (IMP)RMEditorInstalled);
@@ -1455,13 +2041,18 @@ static void RMSetUp(void) {
     sRegister(@"rangedMarkers.debugLayers", ^NSDictionary *(NSDictionary *p) { return RMDebugLayers(p); }, @{
         @"description": @"Development: dump geometry of live timeline marker layers.",
         @"readOnly": @YES, @"pluginId": @"com.splicekit.ranged-markers", @"shortName": @"debugLayers"});
+    sRegister(@"rangedMarkers.debugBrowser", ^NSDictionary *(NSDictionary *p) { return RMDebugBrowser(p); }, @{
+        @"description": @"Development: dump browser filmstrip marker layers.",
+        @"readOnly": @YES, @"pluginId": @"com.splicekit.ranged-markers", @"shortName": @"debugBrowser"});
 
     dispatch_async(dispatch_get_main_queue(), ^{
+        RMInstallBrowserHooks();
         RMInstallHooks();
         RMInstallMoveHooks();
         RMInstallDeleteHook();
         RMInstallAddHooks();
         RMInstallUI();
+        RMDiscoverBrowserMarkerLayers();
         RMRefreshAll();
     });
     NSLog(@"[RangedMarkers] loaded");
