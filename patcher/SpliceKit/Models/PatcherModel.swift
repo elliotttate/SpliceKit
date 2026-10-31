@@ -1122,7 +1122,7 @@ class PatcherModel: ObservableObject {
 
         // Verify app entitlements
         let entOut = shell("codesign -d --entitlements - '\(moddedApp)' 2>&1")
-        let entKeys = ["app-sandbox", "disable-library-validation", "allow-dyld-environment-variables", "get-task-allow", "photos-library", "icloud-services"]
+        let entKeys = ["app-sandbox", "disable-library-validation", "allow-dyld-environment-variables", "get-task-allow", "photos-library"]
         for key in entKeys {
             let found = entOut.contains(key)
             await logAsync("Entitlement \(key): \(found ? "present" : "MISSING")")
