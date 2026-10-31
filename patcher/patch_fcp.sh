@@ -430,6 +430,8 @@ cat > "$ENTITLEMENTS" << 'ENT'
     <key>com.apple.security.cs.disable-library-validation</key><true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
     <key>com.apple.security.get-task-allow</key><true/>
+    <!-- Preserve Photos imports when replacing FCP's original entitlements. -->
+    <key>com.apple.security.personal-information.photos-library</key><true/>
 </dict>
 </plist>
 ENT
@@ -470,12 +472,23 @@ else
 fi
 
 # Verify entitlements applied
-if codesign -d --entitlements - "$MODDED_APP" 2>&1 | grep -q "disable-library-validation"; then
-    log "Entitlements applied (no sandbox, library validation disabled)"
-else
-    err "Entitlements not applied correctly"
+SIGNED_ENTITLEMENTS="$BUILD_DIR/signed-entitlements.plist"
+if ! codesign -d --entitlements - --xml "$MODDED_APP" > "$SIGNED_ENTITLEMENTS"; then
+    err "Unable to read signed application entitlements"
     exit 1
 fi
+
+for entitlement in \
+    com.apple.security.cs.disable-library-validation \
+    com.apple.security.personal-information.photos-library; do
+    # Escape dots so plutil treats each entitlement as a single dictionary key.
+    keypath="${entitlement//./\\.}"
+    if [[ "$(/usr/bin/plutil -extract "$keypath" raw -expect bool -o - "$SIGNED_ENTITLEMENTS" 2>/dev/null)" != "true" ]]; then
+        err "Required entitlement missing or disabled: $entitlement"
+        exit 1
+    fi
+done
+log "Entitlements applied (library validation disabled, Photos library access enabled)"
 
 # ============================================================
 # Step 6: Set up NSUserDefaults

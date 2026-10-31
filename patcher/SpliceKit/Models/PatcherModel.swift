@@ -1004,6 +1004,8 @@ class PatcherModel: ObservableObject {
             <key>com.apple.security.cs.disable-library-validation</key><true/>
             <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
             <key>com.apple.security.get-task-allow</key><true/>
+            <!-- Preserve Photos imports when replacing FCP's original entitlements. -->
+            <key>com.apple.security.personal-information.photos-library</key><true/>
             <key>com.apple.security.device.camera</key><true/>
             <key>com.apple.security.device.microphone</key><true/>
             <key>com.apple.security.device.audio-input</key><true/>
@@ -1119,10 +1121,12 @@ class PatcherModel: ObservableObject {
         }
 
         // Verify app entitlements
-        let entOut = shell("codesign -d --entitlements - '\(moddedApp)' 2>&1")
-        let entKeys = ["app-sandbox", "disable-library-validation", "allow-dyld-environment-variables", "get-task-allow", "icloud-services"]
+        let entOut = shell("codesign -d --entitlements - --xml \(shellQuote(moddedApp)) 2>/dev/null")
+        let entKeys = ["app-sandbox", "disable-library-validation", "allow-dyld-environment-variables", "get-task-allow", "photos-library"]
         for key in entKeys {
-            let found = entOut.contains(key)
+            let found = key == "photos-library"
+                ? photosLibraryEntitlementEnabled(in: entOut)
+                : entOut.contains(key)
             await logAsync("Entitlement \(key): \(found ? "present" : "MISSING")")
         }
 
@@ -1255,6 +1259,8 @@ class PatcherModel: ObservableObject {
             <key>com.apple.security.cs.disable-library-validation</key><true/>
             <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
             <key>com.apple.security.get-task-allow</key><true/>
+            <!-- Preserve Photos imports when replacing FCP's original entitlements. -->
+            <key>com.apple.security.personal-information.photos-library</key><true/>
             <key>com.apple.security.device.camera</key><true/>
             <key>com.apple.security.device.microphone</key><true/>
             <key>com.apple.security.device.audio-input</key><true/>
@@ -1349,10 +1355,13 @@ class PatcherModel: ObservableObject {
             await logAsync("WARNING: Framework binary NOT found")
         }
 
-        let entOut = shell("codesign -d --entitlements - '\(moddedApp)' 2>&1")
-        let entKeys = ["app-sandbox", "disable-library-validation", "allow-dyld-environment-variables", "get-task-allow"]
+        let entOut = shell("codesign -d --entitlements - --xml \(shellQuote(moddedApp)) 2>/dev/null")
+        let entKeys = ["app-sandbox", "disable-library-validation", "allow-dyld-environment-variables", "get-task-allow", "photos-library"]
         for key in entKeys {
-            await logAsync("Entitlement \(key): \(entOut.contains(key) ? "present" : "MISSING")")
+            let found = key == "photos-library"
+                ? photosLibraryEntitlementEnabled(in: entOut)
+                : entOut.contains(key)
+            await logAsync("Entitlement \(key): \(found ? "present" : "MISSING")")
         }
 
         await logAsync("Log saved to: ~/Library/Logs/SpliceKit/patcher.log")

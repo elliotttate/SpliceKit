@@ -438,6 +438,8 @@ class PatcherModel: ObservableObject {
             <key>com.apple.security.cs.disable-library-validation</key><true/>
             <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
             <key>com.apple.security.get-task-allow</key><true/>
+            <!-- Preserve Photos imports when replacing FCP's original entitlements. -->
+            <key>com.apple.security.personal-information.photos-library</key><true/>
             <key>com.apple.security.device.microphone</key><true/>
             <key>com.apple.security.device.audio-input</key><true/>
             </dict></plist>
@@ -604,6 +606,8 @@ class PatcherModel: ObservableObject {
             <key>com.apple.security.cs.disable-library-validation</key><true/>
             <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
             <key>com.apple.security.get-task-allow</key><true/>
+            <!-- Preserve Photos imports when replacing FCP's original entitlements. -->
+            <key>com.apple.security.personal-information.photos-library</key><true/>
             </dict></plist>
             """
         try entPlist.write(toFile: entitlements, atomically: true, encoding: .utf8)
