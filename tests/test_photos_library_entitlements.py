@@ -131,5 +131,68 @@ err() { printf '%s\n' "$*" >&2; }
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+@unittest.skipUnless(sys.platform == "darwin", "GUI diagnostic tests compile the Swift helpers")
+class GUIDiagnosticValueTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary_directory = tempfile.TemporaryDirectory(prefix="splicekit diagnostics ")
+        cls.addClassCleanup(cls.temporary_directory.cleanup)
+        root = Path(cls.temporary_directory.name)
+        source = (ROOT / "patcher/SpliceKit/Models/PatcherModel.swift").read_text()
+        # Execute the actual install and update diagnostic blocks with fixture output.
+        blocks = re.findall(r"        let entOut = shell\(.*?\n        }\n", source, re.DOTALL)
+        if len(blocks) != 2:
+            raise AssertionError("Expected install and update entitlement diagnostics")
+        harness = """
+import Foundation
+
+struct DiagnosticHarness {
+    let output: String
+    func shell(_ command: String) -> String { output }
+    func logAsync(_ message: String) async { print(message) }
+    func run() async {
+        let moddedApp = "fixture app"
+""" + "\n".join("do {\n" + block + "}\n" for block in blocks) + """
+    }
+}
+
+let input = FileHandle.standardInput.readDataToEndOfFile()
+await DiagnosticHarness(output: String(data: input, encoding: .utf8) ?? "").run()
+"""
+        main = root / "main.swift"
+        main.write_text(harness)
+        cls.binary = root / "diagnostics"
+        result = subprocess.run(
+            ["xcrun", "swiftc", "-module-cache-path", str(root / "module-cache"),
+             str(ROOT / "patcher/SpliceKit/Models/ShellHelpers.swift"), str(main),
+             "-o", str(cls.binary)],
+            capture_output=True, text=True,
+        )
+        if result.returncode:
+            raise AssertionError(result.stdout + result.stderr)
+
+    def diagnostics(self, payload):
+        result = subprocess.run([str(self.binary)], input=payload, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        return result.stdout.decode().splitlines()
+
+    def test_photos_requires_boolean_true_in_both_paths(self):
+        for value in (True, False, None, "true", 1):
+            with self.subTest(value=value):
+                entitlements = {"com.apple.security.app-sandbox": False}
+                if value is not None:
+                    entitlements[PHOTOS_LIBRARY] = value
+                lines = self.diagnostics(plistlib.dumps(entitlements))
+                status = "present" if value is True else "MISSING"
+                self.assertEqual(lines.count(f"Entitlement photos-library: {status}"), 2)
+                self.assertEqual(lines.count("Entitlement app-sandbox: present"), 2)
+
+    def test_malformed_output_reports_photos_missing(self):
+        for payload in (b"", b"invalid plist com.apple.security.personal-information.photos-library <true/>"):
+            with self.subTest(payload=payload):
+                lines = self.diagnostics(payload)
+                self.assertEqual(lines.count("Entitlement photos-library: MISSING"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

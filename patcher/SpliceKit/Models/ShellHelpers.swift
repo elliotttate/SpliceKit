@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// Run a shell command synchronously, returning output and exit status.
 func shellResult(_ command: String) -> (output: String, status: Int32) {
@@ -23,6 +24,18 @@ func shell(_ command: String) -> String {
 /// Single-quote a string for safe shell interpolation.
 func shellQuote(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+/// Read Photos access from signed entitlement XML, requiring a Boolean true value.
+func photosLibraryEntitlementEnabled(in xml: String) -> Bool {
+    guard let data = xml.data(using: .utf8),
+          let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+          let entitlements = plist as? [String: Any],
+          let value = entitlements["com.apple.security.personal-information.photos-library"] as? NSNumber,
+          CFGetTypeID(value) == CFBooleanGetTypeID() else {
+        return false
+    }
+    return value.boolValue
 }
 
 private func normalizeExecutablePath(_ path: String) -> String {
