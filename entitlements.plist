@@ -12,6 +12,9 @@
     <true/>
     <key>com.apple.security.get-task-allow</key>
     <true/>
+    <!-- Preserve Photos imports when replacing FCP's original entitlements. -->
+    <key>com.apple.security.personal-information.photos-library</key>
+    <true/>
     <!-- Hardened runtime requires explicit resource entitlements. FCP originally declares -->
     <!-- these; re-signing with an entitlements file replaces the full set, so we must keep -->
     <!-- them here or LiveCam / voiceover record / USB devices stop working. -->

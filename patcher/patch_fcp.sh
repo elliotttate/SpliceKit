@@ -430,6 +430,8 @@ cat > "$ENTITLEMENTS" << 'ENT'
     <key>com.apple.security.cs.disable-library-validation</key><true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
     <key>com.apple.security.get-task-allow</key><true/>
+    <!-- Preserve Photos imports when replacing FCP's original entitlements. -->
+    <key>com.apple.security.personal-information.photos-library</key><true/>
 </dict>
 </plist>
 ENT
