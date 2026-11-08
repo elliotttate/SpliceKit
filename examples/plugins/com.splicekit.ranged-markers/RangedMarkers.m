@@ -632,6 +632,8 @@ static id RMSelectedMarker(void) {
 }
 
 // Undoable rename. The action lives on FFAnchoredSequence, not the timeline module.
+static NSString *RMDefaultNewMarkerColor(void);
+
 static BOOL RMRename(id marker, NSString *name, NSError **err) {
     id sequence = RMMarkerSequence(marker);
     SEL sel = NSSelectorFromString(@"actionChangeMarkerDisplayName:marker:error:");
@@ -644,6 +646,7 @@ static BOOL RMRename(id marker, NSString *name, NSError **err) {
 static id RMAddMarkerToItem(id sequence, id item, double localStart, double duration, NSDictionary *params, NSString **error) {
     NSString *name = params[@"name"];
     NSString *color = [params[@"color"] lowercaseString];
+    if (!params[@"color"] && [params[@"kind"] ?: @"standard" isEqualToString:@"standard"]) color = RMDefaultNewMarkerColor();
     if (color.length && ![color isEqualToString:@"none"] && !RMPalette()[color]) {
         *error = [NSString stringWithFormat:@"Unknown color '%@'. Use one of: %@", color,
                   [[RMPalette().allKeys sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "]];
@@ -794,6 +797,7 @@ static NSDictionary *RMDebugMarkers(NSDictionary *params) {
 static __weak id sLastMarkerEditor;
 static void RMAddDurationRow(id editor);
 static void RMActDurationCommitted(id self, SEL _cmd, NSTextField *field);
+static void RMActEditorColor(id self, SEL _cmd, NSButton *sender);
 
 static void RMDumpView(NSView *view, int depth, NSMutableArray *out) {
     if (!view || depth > 6) return;
@@ -1189,7 +1193,10 @@ static BOOL sAddingMarker;
 
 static id RMTimeMarkersForItem(id self, SEL _cmd, id item, RMTimeRange range) {
     id markers = sOrigTimeMarkersForItem(self, _cmd, item, range);
-    if (!sAddingMarker || ![markers isKindOfClass:[NSSet class]]) return markers;
+    // Only the "is there a marker at the playhead" check asks about a frame-sized
+    // range. Wider queries (e.g. the timeline laying out a clip's markers while the
+    // add runs) must see every marker, or FCP drops the ranged markers' layers.
+    if (!sAddingMarker || RMSeconds(range.duration) > 0.25 || ![markers isKindOfClass:[NSSet class]]) return markers;
     @try {
         NSMutableSet *out = [NSMutableSet set];
         for (id m in markers) if (!RMIsTimeMarker(m) || !RMIsRanged(m, NULL)) [out addObject:m];
@@ -1215,7 +1222,43 @@ static void RMBrowserAddMarker(id self, SEL _cmd, BOOL alwaysEdit, BOOL todo, BO
     @finally { sAddingMarker = NO; }
 }
 
+// New standard markers added with Add Marker get the color last picked in the
+// marker editor. To-do and chapter markers keep FCP's own colors.
+static BOOL (*sOrigActionAddMarker)(id, SEL, id, BOOL, BOOL, RMTimeRange, NSError **);
+static int sActionAddDepth;
+
+static BOOL RMActionAddMarker(id self, SEL _cmd, id object, BOOL todo, BOOL chapter, RMTimeRange range, NSError **err) {
+    NSString *color = (sAddingMarker && !todo && !chapter && sActionAddDepth == 0) ? RMDefaultNewMarkerColor() : nil;
+    if (!color) return sOrigActionAddMarker(self, _cmd, object, todo, chapter, range, err);
+
+    NSSet *before = nil;
+    @try { before = [NSSet setWithArray:RMMarkersOnItem(object)]; } @catch (NSException *e) {}
+    NSUndoManager *um = RMUndoManager();
+    [um beginUndoGrouping];
+    sActionAddDepth++;
+    BOOL ok = NO;
+    @try {
+        ok = sOrigActionAddMarker(self, _cmd, object, todo, chapter, range, err);
+        if (ok && before) {
+            for (id m in RMMarkersOnItem(object)) {
+                if ([before containsObject:m] || !RMIsTimeMarker(m)) continue;
+                NSString *name = RMSend(m, @"displayName") ?: @"";
+                if (!RMParseColorTag(name, NULL)) RMRename(m, RMNameWithColor(name, color), NULL);
+            }
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RangedMarkers] default marker color failed: %@", e.reason);
+    } @finally {
+        sActionAddDepth--;
+        [um endUndoGrouping];
+    }
+    RMRefreshAll();
+    return ok;
+}
+
 static void RMInstallAddHooks(void) {
+    Class seqCls = NSClassFromString(@"FFAnchoredSequence");
+    if (seqCls) sOrigActionAddMarker = (void *)RMHook(seqCls, NSSelectorFromString(@"actionAddMarkerToAnchoredObject:isToDo:isChapter:withRange:error:"), (IMP)RMActionAddMarker);
     Class organizer = NSClassFromString(@"FFOrganizerFilmstripModule");
     if (organizer) sOrigBrowserAddMarker = (void *)RMHook(organizer, NSSelectorFromString(@"addMarkerAndAlwaysEdit:isToDo:isChapter:isMoment:"), (IMP)RMBrowserAddMarker);
     Class tm = NSClassFromString(@"FFAnchoredTimelineModule");
@@ -1381,6 +1424,7 @@ static id RMMenuTarget(void) {
     class_addMethod(cls, NSSelectorFromString(@"rmAddRanged:"), (IMP)RMActAddRanged, "v@:@");
     class_addMethod(cls, @selector(validateMenuItem:), (IMP)RMValidateMenuItem, "B@:@");
     class_addMethod(cls, NSSelectorFromString(@"rmDurationCommitted:"), (IMP)RMActDurationCommitted, "v@:@");
+    class_addMethod(cls, NSSelectorFromString(@"rmEditorColor:"), (IMP)RMActEditorColor, "v@:@");
     objc_registerClassPair(cls);
     target = [cls new];
     return target;
@@ -1878,6 +1922,165 @@ static void RMActDurationCommitted(id self, SEL _cmd, NSTextField *field) {
     RMRefreshDurationField(editor);
 }
 
+// Grow the editor view and its popover (or window) by dh points.
+static void RMGrowEditor(NSView *view, CGFloat dh) {
+    NSSize size = view.frame.size;
+    size.height += dh;
+    [view setFrameSize:size];
+    NSPopover *popover = nil;
+    @try { popover = [view.window valueForKey:@"_popover"]; } @catch (NSException *e) {}
+    if ([popover isKindOfClass:[NSPopover class]]) {
+        NSSize content = popover.contentSize;
+        content.height += dh;
+        popover.contentSize = content;
+    } else if (view.window) {
+        NSRect frame = view.window.frame;
+        frame.size.height += dh;
+        [view.window setFrame:frame display:YES];
+    }
+}
+
+#pragma mark - Color row in the marker editor
+
+// A row of marker-shaped swatches under Duration / Delete / Done. Picking one
+// recolors the marker being edited and becomes the default color for markers
+// added later (kDefaultColorKey). "none" is FCP's own marker color.
+static const void *kColorRowKey = &kColorRowKey;
+static const CGFloat kColorRowHeight = 30;
+static NSString *const kDefaultColorKey = @"SKRangedMarkersDefaultColor";
+
+static NSString *RMDefaultNewMarkerColor(void) {
+    NSString *c = [[NSUserDefaults standardUserDefaults] stringForKey:kDefaultColorKey];
+    return (c.length && RMPalette()[c]) ? c : nil;
+}
+
+static void RMSetDefaultNewMarkerColor(NSString *color) {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    if (color.length && RMPalette()[color]) [d setObject:color forKey:kDefaultColorKey];
+    else [d removeObjectForKey:kDefaultColorKey];
+}
+
+static NSColor *RMStandardMarkerColor(void) {
+    return [NSColor colorWithSRGBRed:0.47 green:0.47 blue:0.95 alpha:1];
+}
+
+// FCP's marker glyph: a rounded tab with a point at the bottom.
+static NSImage *RMMarkerGlyph(NSColor *color, BOOL selected) {
+    return [NSImage imageWithSize:NSMakeSize(22, 22) flipped:NO drawingHandler:^BOOL(NSRect r) {
+        if (selected) {
+            [[NSColor colorWithWhite:1 alpha:0.18] setFill];
+            [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(r, 0.5, 0.5) xRadius:5 yRadius:5] fill];
+            [[NSColor colorWithWhite:1 alpha:0.75] setStroke];
+            NSBezierPath *ring = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(r, 1, 1) xRadius:4.5 yRadius:4.5];
+            ring.lineWidth = 1.2;
+            [ring stroke];
+        }
+        CGFloat w = 10, h = 14, x = NSMidX(r) - w / 2, top = NSMidY(r) + h / 2, bottom = top - h;
+        CGFloat shoulder = bottom + 4.5, radius = 2;
+        NSBezierPath *path = [NSBezierPath bezierPath];
+        [path moveToPoint:NSMakePoint(NSMidX(r), bottom)];
+        [path lineToPoint:NSMakePoint(x, shoulder)];
+        [path lineToPoint:NSMakePoint(x, top - radius)];
+        [path appendBezierPathWithArcFromPoint:NSMakePoint(x, top) toPoint:NSMakePoint(x + radius, top) radius:radius];
+        [path lineToPoint:NSMakePoint(x + w - radius, top)];
+        [path appendBezierPathWithArcFromPoint:NSMakePoint(x + w, top) toPoint:NSMakePoint(x + w, top - radius) radius:radius];
+        [path lineToPoint:NSMakePoint(x + w, shoulder)];
+        [path closePath];
+        [color setFill];
+        [path fill];
+        [[NSColor colorWithWhite:0 alpha:0.35] setStroke];
+        path.lineWidth = 0.75;
+        [path stroke];
+        return YES;
+    }];
+}
+
+static NSArray<NSString *> *RMEditorColorChoices(void) {
+    return [@[@"none"] arrayByAddingObjectsFromArray:RMColorOrder()];
+}
+
+static NSString *RMTitleCase(NSString *c) {
+    return [[[c substringToIndex:1] uppercaseString] stringByAppendingString:[c substringFromIndex:1]];
+}
+
+// Highlight the swatch matching the edited marker's color.
+static void RMRefreshColorRow(id editor) {
+    NSArray<NSButton *> *buttons = objc_getAssociatedObject(editor, kColorRowKey);
+    if (!buttons.count) return;
+    id marker = RMEditorMarker(editor);
+    NSString *current = marker ? (RMParseColorTag(RMSend(marker, @"displayName"), NULL) ?: @"none") : nil;
+    for (NSButton *b in buttons) {
+        NSString *c = b.identifier;
+        NSColor *color = [c isEqualToString:@"none"] ? RMStandardMarkerColor() : RMPalette()[c];
+        b.image = RMMarkerGlyph(color, [c isEqualToString:current]);
+    }
+}
+
+static void RMActEditorColor(id self, SEL _cmd, NSButton *sender) {
+    id editor = objc_getAssociatedObject(sender, kDurationEditorKey);
+    id marker = RMEditorMarker(editor);
+    NSString *color = sender.identifier;
+    RMSetDefaultNewMarkerColor(color);
+    if (!marker) { RMRefreshColorRow(editor); return; }
+
+    NSTextField *nameField = [editor valueForKey:@"displayNameField"];
+    NSString *nameBefore = RMSend(marker, @"displayName") ?: @"";
+    if (!RMRename(marker, RMNameWithColor(nameBefore, color), NULL)) NSBeep();
+    NSString *nameAfter = RMSend(marker, @"displayName") ?: @"";
+
+    // Keep the name field in step so FCP's save on Done doesn't write the old name back.
+    if (nameField) {
+        if ([nameField.stringValue isEqualToString:nameBefore]) nameField.stringValue = nameAfter;
+        else nameField.stringValue = RMNameWithColor(nameField.stringValue, color);
+    }
+    RMRefreshAll();
+    RMRefreshColorRow(editor);
+}
+
+static void RMAddColorRow(id editor) {
+    if (objc_getAssociatedObject(editor, kColorRowKey)) { RMRefreshColorRow(editor); return; }
+    NSView *view = RMSend(editor, @"view");
+    NSTextField *nameField = [editor valueForKey:@"displayNameField"];
+    if (![view isKindOfClass:[NSView class]] || !nameField) return;
+
+    // Lift everything one row; the swatches take the old bottom row's spot.
+    CGFloat bottomY = CGFLOAT_MAX, right = NSMaxX(nameField.frame);
+    for (NSView *sub in view.subviews) {
+        if (sub.hidden || NSHeight(sub.frame) > NSHeight(view.bounds) * 0.8) continue;
+        bottomY = MIN(bottomY, NSMinY(sub.frame));
+        right = MAX(right, NSMaxX(sub.frame));
+    }
+    if (bottomY == CGFLOAT_MAX) return;
+    for (NSView *sub in view.subviews) {
+        if (NSHeight(sub.frame) > NSHeight(view.bounds) * 0.8) continue;
+        [sub setFrameOrigin:NSMakePoint(NSMinX(sub.frame), NSMinY(sub.frame) + kColorRowHeight)];
+    }
+
+    NSArray *choices = RMEditorColorChoices();
+    CGFloat left = NSMinX(nameField.frame);
+    CGFloat step = MIN(26, (right - left) / choices.count);
+    NSMutableArray *buttons = [NSMutableArray array];
+    for (NSUInteger i = 0; i < choices.count; i++) {
+        NSString *c = choices[i];
+        NSButton *b = [NSButton buttonWithImage:RMMarkerGlyph(RMStandardMarkerColor(), NO)
+                                         target:RMMenuTarget() action:NSSelectorFromString(@"rmEditorColor:")];
+        b.bordered = NO;
+        b.imagePosition = NSImageOnly;
+        b.frame = NSMakeRect(left + i * step, bottomY + 1, 22, 22);
+        b.identifier = c;
+        b.tag = kMenuTag;
+        b.toolTip = [c isEqualToString:@"none"]
+            ? @"Default marker color (also used for new markers)"
+            : [NSString stringWithFormat:@"%@ (also used for new markers)", RMTitleCase(c)];
+        objc_setAssociatedObject(b, kDurationEditorKey, editor, OBJC_ASSOCIATION_ASSIGN);
+        [view addSubview:b];
+        [buttons addObject:b];
+    }
+    objc_setAssociatedObject(editor, kColorRowKey, buttons, OBJC_ASSOCIATION_RETAIN);
+    RMGrowEditor(view, kColorRowHeight);
+    RMRefreshColorRow(editor);
+}
+
 // Adds "Duration: [00:00:08:00]" between the name field and the bottom row.
 static void RMAddDurationRow(id editor) {
     if (objc_getAssociatedObject(editor, kDurationFieldKey)) { RMRefreshDurationField(editor); return; }
@@ -1909,34 +2112,14 @@ static void RMAddDurationRow(id editor) {
     field.cell.sendsActionOnEndEditing = YES;
     field.tag = kMenuTag;
 
-    NSTextField *hint = [NSTextField labelWithString:@"Empty = no range"];
-    hint.font = [NSFont systemFontOfSize:10];
-    hint.textColor = NSColor.tertiaryLabelColor;
-    hint.frame = NSMakeRect(NSMaxX(field.frame) + 8, rowY + 5, 140, 14);
-    hint.tag = kMenuTag;
-
     [view addSubview:label];
     [view addSubview:field];
-    [view addSubview:hint];
     objc_setAssociatedObject(editor, kDurationFieldKey, field, OBJC_ASSOCIATION_RETAIN);
     objc_setAssociatedObject(field, kDurationEditorKey, editor, OBJC_ASSOCIATION_ASSIGN);
 
-    // Grow the editor and its popover by one row.
-    NSSize size = view.frame.size;
-    size.height += kDurationRowHeight;
-    [view setFrameSize:size];
-    NSPopover *popover = nil;
-    @try { popover = [view.window valueForKey:@"_popover"]; } @catch (NSException *e) {}
-    if ([popover isKindOfClass:[NSPopover class]]) {
-        NSSize content = popover.contentSize;
-        content.height += kDurationRowHeight;
-        popover.contentSize = content;
-    } else if (view.window) {
-        NSRect frame = view.window.frame;
-        frame.size.height += kDurationRowHeight;
-        [view.window setFrame:frame display:YES];
-    }
+    RMGrowEditor(view, kDurationRowHeight);
     RMRefreshDurationField(editor);
+    RMAddColorRow(editor);
 }
 
 static void (*sOrigEditorSave)(id, SEL, id);
@@ -1955,6 +2138,7 @@ static void RMEditorReflect(id self, SEL _cmd, id key) {
     sOrigEditorReflect(self, _cmd, key);
     NSTextField *field = objc_getAssociatedObject(self, kDurationFieldKey);
     if (field && !field.currentEditor) RMRefreshDurationField(self);
+    RMRefreshColorRow(self);
 }
 
 static void (*sOrigEditorInstalled)(id, SEL, id);
