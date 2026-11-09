@@ -47,7 +47,7 @@ cd Plugins/EditorToolkit
 
 Restart Final Cut Pro afterwards. Plugins are built from source, ad-hoc signed, and copied to `~/Library/Application Support/SpliceKit/plugins/<name>/` (each with its `plugin.json`).
 
-**No compiler?** `./install.sh --package` builds `dist/<plugin>.zip` and `dist/EditorToolkit-all.zip` with prebuilt plugins. To install one, unzip its folder into `~/Library/Application Support/SpliceKit/plugins/` and restart Final Cut Pro.
+**No compiler? Use the ready-made download.** Get a zip from the [Releases page](https://github.com/ishubhampratap/SpliceKit/releases): `EditorToolkit-All.zip`, a preset, or a single plugin. Unzip it, right-click **Install.command → Open**, then restart Final Cut Pro. Each zip has `Uninstall.command` and a `READ ME FIRST.txt` too. (`./install.sh --package` builds these zips into `dist/`.)
 
 ## Tested on
 
@@ -58,6 +58,7 @@ Final Cut Pro 12.4 (build 454072), SpliceKit 3.3.9, macOS 27.2, Apple Silicon. T
 ```
 Plugins/EditorToolkit/
 ├── install.sh                 build / install / uninstall / package
+├── dist-templates/            Install / Uninstall / READ ME FIRST for the download zips
 └── plugins/<name>/
     ├── <Source>.m             the whole plugin, one file
     ├── plugin.json            SpliceKit manifest

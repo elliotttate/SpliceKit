@@ -6,7 +6,7 @@
 #   ./install.sh raw-tab flip           build + install just these
 #   ./install.sh @raw                   build + install a preset (see --list)
 #   ./install.sh --uninstall flip       remove a plugin
-#   ./install.sh --package              build zips into dist/ (one per plugin + one with everything)
+#   ./install.sh --package              build double-click installer zips into dist/ (all, presets, each plugin)
 #
 # Needs: Final Cut Pro with SpliceKit, Apple Silicon, and the Xcode command line tools (xcode-select --install).
 # Restart Final Cut Pro after installing so SpliceKit loads the new plugins.
@@ -89,16 +89,27 @@ hints() {
 }
 
 package() {
-  need_clang; rm -rf "$ROOT/dist"; mkdir -p "$ROOT/dist/all"
+  need_clang; rm -rf "$ROOT/dist"; mkdir -p "$ROOT/dist"
+  local stage="$ROOT/dist/.stage"
+  bundle() {   # bundle <zip name> <folder name> <plugins...>
+    local zipname="$1" folder="$2"; shift 2
+    local b="$stage/$folder"; rm -rf "$stage"; mkdir -p "$b/plugins"
+    cp "$ROOT/dist-templates/"* "$b/"; chmod +x "$b/"*.command
+    for p in "$@"; do
+      mkdir -p "$b/plugins/$p"
+      cp "$BUILD/$p/"*.dylib "$BUILD/$p/plugin.json" "$ROOT/plugins/$p/README.md" "$b/plugins/$p/"
+    done
+    (cd "$stage" && ditto -c -k --keepParent "$folder" "$ROOT/dist/$zipname.zip")
+  }
+  for p in $(all_plugins); do build_one "$p"; done
+  bundle "EditorToolkit-All" "Editor Toolkit" $(all_plugins)
+  for v in $(compgen -v | grep '^PRESET_'); do n="${v#PRESET_}"; bundle "EditorToolkit-preset-$n" "Editor Toolkit - $n" ${!v}; done
   for p in $(all_plugins); do
-    build_one "$p"
-    mkdir -p "$ROOT/dist/all/$p"; cp "$BUILD/$p/"*.dylib "$BUILD/$p/plugin.json" "$ROOT/dist/all/$p/"
-    cp "$ROOT/plugins/$p/README.md" "$ROOT/dist/all/$p/" 2>/dev/null || true
-    (cd "$ROOT/dist/all" && zip -qr "../$p.zip" "$p")
+    name=$(json_field "$ROOT/plugins/$p/plugin.json" name)
+    bundle "EditorToolkit-$p" "Editor Toolkit - $name" "$p"
   done
-  (cd "$ROOT/dist/all" && zip -qr "../EditorToolkit-all.zip" .)
-  rm -rf "$ROOT/dist/all"
-  echo "zips in $ROOT/dist - unzip a plugin folder into $DEST and restart Final Cut Pro."
+  rm -rf "$stage"
+  echo "zips in $ROOT/dist - each has a double-click Install.command."
 }
 
 case "${1:-}" in
