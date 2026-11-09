@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.flip",
+  "name": "Flip",
+  "version": "1.0.0",
+  "description": "Horizontal and vertical flip buttons in the Transform section of the inspector.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "Flip.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

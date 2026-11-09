@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.raw-gyro",
+  "name": "RAW Gyro Presets",
+  "version": "1.0.0",
+  "description": "One-click gyro stabilisation presets in the RAW tab.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "RawGyro.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

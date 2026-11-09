@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.fps-meter",
+  "name": "Playback Frame Rate",
+  "version": "1.0.0",
+  "description": "Live playback frame rate in the viewer header: frames actually shown vs. the target rate, with skipped-frame detection (View > Playback Frame Rate).",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "FPSMeter.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.raw-multi",
+  "name": "RAW Multi",
+  "version": "1.0.0",
+  "description": "Editable RAW controls (no 'Multiple Values') when several clips are selected.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "RawMulti.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

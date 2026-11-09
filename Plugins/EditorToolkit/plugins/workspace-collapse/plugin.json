@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.workspace-collapse",
+  "name": "Workspace Collapse",
+  "version": "1.0.0",
+  "description": "Vertical Workspace: closing the Browser and Inspector collapses their row so the timeline takes the space; reopening restores the layout.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "WSCollapse.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

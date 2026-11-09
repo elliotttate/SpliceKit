@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.grade-lock",
+  "name": "Grade Lock",
+  "version": "1.0.0",
+  "description": "Clips with 'lock' in their name can't be selected unless you hold option.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "gradelock.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

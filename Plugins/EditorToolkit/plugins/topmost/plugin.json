@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.topmost",
+  "name": "Topmost Clip Editing",
+  "version": "1.0.0",
+  "description": "With nothing selected, Blade and Copy act on the highest unlocked video clip under the playhead (View > Edit Topmost Clip at Playhead).",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "Topmost.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}
