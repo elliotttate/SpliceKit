@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.shortcuts",
+  "name": "Shortcuts",
+  "version": "1.0.0",
+  "description": "Adds Edit RAW Properties, Toggle Stabilization, Zoom to Fit (Toggle), Show Video Inspector and Show Info Inspector to Final Cut Pro's Command Editor so they can be given keyboard shortcuts.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "Shortcuts.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

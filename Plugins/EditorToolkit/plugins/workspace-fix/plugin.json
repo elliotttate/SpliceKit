@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.workspace-fix",
+  "name": "Workspace Fix",
+  "version": "1.0.0",
+  "description": "Undo dual-timeline layout hooks that crash FCP when applying a workspace.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "wsfix.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

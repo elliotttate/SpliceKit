@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.paste-below-lock",
+  "name": "Paste Below Lock",
+  "version": "1.0.0",
+  "description": "Pasted clips never land above locked adjustment layers.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "PasteBelowLock.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

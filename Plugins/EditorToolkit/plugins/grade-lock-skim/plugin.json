@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.grade-lock-skim",
+  "name": "Grade Lock Skim",
+  "version": "1.0.0",
+  "description": "Locked clips are hidden from the inspector and skimmer.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "gradelock_skim.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

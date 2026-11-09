@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.raw-tab",
+  "name": "RAW Tab",
+  "version": "1.0.0",
+  "description": "Edit RAW Properties controls as a tab in the inspector.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "RawTab.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

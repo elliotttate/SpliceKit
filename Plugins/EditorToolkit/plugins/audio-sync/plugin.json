@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.audio-sync",
+  "name": "Batch Sync Audio",
+  "version": "1.0.0",
+  "description": "Sync many video clips with external audio recordings at once by waveform; each video becomes a Synchronized Clip playing the external audio (Clip > Batch Sync Audio).",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "AudioSync.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

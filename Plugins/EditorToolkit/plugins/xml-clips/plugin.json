@@ -1,0 +1,13 @@
+{
+  "id": "community.editortoolkit.xml-clips",
+  "name": "XML Clips",
+  "version": "1.0.0",
+  "description": "After an XML import, every clip used in the timeline also shows in the browser.",
+  "author": "Shubham Pratap",
+  "apiVersion": 1,
+  "entry": {
+    "native": "xmlclips.dylib"
+  },
+  "methods": [],
+  "dependencies": []
+}

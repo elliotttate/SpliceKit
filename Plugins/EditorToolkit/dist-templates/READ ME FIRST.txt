@@ -1,0 +1,18 @@
+Editor Toolkit for SpliceKit
+
+You need: an Apple Silicon Mac with Final Cut Pro and SpliceKit already working.
+
+TO INSTALL
+1. Right-click "Install.command" and choose Open.
+   (The first time, macOS asks if you're sure because it was downloaded from the internet. Click Open.
+    If there's no Open button, go to System Settings > Privacy & Security, scroll down and click "Open Anyway".)
+2. A Terminal window lists what was installed. Press any key to close it.
+3. Quit Final Cut Pro and open it again the way you normally start it with SpliceKit.
+
+TO REMOVE
+Right-click "Uninstall.command", choose Open, then restart Final Cut Pro.
+
+What each plugin does: see the README.md inside each folder in "plugins", or
+https://github.com/ishubhampratap/SpliceKit/tree/editor-toolkit/Plugins/EditorToolkit
+
+Tested on Final Cut Pro 12.4, SpliceKit 3.3.9, Apple Silicon.
