@@ -7,6 +7,18 @@
 
 **Final Cut Pro, unlocked. A Command Palette, MCP server, and an open plugin framework to do almost anything.**
 
+---
+
+## SpliceKit v4
+
+This is the official and original repository for **SpliceKit**.
+
+It is still maintained - however progress is slow, as we're busy with other jobs (hence all the open pull requests).
+
+However, **SpliceKit v4** is a fork, that's now available on [FCP Cafe](https://splicekit.fcp.cafe) that is more actively maintained and updated.
+
+---
+
 | 🎹 Command Palette | 🤖 MCP Server | 🧩 Plugin Framework |
 |---|---|---|
 | Hit `Cmd+Shift+P` and type what you want. Apple Intelligence runs it. | Any LLM can read and edit your timeline — and build new tools as it goes. | Every built-in feature is just an example plugin. You (or an AI) can ship more. |
